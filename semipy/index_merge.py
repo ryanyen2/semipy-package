@@ -8,7 +8,7 @@ def merge_session_indices(base: SessionIndex, incoming: SessionIndex) -> Session
     """
     Merge two session indices into one. Same session_id/source_file required.
     For each semicode_id: keep one entry, merge usage_ids (union), LWW for
-    implementation_id/function_name/primary_* (prefer entry with larger usage_count).
+    implementation_id/function_name/generated_source (prefer entry with larger usage_count).
     """
     if base.session_id != incoming.session_id:
         return base
@@ -24,8 +24,7 @@ def merge_session_indices(base: SessionIndex, incoming: SessionIndex) -> Session
             template_fingerprint=e.template_fingerprint,
             usage_count=e.usage_count,
             last_validated_at=e.last_validated_at,
-            primary_site_id=e.primary_site_id,
-            primary_template_hash=e.primary_template_hash,
+            generated_source=e.generated_source,
         )
     for e in incoming.semicodes:
         if e.semicode_id not in by_id:
@@ -39,8 +38,7 @@ def merge_session_indices(base: SessionIndex, incoming: SessionIndex) -> Session
                 template_fingerprint=e.template_fingerprint,
                 usage_count=e.usage_count,
                 last_validated_at=e.last_validated_at,
-                primary_site_id=e.primary_site_id,
-                primary_template_hash=e.primary_template_hash,
+                generated_source=e.generated_source,
             )
         else:
             existing = by_id[e.semicode_id]
@@ -59,8 +57,7 @@ def merge_session_indices(base: SessionIndex, incoming: SessionIndex) -> Session
                 template_fingerprint=existing.template_fingerprint,
                 usage_count=len(merged_usage_ids),
                 last_validated_at=e.last_validated_at if use_incoming else existing.last_validated_at,
-                primary_site_id=e.primary_site_id if use_incoming else existing.primary_site_id,
-                primary_template_hash=e.primary_template_hash if use_incoming else existing.primary_template_hash,
+                generated_source=e.generated_source if use_incoming else existing.generated_source,
             )
     return SessionIndex(
         session_id=base.session_id,

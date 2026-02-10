@@ -43,15 +43,6 @@ wheels = [
 ]
 
 [[package]]
-name = "automerge"
-version = "0.1.2"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/c3/88/16377e1d1b56ae70175145cf54b8eb0ee84e30e57c700b288dd08255ffd5/automerge-0.1.2.tar.gz", hash = "sha256:b4029d8bf7ed8e84e00d10d14f427e069de6bedddd7509642f1e435a520e96fe", size = 188664 }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/3b/22/2c6b1f1c89fef90a4505356a77909d4d666db99730a23c0b632484ab23f8/automerge-0.1.2-cp37-abi3-manylinux_2_5_x86_64.manylinux1_x86_64.whl", hash = "sha256:d5150418131a2b89589e96749b284fc250cefccec9cbef471dc41c625e228889", size = 532776 },
-]
-
-[[package]]
 name = "certifi"
 version = "2026.1.4"
 source = { registry = "https://pypi.org/simple" }
@@ -963,13 +954,9 @@ dev = [
     { name = "pytest" },
     { name = "python-dotenv" },
 ]
-merge = [
-    { name = "automerge" },
-]
 
 [package.metadata]
 requires-dist = [
-    { name = "automerge", marker = "extra == 'merge'", specifier = ">=0.1.0" },
     { name = "dotenv", specifier = ">=0.9.9" },
     { name = "ipykernel", specifier = ">=7.2.0" },
     { name = "ipywidgets", specifier = ">=8.1.8" },

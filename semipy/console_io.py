@@ -60,11 +60,13 @@ def _call_site_file_url(filename: str, lineno: int) -> str:
         return ""
 
 
-def _format_cache_path(cache_dir: Optional[Path], site_id: str, template_hash: str) -> str:
-    """Full path to cached .py file (for dedupe key and link)."""
-    if cache_dir is None:
-        return f".semiformal/runtime/{site_id}/{template_hash}.py"
-    return str((cache_dir / site_id / f"{template_hash}.py").resolve())
+def _format_cache_path(cache_dir: Optional[Path], entry: CacheEntry) -> str:
+    """Display path for cached implementation (session entry module or generic)."""
+    if entry.cache_display_path:
+        return entry.cache_display_path
+    if cache_dir is not None:
+        return str(cache_dir.resolve())
+    return ".semiformal/runtime"
 
 
 def _short_display_path(full_path: str) -> str:
@@ -124,7 +126,7 @@ def print_cache_hit_from_semi(
     """One line: user code location -> cache hit -> path (clickable); once per unique call site + path."""
     cs = spec.call_site
     loc = _format_location(cs.filename, cs.lineno, cs.func_qualname or "")
-    path = _format_cache_path(cache_dir, entry.site_id, entry.template_hash)
+    path = _format_cache_path(cache_dir, entry)
     _print_semipy_line_once(
         loc, "cache hit", path, "green",
         loc_link=_call_site_file_url(cs.filename, cs.lineno),
@@ -151,9 +153,8 @@ def cache_hit_panel(
     grid.add_row("Line:", str(cs.lineno))
     grid.add_row("Function:", cs.func_qualname or "(top-level)")
     grid.add_row("Return type:", type_name)
-    if cache_dir is not None:
-        py_path = (cache_dir / entry.site_id / f"{entry.template_hash}.py").resolve()
-        grid.add_row("Cache file:", str(py_path))
+    if entry.cache_display_path:
+        grid.add_row("Cache file:", entry.cache_display_path)
 
     body = grid
     src = entry.generated_source.strip()
@@ -224,8 +225,7 @@ class GenerationProgress:
         self._cache_hit: Optional[tuple[GenerationSpec, CacheEntry]] = None
         self._cache_dir: Optional[Path] = None
         self._success_attempt: Optional[int] = None
-        self._success_site_id: Optional[str] = None
-        self._success_template_hash: Optional[str] = None
+        self._success_display_path: Optional[str] = None
         self._success_call_site: Optional[SemiCallSite] = None
         self._failure_msg: Optional[str] = None
         self._failure_call_site: Optional[SemiCallSite] = None
@@ -272,16 +272,14 @@ class GenerationProgress:
         self,
         attempt: int = 1,
         cache_dir: Optional[Path] = None,
-        site_id: Optional[str] = None,
-        template_hash: Optional[str] = None,
         call_site: Optional[SemiCallSite] = None,
+        display_path: Optional[str] = None,
     ) -> None:
         self._result = "success"
         self._success_attempt = attempt
         if cache_dir is not None:
             self._cache_dir = cache_dir
-        self._success_site_id = site_id
-        self._success_template_hash = template_hash
+        self._success_display_path = display_path
         self._success_call_site = call_site
 
     def record_failure(
@@ -307,7 +305,7 @@ class GenerationProgress:
             spec, entry = self._cache_hit
             cs = spec.call_site
             loc = _format_location(cs.filename, cs.lineno, cs.func_qualname or "")
-            path = _format_cache_path(self._cache_dir, entry.site_id, entry.template_hash)
+            path = _format_cache_path(self._cache_dir, entry)
             _print_semipy_line_once(
                 loc, "cache hit", path, "green",
                 loc_link=_call_site_file_url(cs.filename, cs.lineno),
@@ -320,19 +318,8 @@ class GenerationProgress:
                 cs = self._success_call_site
                 loc = _format_location(cs.filename, cs.lineno, cs.func_qualname or "")
                 loc_link = _call_site_file_url(cs.filename, cs.lineno)
-            path = ""
-            path_link = None
-            if (
-                self._cache_dir is not None
-                and self._success_site_id is not None
-                and self._success_template_hash is not None
-            ):
-                path = _format_cache_path(
-                    self._cache_dir,
-                    self._success_site_id,
-                    self._success_template_hash,
-                )
-                path_link = _file_link_url(path)
+            path = self._success_display_path or ""
+            path_link = _file_link_url(path) if path else None
             _print_semipy_line_once(
                 loc, "generated", path, "green",
                 loc_link=loc_link,

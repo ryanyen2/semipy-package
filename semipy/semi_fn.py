@@ -6,7 +6,6 @@ import inspect
 from typing import Any, Optional
 
 from semipy.agent import SemiAgent
-from semipy.cache import SemiCache, build_template_hash
 from semipy.config import get_config
 from semipy.console_io import print_cache_hit_from_semi
 from semipy.decorator import get_semiformal_context
@@ -15,7 +14,13 @@ from semipy.session_cache import (
     usage_from_spec,
     readable_function_name,
 )
-from semipy.types import GenerationSpec, SemiCallSite, session_id_from_filename
+from semipy.types import (
+    GenerationSpec,
+    PromptTemplate,
+    SemiCallSite,
+    TemplatePart,
+    session_id_from_filename,
+)
 
 
 def _normalize_filename(path: str) -> str:
@@ -91,25 +96,24 @@ def semi(prompt: str, require_tools: bool = False, **kwargs: Any) -> Any:
     site_info = _find_site_info(call_site, context)
 
     config = get_config()
-    cache = SemiCache(config.cache_dir)
     session_cache = SessionCache(config.cache_dir)
-    agent = SemiAgent(cache=cache)
+    agent = SemiAgent()
 
     if site_info is not None and site_info.template.variable_expressions:
         frame = inspect.currentframe()
         if frame is None or frame.f_back is None:
-            return _semi_fallback(prompt, call_site, agent, cache, require_tools=require_tools, **kwargs)
+            return _semi_fallback(prompt, call_site, agent, session_cache, require_tools=require_tools, **kwargs)
         caller_frame = frame.f_back
         try:
             values = _eval_expressions(site_info.template.variable_expressions, caller_frame)
         except Exception:
-            return _semi_fallback(prompt, call_site, agent, cache, require_tools=require_tools, **kwargs)
+            return _semi_fallback(prompt, call_site, agent, session_cache, require_tools=require_tools, **kwargs)
         name_to_value = dict(zip(site_info.template.variable_names, values))
         loop_names = set(site_info.loop_variant_names)
         constant_values = {n: name_to_value[n] for n in site_info.template.variable_names if n not in loop_names}
         all_values_ordered = [name_to_value[n] for n in site_info.template.variable_names]
         usage = usage_from_spec(call_site, site_info.template, constant_values)
-        entry = session_cache.get_entry_for_usage(usage, cache)
+        entry = session_cache.get_entry_for_usage(usage)
         if entry and entry.compiled_fn:
             if config.verbose:
                 spec = GenerationSpec(
@@ -123,27 +127,7 @@ def semi(prompt: str, require_tools: bool = False, **kwargs: Any) -> Any:
                     variable_values={n: name_to_value[n] for n in site_info.template.variable_names},
                     require_external_tools=require_tools,
                 )
-                print_cache_hit_from_semi(spec, entry, getattr(cache, "_cache_dir", None))
-            return entry.compiled_fn(*all_values_ordered, **kwargs)
-        template_hash = build_template_hash(site_info.template.template_parts, constant_values)
-        entry = cache.get(call_site.site_id, template_hash)
-        if entry and entry.compiled_fn:
-            if config.verbose:
-                spec = GenerationSpec(
-                    prompt=prompt,
-                    call_site=call_site,
-                    template=site_info.template,
-                    context=context,
-                    expected_type=site_info.expected_type,
-                    sample_input=None,
-                    constant_values=constant_values,
-                    variable_values={n: name_to_value[n] for n in site_info.template.variable_names},
-                    require_external_tools=require_tools,
-                )
-                print_cache_hit_from_semi(spec, entry, getattr(cache, "_cache_dir", None))
-            session_cache.resolve_or_register(
-                usage, entry, readable_function_name(call_site, call_site.lineno), cache
-            )
+                print_cache_hit_from_semi(spec, entry, config.cache_dir)
             return entry.compiled_fn(*all_values_ordered, **kwargs)
         sample_input = _sample_from_values(site_info.template.variable_names, name_to_value, site_info.loop_variant_names)
         spec = GenerationSpec(
@@ -158,12 +142,10 @@ def semi(prompt: str, require_tools: bool = False, **kwargs: Any) -> Any:
             require_external_tools=require_tools,
         )
         entry = agent.generate(spec)
-        session_cache.resolve_or_register(
-            usage, entry, readable_function_name(call_site, call_site.lineno), cache
-        )
+        session_cache.resolve_or_register(usage, entry, readable_function_name(call_site, call_site.lineno))
         return entry.compiled_fn(*all_values_ordered, **kwargs)
 
-    return _semi_fallback(prompt, call_site, agent, cache, require_tools=require_tools, **kwargs)
+    return _semi_fallback(prompt, call_site, agent, session_cache, require_tools=require_tools, **kwargs)
 
 
 def _sample_from_values(
@@ -180,13 +162,18 @@ def _semi_fallback(
     prompt: str,
     call_site: SemiCallSite,
     agent: SemiAgent,
-    cache: SemiCache,
+    session_cache: SessionCache,
     require_tools: bool = False,
     **kwargs: Any,
 ) -> Any:
-    """Standalone semi() without @semiformal context: use prompt hash as cache key."""
-    template_hash = hashlib.sha256(prompt.encode()).hexdigest()[:16]
-    entry = cache.get(call_site.site_id, template_hash)
+    """Standalone semi() without @semiformal context: session cache keyed by prompt."""
+    template = PromptTemplate(
+        template_parts=[TemplatePart(is_literal=True, value=prompt)],
+        variable_names=[],
+        variable_expressions=[],
+    )
+    usage = usage_from_spec(call_site, template, {})
+    entry = session_cache.get_entry_for_usage(usage)
     if entry and entry.compiled_fn:
         config = get_config()
         if config.verbose:
@@ -201,7 +188,7 @@ def _semi_fallback(
                 variable_values=None,
                 require_external_tools=require_tools,
             )
-            print_cache_hit_from_semi(spec, entry, getattr(cache, "_cache_dir", None))
+            print_cache_hit_from_semi(spec, entry, config.cache_dir)
         return entry.compiled_fn(prompt, **kwargs)
     spec = GenerationSpec(
         prompt=prompt,
@@ -215,4 +202,5 @@ def _semi_fallback(
         require_external_tools=require_tools,
     )
     entry = agent.generate(spec)
+    session_cache.resolve_or_register(usage, entry, readable_function_name(call_site, 0))
     return entry.compiled_fn(prompt, **kwargs)

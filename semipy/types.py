@@ -70,7 +70,7 @@ class PromptTemplate:
 
 
 def _template_hash_for_usage(template_parts: list[TemplatePart], constant_values: dict[str, Any]) -> str:
-    """Stable hash for template + constants (mirrors cache.build_template_hash)."""
+    """Stable hash for template + constants."""
     import json
     try:
         const_ser = json.dumps(constant_values, sort_keys=True, default=repr)
@@ -102,11 +102,11 @@ class Usage:
 class CacheEntry:
     """Cached generated function and metadata."""
 
-    site_id: str
-    template_hash: str
     generated_source: str
     compiled_fn: Optional[Callable[..., Any]] = None
     expected_type: type = type(None)
+    # Display path for console (e.g. session entry module path)
+    cache_display_path: Optional[str] = None
 
 
 @dataclass
@@ -211,9 +211,7 @@ class SemicodeEntry:
     template_fingerprint: str = ""  # structural fingerprint for tree-based match
     usage_count: int = 0
     last_validated_at: Optional[float] = None  # optional timestamp
-    # For loading from legacy cache (site_id/template_hash) before module-style storage.
-    primary_site_id: str = ""
-    primary_template_hash: str = ""
+    generated_source: str = ""  # persisted in session index and entry module
 
 
 @dataclass

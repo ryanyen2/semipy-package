@@ -1,11 +1,11 @@
 """Session-scoped cache: one implementation per semicode per session, structural reuse."""
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from semipy.cache import SemiCache
 from semipy.template import structural_fingerprint, template_tree_from_prompt
 from semipy.types import (
     CacheEntry,
@@ -58,8 +58,7 @@ def _load_session_index_automerge(cache_dir: Path, session_id: str, source_file:
             template_fingerprint=e.get("template_fingerprint", ""),
             usage_count=e.get("usage_count", 0),
             last_validated_at=e.get("last_validated_at"),
-            primary_site_id=e.get("primary_site_id", ""),
-            primary_template_hash=e.get("primary_template_hash", ""),
+            generated_source=e.get("generated_source", ""),
         )
         for e in data.get("semicodes", [])
     ]
@@ -94,8 +93,7 @@ def _save_session_index_automerge(cache_dir: Path, index: SessionIndex) -> bool:
                 "template_fingerprint": e.template_fingerprint,
                 "usage_count": e.usage_count,
                 "last_validated_at": e.last_validated_at,
-                "primary_site_id": e.primary_site_id,
-                "primary_template_hash": e.primary_template_hash,
+                "generated_source": e.generated_source,
             }
             for e in index.semicodes
         ],
@@ -137,8 +135,7 @@ def load_session_index(cache_dir: Path, session_id: str, source_file: str) -> Se
                 template_fingerprint=e.get("template_fingerprint", ""),
                 usage_count=e.get("usage_count", 0),
                 last_validated_at=e.get("last_validated_at"),
-                primary_site_id=e.get("primary_site_id", ""),
-                primary_template_hash=e.get("primary_template_hash", ""),
+                generated_source=e.get("generated_source", ""),
             )
             for e in data.get("semicodes", [])
         ]
@@ -176,8 +173,7 @@ def save_session_index(cache_dir: Path, index: SessionIndex) -> None:
                 "template_fingerprint": e.template_fingerprint,
                 "usage_count": e.usage_count,
                 "last_validated_at": e.last_validated_at,
-                "primary_site_id": e.primary_site_id,
-                "primary_template_hash": e.primary_template_hash,
+                "generated_source": e.generated_source,
             }
             for e in index.semicodes
         ],
@@ -194,7 +190,7 @@ def _entry_module_path(cache_dir: Path, module_name: str) -> Path:
     return cache_dir / f"{module_name}.semi.py"
 
 
-def _write_entry_module(cache_dir: Path, index: SessionIndex, legacy_cache: SemiCache) -> None:
+def _write_entry_module(cache_dir: Path, index: SessionIndex) -> None:
     """Write the session entry module with all generated functions and a DISPATCH map."""
     path = _entry_module_path(cache_dir, index.module_name)
     lines = [
@@ -207,16 +203,13 @@ def _write_entry_module(cache_dir: Path, index: SessionIndex, legacy_cache: Semi
     ]
     dispatch_entries: list[str] = []
     for se in index.semicodes:
-        if not se.function_name or not se.primary_site_id or not se.primary_template_hash:
-            continue
-        entry = legacy_cache.get(se.primary_site_id, se.primary_template_hash)
-        if entry is None or not entry.generated_source.strip():
+        if not se.function_name or not se.generated_source.strip():
             continue
         for uid in se.usage_ids:
             dispatch_entries.append(f'DISPATCH[{repr(uid)}] = {repr(se.function_name)}')
         lines.append("")
         lines.append("# " + se.function_name)
-        lines.append(entry.generated_source.strip())
+        lines.append(se.generated_source.strip())
         lines.append("")
     if dispatch_entries:
         lines.append("")
@@ -250,7 +243,7 @@ def _load_function_from_entry_module(
 class SessionCache:
     """
     Session-scoped cache: resolve usage to semicode (exact or structural match),
-    one implementation per semicode. Uses legacy SemiCache and module-style entry file.
+    one implementation per semicode. Entry module per session is the single source of truth.
     """
 
     def __init__(self, cache_dir: Path):
@@ -264,14 +257,13 @@ class SessionCache:
             self._memory[key] = load_session_index(self._cache_dir, session_id, source_file)
         return self._memory[key]
 
-    def get_entry_for_usage(
-        self,
-        usage: Usage,
-        legacy_cache: SemiCache,
-    ) -> Optional[CacheEntry]:
+    def _entry_module_display_path(self, module_name: str) -> str:
+        return str(_entry_module_path(self._cache_dir, module_name))
+
+    def get_entry_for_usage(self, usage: Usage) -> Optional[CacheEntry]:
         """
         Resolve usage to a cached implementation: exact usage_id match, or structural
-        (same template fingerprint) match. Load from entry module if present, else legacy cache.
+        (same template fingerprint) match. Load from entry module.
         """
         session_id = session_id_from_filename(usage.call_site.filename)
         index = self._get_index(session_id, usage.call_site.filename)
@@ -284,35 +276,32 @@ class SessionCache:
         if semicode is None:
             return None
 
-        if semicode.function_name:
-            fn = _load_function_from_entry_module(
-                self._cache_dir,
-                index.module_name,
-                semicode.function_name,
-                self._entry_globals_cache,
-            )
-            if fn is not None:
-                return CacheEntry(
-                    site_id=semicode.primary_site_id,
-                    template_hash=semicode.primary_template_hash,
-                    generated_source="",
-                    compiled_fn=fn,
-                )
-        if not semicode.primary_site_id or not semicode.primary_template_hash:
+        if not semicode.function_name:
             return None
-        return legacy_cache.get(semicode.primary_site_id, semicode.primary_template_hash)
+        fn = _load_function_from_entry_module(
+            self._cache_dir,
+            index.module_name,
+            semicode.function_name,
+            self._entry_globals_cache,
+        )
+        if fn is None:
+            return None
+        display_path = self._entry_module_display_path(index.module_name)
+        return CacheEntry(
+            generated_source=semicode.generated_source or "",
+            compiled_fn=fn,
+            cache_display_path=display_path,
+        )
 
     def resolve_or_register(
         self,
         usage: Usage,
         entry: CacheEntry,
         function_name: str,
-        legacy_cache: SemiCache,
     ) -> SemicodeEntry:
         """
         If this usage already maps to a semicode (exact or structural), return that entry.
-        Otherwise register a new semicode and return the new SemicodeEntry.
-        Caller must have already put entry into legacy_cache.
+        Otherwise register a new semicode with the given entry's source and return the new SemicodeEntry.
         """
         session_id = session_id_from_filename(usage.call_site.filename)
         index = self._get_index(session_id, usage.call_site.filename)
@@ -329,12 +318,12 @@ class SessionCache:
                 existing.usage_ids.append(uid)
             existing.usage_count = len(existing.usage_ids)
             save_session_index(self._cache_dir, index)
-            _write_entry_module(self._cache_dir, index, legacy_cache)
+            _write_entry_module(self._cache_dir, index)
             self._entry_globals_cache.pop(index.module_name, None)
             return existing
 
         semicode_id = fingerprint
-        implementation_id = entry.template_hash
+        implementation_id = hashlib.sha256(entry.generated_source.encode()).hexdigest()[:16]
         new_entry = SemicodeEntry(
             semicode_id=semicode_id,
             implementation_id=implementation_id,
@@ -344,12 +333,11 @@ class SessionCache:
             expected_type=type(None),
             template_fingerprint=fingerprint,
             usage_count=1,
-            primary_site_id=entry.site_id,
-            primary_template_hash=entry.template_hash,
+            generated_source=entry.generated_source,
         )
         index.semicodes.append(new_entry)
         save_session_index(self._cache_dir, index)
-        _write_entry_module(self._cache_dir, index, legacy_cache)
+        _write_entry_module(self._cache_dir, index)
         self._entry_globals_cache.pop(index.module_name, None)
         return new_entry
 

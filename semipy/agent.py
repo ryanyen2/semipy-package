@@ -1,11 +1,10 @@
 """Agentic generate-validate-retry loop for semi() function generation."""
 from __future__ import annotations
 
-import hashlib
 import json
 from typing import Any, Callable, List, Optional
 
-from semipy.cache import SemiCache, build_template_hash, _compile_source
+from semipy.cache import _compile_source
 from semipy.config import get_config
 from semipy.console_io import (
     confirm,
@@ -34,7 +33,6 @@ class SemiAgent:
     def __init__(
         self,
         generator: Optional[SemiGenerator] = None,
-        cache: Optional[SemiCache] = None,
         max_retries: Optional[int] = None,
         enable_execution_test: Optional[bool] = None,
         verbose: Optional[bool] = None,
@@ -45,7 +43,6 @@ class SemiAgent:
     ):
         config = get_config()
         self.generator = generator or SemiGenerator()
-        self.cache = cache or SemiCache(config.cache_dir)
         self.max_retries = max_retries if max_retries is not None else config.max_retries
         self.enable_execution_test = (
             enable_execution_test if enable_execution_test is not None else config.enable_execution_test
@@ -115,22 +112,9 @@ class SemiAgent:
     def generate(self, spec: GenerationSpec) -> CacheEntry:
         strategy = self._choose_strategy(spec)
         total_attempts = self.max_retries + 1
-        cache_dir = getattr(self.cache, "_cache_dir", None)
 
         with generation_progress(self.verbose) as progress:
-            progress.log_step("Cache lookup")
-            progress.update("Cache lookup...")
-            if strategy == GenerationStrategy.REUSE and spec.template:
-                template_hash = build_template_hash(
-                    spec.template.template_parts,
-                    spec.constant_values or {},
-                )
-                existing = self.cache.get(spec.call_site.site_id, template_hash)
-                if existing and existing.compiled_fn:
-                    progress.record_cache_hit(spec, existing, cache_dir=cache_dir)
-                    return existing
-
-            progress.log_step("Cache miss")
+            progress.log_step("Generate")
             progress.log_step(f"Strategy: {strategy_description(strategy)}")
             progress.update(f"Cache miss. {strategy_description(strategy)}")
             if self.confirm_on_external_tools and getattr(spec, "require_external_tools", False):
@@ -179,31 +163,17 @@ class SemiAgent:
                 )
 
                 if result.passed:
-                    progress.log_step("Valid (caching)")
-                    if spec.template:
-                        template_hash = build_template_hash(
-                            spec.template.template_parts,
-                            spec.constant_values or {},
-                        )
-                    else:
-                        template_hash = hashlib.sha256(spec.prompt.encode()).hexdigest()[:16]
+                    progress.log_step("Valid")
                     progress.record_success(
                         attempt + 1,
-                        cache_dir=cache_dir,
-                        site_id=spec.call_site.site_id,
-                        template_hash=template_hash,
                         call_site=spec.call_site,
                     )
                     fn = _compile_source(source)
-                    entry = CacheEntry(
-                        site_id=spec.call_site.site_id,
-                        template_hash=template_hash,
+                    return CacheEntry(
                         generated_source=source,
                         compiled_fn=fn,
                         expected_type=spec.expected_type,
                     )
-                    self.cache.put(entry)
-                    return entry
 
                 for tool in self.tools:
                     try:
@@ -245,30 +215,16 @@ class SemiAgent:
                         enable_execution=self.enable_execution_test,
                     )
                     if result.passed:
-                        if spec.template:
-                            template_hash = build_template_hash(
-                                spec.template.template_parts,
-                                spec.constant_values or {},
-                            )
-                        else:
-                            template_hash = hashlib.sha256(spec.prompt.encode()).hexdigest()[:16]
                         progress.record_success(
                             total_attempts + 1,
-                            cache_dir=cache_dir,
-                            site_id=spec.call_site.site_id,
-                            template_hash=template_hash,
                             call_site=spec.call_site,
                         )
                         fn = _compile_source(source)
-                        entry = CacheEntry(
-                            site_id=spec.call_site.site_id,
-                            template_hash=template_hash,
+                        return CacheEntry(
                             generated_source=source,
                             compiled_fn=fn,
                             expected_type=spec.expected_type,
                         )
-                        self.cache.put(entry)
-                        return entry
 
             progress.record_failure(
                 last_result.error_message if last_result else "Unknown error",

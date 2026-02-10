@@ -18,7 +18,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest", "python-dotenv"]
-merge = ["automerge>=0.1.0"]
+# merge: optional. Install with `uv pip install automerge` for Automerge-backed
+# session index storage (.index.automerge). On macOS, building automerge from
+# source requires Rust (https://rustup.rs). Linux may get a prebuilt wheel.
 
 [tool.setuptools.packages.find]
 where = ["."]

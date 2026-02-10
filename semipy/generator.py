@@ -79,4 +79,5 @@ Rules:
 - Handle edge cases: None, missing keys, empty data, type mismatches. Prefer safe defaults over raising.
 - Be generalizable: the function may be used on other similar data. Avoid hardcoding values that were only in the example; use the described intent.
 - Do not use emoji or decorative output.
+- DO not include any docstrings or comments in the code, no explaination, jsut code.
 """
