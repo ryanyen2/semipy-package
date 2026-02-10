@@ -2,10 +2,15 @@
 from __future__ import annotations
 
 import ast
+import hashlib
+import json
 import textwrap
 from typing import Any, Optional
 
 from semipy.types import PromptTemplate, SemiCallSite, SemiCallSiteInfo, TemplatePart
+
+# Template tree: list of ("literal", str) | ("var", str) for structural comparison.
+TemplateTree = list[tuple[str, str]]
 
 
 def _names_in_expr(node: ast.AST) -> set[str]:
@@ -169,5 +174,55 @@ def extract_semi_templates(
             )
 
     return results
+
+
+def template_tree_from_prompt(template: PromptTemplate) -> TemplateTree:
+    """Build a small tree (list of literal/var nodes) from a PromptTemplate."""
+    tree: TemplateTree = []
+    for p in template.template_parts:
+        if p.is_literal:
+            tree.append(("literal", p.value))
+        else:
+            tree.append(("var", p.value))
+    return tree
+
+
+def structural_fingerprint(tree: TemplateTree) -> str:
+    """
+    Stable hash of template structure only: literal vs var and var slot names.
+    Same fingerprint => same shape (structural match); constants can differ.
+    """
+    shape = [(kind, name if kind == "var" else "") for kind, name in tree]
+    raw = json.dumps(shape, sort_keys=False)
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def trees_structurally_equal(a: TemplateTree, b: TemplateTree) -> bool:
+    """True if both trees have the same shape (same sequence of literal vs var and var names)."""
+    if len(a) != len(b):
+        return False
+    for (ka, va), (kb, vb) in zip(a, b):
+        if ka != kb:
+            return False
+        if ka == "var" and va != vb:
+            return False
+    return True
+
+
+def template_tree_diff_description(old_tree: TemplateTree, new_tree: TemplateTree) -> str:
+    """Human-readable description of the diff between two template trees."""
+    if trees_structurally_equal(old_tree, new_tree):
+        return "same structure, only constant values differ"
+    if len(old_tree) != len(new_tree):
+        return f"different number of segments: {len(old_tree)} vs {len(new_tree)}"
+    diffs: list[str] = []
+    for i, ((ko, vo), (kn, vn)) in enumerate(zip(old_tree, new_tree)):
+        if ko != kn:
+            diffs.append(f"segment {i}: was {ko} became {kn}")
+        elif ko == "var" and vo != vn:
+            diffs.append(f"segment {i}: var {vo} -> {vn}")
+        elif ko == "literal" and vo != vn:
+            diffs.append(f"segment {i}: literal text changed")
+    return "; ".join(diffs) if diffs else "no structural change"
 
 

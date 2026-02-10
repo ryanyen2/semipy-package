@@ -10,7 +10,12 @@ from semipy.cache import SemiCache, build_template_hash
 from semipy.config import get_config
 from semipy.console_io import print_cache_hit_from_semi
 from semipy.decorator import get_semiformal_context
-from semipy.types import GenerationSpec, SemiCallSite
+from semipy.session_cache import (
+    SessionCache,
+    usage_from_spec,
+    readable_function_name,
+)
+from semipy.types import GenerationSpec, SemiCallSite, session_id_from_filename
 
 
 def _normalize_filename(path: str) -> str:
@@ -87,6 +92,7 @@ def semi(prompt: str, require_tools: bool = False, **kwargs: Any) -> Any:
 
     config = get_config()
     cache = SemiCache(config.cache_dir)
+    session_cache = SessionCache(config.cache_dir)
     agent = SemiAgent(cache=cache)
 
     if site_info is not None and site_info.template.variable_expressions:
@@ -102,6 +108,23 @@ def semi(prompt: str, require_tools: bool = False, **kwargs: Any) -> Any:
         loop_names = set(site_info.loop_variant_names)
         constant_values = {n: name_to_value[n] for n in site_info.template.variable_names if n not in loop_names}
         all_values_ordered = [name_to_value[n] for n in site_info.template.variable_names]
+        usage = usage_from_spec(call_site, site_info.template, constant_values)
+        entry = session_cache.get_entry_for_usage(usage, cache)
+        if entry and entry.compiled_fn:
+            if config.verbose:
+                spec = GenerationSpec(
+                    prompt=prompt,
+                    call_site=call_site,
+                    template=site_info.template,
+                    context=context,
+                    expected_type=site_info.expected_type,
+                    sample_input=None,
+                    constant_values=constant_values,
+                    variable_values={n: name_to_value[n] for n in site_info.template.variable_names},
+                    require_external_tools=require_tools,
+                )
+                print_cache_hit_from_semi(spec, entry, getattr(cache, "_cache_dir", None))
+            return entry.compiled_fn(*all_values_ordered, **kwargs)
         template_hash = build_template_hash(site_info.template.template_parts, constant_values)
         entry = cache.get(call_site.site_id, template_hash)
         if entry and entry.compiled_fn:
@@ -118,6 +141,9 @@ def semi(prompt: str, require_tools: bool = False, **kwargs: Any) -> Any:
                     require_external_tools=require_tools,
                 )
                 print_cache_hit_from_semi(spec, entry, getattr(cache, "_cache_dir", None))
+            session_cache.resolve_or_register(
+                usage, entry, readable_function_name(call_site, call_site.lineno), cache
+            )
             return entry.compiled_fn(*all_values_ordered, **kwargs)
         sample_input = _sample_from_values(site_info.template.variable_names, name_to_value, site_info.loop_variant_names)
         spec = GenerationSpec(
@@ -132,6 +158,9 @@ def semi(prompt: str, require_tools: bool = False, **kwargs: Any) -> Any:
             require_external_tools=require_tools,
         )
         entry = agent.generate(spec)
+        session_cache.resolve_or_register(
+            usage, entry, readable_function_name(call_site, call_site.lineno), cache
+        )
         return entry.compiled_fn(*all_values_ordered, **kwargs)
 
     return _semi_fallback(prompt, call_site, agent, cache, require_tools=require_tools, **kwargs)

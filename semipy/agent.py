@@ -16,6 +16,7 @@ from semipy.console_io import (
     validation_error_panel,
 )
 from semipy.generator import SemiGenerator, SYSTEM_PROMPT
+from semipy.change_guidance import format_change_summary_for_prompt
 from semipy.types import (
     CacheEntry,
     GenerationSpec,
@@ -73,6 +74,16 @@ class SemiAgent:
             "Constraints:",
             f"- Return type must be: {spec.expected_type.__name__ if spec.expected_type is not type(None) else 'any'}",
         ]
+        if spec.change_summary is not None:
+            parts.append("")
+            parts.append("Change context (use to decide refactor vs full rewrite):")
+            parts.append(format_change_summary_for_prompt(spec.change_summary))
+        if spec.existing_implementation_source:
+            parts.append("")
+            parts.append("Existing implementation (refactor or replace as needed):")
+            parts.append("```python")
+            parts.append(spec.existing_implementation_source.strip())
+            parts.append("```")
         if spec.template and spec.template.variable_names:
             n = len(spec.template.variable_names)
             parts.append(
