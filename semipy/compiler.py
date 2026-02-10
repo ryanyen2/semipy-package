@@ -1,4 +1,4 @@
-"""Compilation helper for generated semi() source (session cache handles persistence)."""
+"""Compile generated Python source into a callable."""
 from __future__ import annotations
 
 from typing import Any, Callable

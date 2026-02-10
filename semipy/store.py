@@ -1,0 +1,201 @@
+"""Portal persistence and dispatch module read/write."""
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+from typing import Any, Callable, Optional
+
+from semipy.dag import Branch, Commit, Portal, Slot
+
+
+def _source_with_function_name(source: str, fn_name: str) -> str:
+    """Rename the first function definition in source to fn_name so dispatch lookup works."""
+    return re.sub(r"\bdef\s+\w+\s*\(", f"def {fn_name}(", source.strip(), count=1)
+
+
+def _portal_path(cache_dir: Path, session_id: str) -> Path:
+    return cache_dir / f"{session_id}.portal.json"
+
+
+def _dispatch_dir(cache_dir: Path) -> Path:
+    return cache_dir / "runtime"
+
+
+def _dispatch_module_path(cache_dir: Path, module_name: str) -> Path:
+    return _dispatch_dir(cache_dir) / f"{module_name}.semi.py"
+
+
+def _commit_to_dict(c: Commit) -> dict[str, Any]:
+    return {
+        "commit_id": c.commit_id,
+        "parent_ids": list(c.parent_ids),
+        "generated_source": c.generated_source,
+        "source_hash": c.source_hash,
+        "template_fingerprint": c.template_fingerprint,
+        "constants_snapshot": [list(p) for p in c.constants_snapshot],
+        "operation_signature": c.operation_signature,
+        "prompt_snapshot": c.prompt_snapshot,
+        "timestamp": c.timestamp,
+        "message": c.message,
+        "decision": c.decision,
+    }
+
+
+def _commit_from_dict(d: dict[str, Any]) -> Commit:
+    return Commit(
+        commit_id=d["commit_id"],
+        parent_ids=tuple(d.get("parent_ids", [])),
+        generated_source=d["generated_source"],
+        source_hash=d["source_hash"],
+        template_fingerprint=d["template_fingerprint"],
+        constants_snapshot=tuple(tuple(p) for p in d.get("constants_snapshot", [])),
+        operation_signature=d["operation_signature"],
+        prompt_snapshot=d.get("prompt_snapshot", ""),
+        timestamp=float(d.get("timestamp", 0)),
+        message=d.get("message", ""),
+        decision=d.get("decision", "GENERATE"),
+    )
+
+
+def _slot_to_dict(s: Slot) -> dict[str, Any]:
+    return {
+        "slot_id": s.slot_id,
+        "call_site_info": s.call_site_info,
+        "function_name_base": s.function_name_base,
+        "commits": {cid: _commit_to_dict(c) for cid, c in s.commits.items()},
+        "branches": {n: {"name": b.name, "head": b.head} for n, b in s.branches.items()},
+        "refs": dict(s.refs),
+        "default_branch": s.default_branch,
+    }
+
+
+def _slot_from_dict(d: dict[str, Any]) -> Slot:
+    commits = {cid: _commit_from_dict(cd) for cid, cd in d.get("commits", {}).items()}
+    branches = {
+        n: Branch(name=b["name"], head=b["head"])
+        for n, b in d.get("branches", {}).items()
+    }
+    return Slot(
+        slot_id=d["slot_id"],
+        call_site_info=d.get("call_site_info", {}),
+        function_name_base=d["function_name_base"],
+        commits=commits,
+        branches=branches,
+        refs=dict(d.get("refs", {})),
+        default_branch=d.get("default_branch", "main"),
+    )
+
+
+def _portal_to_dict(p: Portal) -> dict[str, Any]:
+    return {
+        "session_id": p.session_id,
+        "source_file": p.source_file,
+        "module_name": p.module_name,
+        "slots": {sid: _slot_to_dict(s) for sid, s in p.slots.items()},
+    }
+
+
+def _portal_from_dict(d: dict[str, Any]) -> Portal:
+    slots = {sid: _slot_from_dict(sd) for sid, sd in d.get("slots", {}).items()}
+    return Portal(
+        session_id=d.get("session_id", ""),
+        source_file=d.get("source_file", ""),
+        module_name=d.get("module_name", ""),
+        slots=slots,
+    )
+
+
+def load_portal(cache_dir: Path, session_id: str, source_file: str, module_name: str) -> Portal:
+    path = _portal_path(cache_dir, session_id)
+    if not path.exists():
+        return Portal(
+            session_id=session_id,
+            source_file=source_file,
+            module_name=module_name,
+        )
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        return _portal_from_dict(data)
+    except Exception:
+        return Portal(
+            session_id=session_id,
+            source_file=source_file,
+            module_name=module_name,
+        )
+
+
+def save_portal(cache_dir: Path, portal: Portal) -> None:
+    path = _portal_path(cache_dir, portal.session_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = _portal_to_dict(portal)
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def function_name_for_commit(slot: Slot, commit: Commit) -> str:
+    """Function name in dispatch module: base_commitid (8 chars)."""
+    base = slot.function_name_base
+    short = commit.commit_id[:8]
+    return f"{base}_{short}"
+
+
+def write_dispatch_module(cache_dir: Path, portal: Portal) -> Path:
+    """Write dispatch module with only functions referenced by refs. Returns path."""
+    path = _dispatch_module_path(cache_dir, portal.module_name)
+    _dispatch_dir(cache_dir).mkdir(parents=True, exist_ok=True)
+
+    lines = [
+        f'"""Generated implementations for session {portal.module_name}. Do not edit by hand."""',
+        "from __future__ import annotations",
+        "",
+        "DISPATCH = {}",
+        "",
+    ]
+    dispatch_entries: list[str] = []
+
+    for slot in portal.slots.values():
+        refd_commit_ids = set(slot.refs.values())
+        for commit_id in refd_commit_ids:
+            commit = slot.commits.get(commit_id)
+            if commit is None:
+                continue
+            fn_name = function_name_for_commit(slot, commit)
+            lines.append(f"# slot: {slot.function_name_base} | commit: {commit_id[:8]} | {commit.decision}")
+            lines.append(_source_with_function_name(commit.generated_source, fn_name))
+            lines.append("")
+        for usage_id, commit_id in slot.refs.items():
+            commit = slot.commits.get(commit_id)
+            if commit is not None:
+                fn_name = function_name_for_commit(slot, commit)
+                dispatch_entries.append(f"DISPATCH[{repr(usage_id)}] = {repr(fn_name)}")
+
+    if dispatch_entries:
+        lines.append("")
+        lines.extend(dispatch_entries)
+
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return path
+
+
+def load_function_from_dispatch(
+    cache_dir: Path,
+    module_name: str,
+    function_name: str,
+    module_cache: dict[str, dict[str, Any]],
+) -> Optional[Callable[..., Any]]:
+    path = _dispatch_module_path(cache_dir, module_name)
+    if not path.exists():
+        return None
+    key = module_name
+    if key not in module_cache:
+        try:
+            ns: dict[str, Any] = {}
+            exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), ns)
+            module_cache[key] = ns
+        except Exception:
+            return None
+    ns = module_cache[key]
+    fn = ns.get(function_name)
+    return fn if callable(fn) and not isinstance(fn, type) else None

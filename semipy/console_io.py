@@ -12,8 +12,8 @@ from rich.table import Table
 
 from semipy.types import (
     CacheEntry,
+    Decision,
     GenerationSpec,
-    GenerationStrategy,
     SemiCallSite,
     ValidationResult,
 )
@@ -29,15 +29,19 @@ def get_console() -> Console:
     return _console
 
 
-def strategy_description(strategy: GenerationStrategy) -> str:
-    """Human-readable explanation of the generation strategy."""
-    if strategy == GenerationStrategy.FRESH:
-        return "Generate new code (no cached match)"
-    if strategy == GenerationStrategy.REUSE:
-        return "Use cached implementation if available"
-    if strategy == GenerationStrategy.INCREMENTAL:
-        return "Incremental update from existing code"
-    return str(strategy.value)
+def decision_description(decision: Decision) -> str:
+    """Human-readable explanation of the resolution decision."""
+    if decision == Decision.REUSE:
+        return "Reuse cached implementation"
+    if decision == Decision.ADVANCE:
+        return "Advance on branch (adapt from parent)"
+    if decision == Decision.FORK:
+        return "New branch (structure changed)"
+    if decision == Decision.GENERATE:
+        return "Generate new implementation"
+    if decision == Decision.MERGE:
+        return "Merge branches"
+    return str(decision.value)
 
 
 def _format_location(filename: str, lineno: int, func_qualname: str) -> str:
@@ -132,6 +136,74 @@ def print_cache_hit_from_semi(
         loc_link=_call_site_file_url(cs.filename, cs.lineno),
         path_link=_file_link_url(path),
     )
+
+
+def print_dag_reuse(
+    slot_name: str,
+    branch_name: Optional[str],
+    commit_id: str,
+    loc: str,
+    path: str,
+    loc_link: Optional[str] = None,
+    path_link: Optional[str] = None,
+) -> None:
+    """Log REUSE: slot:branch -> REUSE -> commit id."""
+    branch = f":{branch_name}" if branch_name else ""
+    msg = f"{slot_name}{branch} -> REUSE -> commit {commit_id[:8]}"
+    _print_semipy_line_once(loc, msg, path, "green", loc_link=loc_link, path_link=path_link)
+
+
+def print_dag_advance(
+    slot_name: str,
+    branch_name: str,
+    commit_id: str,
+    parent_id: str,
+    loc: str,
+    path: str,
+    loc_link: Optional[str] = None,
+    path_link: Optional[str] = None,
+) -> None:
+    """Log ADVANCE: slot:branch -> ADVANCE -> commit (parent)."""
+    msg = f"{slot_name}:{branch_name} -> ADVANCE -> commit {commit_id[:8]} (parent {parent_id[:8]})"
+    _print_semipy_line_once(loc, msg, path, "cyan", loc_link=loc_link, path_link=path_link)
+
+
+def print_dag_generate(
+    slot_name: str,
+    branch_name: Optional[str],
+    commit_id: str,
+    loc: str,
+    path: str,
+    loc_link: Optional[str] = None,
+    path_link: Optional[str] = None,
+) -> None:
+    """Log GENERATE: slot:branch -> GENERATE -> commit."""
+    branch = f":{branch_name}" if branch_name else ""
+    msg = f"{slot_name}{branch} -> GENERATE -> commit {commit_id[:8]}"
+    _print_semipy_line_once(loc, msg, path, "yellow", loc_link=loc_link, path_link=path_link)
+
+
+def print_slot_history(slot: Any, max_entries: int = 20) -> None:
+    """Print git-log-style history for a slot (commit id, message, branch)."""
+    from semipy.dag import Commit, Slot
+    if not isinstance(slot, Slot):
+        return
+    console = get_console()
+    commits = sorted(slot.commits.values(), key=lambda c: c.timestamp, reverse=True)
+    if not commits:
+        return
+    branch_heads = {b.name: b.head for b in slot.branches.values()}
+    lines = [f"  [dim]slot: {slot.function_name_base}[/]"]
+    for c in commits[:max_entries]:
+        branch_label = ""
+        for bname, head in branch_heads.items():
+            if head == c.commit_id:
+                branch_label = f" [{bname}]"
+                break
+        lines.append(f"  [cyan]{c.commit_id[:8]}[/] [dim]{c.message}[/] [green]{c.decision}[/]{branch_label}")
+    if len(commits) > max_entries:
+        lines.append(f"  [dim]... {len(commits) - max_entries} more[/]")
+    console.print("\n".join(lines))
 
 
 def cache_hit_panel(

@@ -26,3 +26,5 @@ __pycache__/
 .vscode/
 
 .mcp.json
+# next-agents-md
+.next-docs/

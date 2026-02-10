@@ -129,6 +129,16 @@ class SemiformalContext:
     semi_call_sites: list[SemiCallSiteInfo] = field(default_factory=list)
 
 
+class Decision(Enum):
+    """Resolution decision: how this invocation was satisfied (reuse vs new commit)."""
+
+    REUSE = "reuse"
+    ADVANCE = "advance"
+    FORK = "fork"
+    GENERATE = "generate"
+    MERGE = "merge"
+
+
 @dataclass
 class GenerationSpec:
     """Input to the agent for one generation request."""
@@ -142,8 +152,10 @@ class GenerationSpec:
     constant_values: Optional[dict[str, Any]] = None
     variable_values: Optional[dict[str, Any]] = None
     require_external_tools: bool = False
-    change_summary: Optional[ChangeSummary] = None
-    existing_implementation_source: Optional[str] = None
+    decision: Optional[Decision] = None
+    parent_sources: Optional[list[str]] = None
+    parent_commit_ids: Optional[list[str]] = None
+    lineage_summary: Optional[str] = None
 
 
 @dataclass
@@ -155,33 +167,6 @@ class ValidationResult:
     type_correct: bool
     execution_ok: bool
     error_message: str = ""
-
-
-class GenerationStrategy(Enum):
-    FRESH = "fresh"
-    REUSE = "reuse"
-    INCREMENTAL = "incremental"
-
-
-class ChangeDecision(Enum):
-    """LLM or rule-based decision for how to handle a change."""
-
-    REUSE = "reuse"       # no regeneration
-    REFACTOR = "refactor" # small edit to existing implementation
-    REGENERATE = "regenerate"  # regenerate implementation for this semicode
-    FULL_REWRITE = "full_rewrite"  # new semicode or full session regen
-
-
-@dataclass
-class ChangeSummary:
-    """Structured summary of what changed (for LLM or rule-based decision)."""
-
-    template_tree_changed: bool = False
-    template_diff_description: str = ""
-    constants_changed: bool = False
-    constants_diff_description: str = ""
-    source_changed: bool = False
-    source_diff_description: str = ""
 
 
 class SemiGenerationError(Exception):
@@ -196,48 +181,3 @@ SemiToolResult = dict[str, Any]
 SemiTool = Callable[[GenerationSpec, str, ValidationResult], SemiToolResult]
 
 
-# --- Session / semicode model (one session = one source file, one implementation per semicode) ---
-
-@dataclass
-class SemicodeEntry:
-    """One semicode in a session: one implementation shared by multiple usages."""
-
-    semicode_id: str
-    implementation_id: str
-    usage_ids: list[str] = field(default_factory=list)
-    function_name: str = ""  # readable name in entry module, e.g. frame_filter_condition
-    param_names: list[str] = field(default_factory=list)
-    expected_type: type = type(None)
-    template_fingerprint: str = ""  # structural fingerprint for tree-based match
-    usage_count: int = 0
-    last_validated_at: Optional[float] = None  # optional timestamp
-    generated_source: str = ""  # persisted in session index and entry module
-
-
-@dataclass
-class SessionIndex:
-    """In-memory session index: which semicodes exist and which usage(s) map to each."""
-
-    session_id: str
-    source_file: str
-    module_name: str  # human-readable, e.g. data_wrangling
-    semicodes: list[SemicodeEntry] = field(default_factory=list)
-    last_source_fingerprint: Optional[str] = None
-
-    def semicode_by_id(self, semicode_id: str) -> Optional[SemicodeEntry]:
-        for se in self.semicodes:
-            if se.semicode_id == semicode_id:
-                return se
-        return None
-
-    def semicode_by_usage_id(self, usage_id: str) -> Optional[SemicodeEntry]:
-        for se in self.semicodes:
-            if usage_id in se.usage_ids:
-                return se
-        return None
-
-    def semicode_by_structural_fingerprint(self, fingerprint: str) -> Optional[SemicodeEntry]:
-        for se in self.semicodes:
-            if se.template_fingerprint == fingerprint:
-                return se
-        return None

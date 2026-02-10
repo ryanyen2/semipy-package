@@ -15,7 +15,7 @@ class SemiConfig:
 
     model: str = "gpt-5-mini"
     api_key: Optional[str] = field(default_factory=lambda: os.getenv("OPENAI_API_KEY"))
-    cache_dir: Path = field(default_factory=lambda: Path(".semiformal/runtime"))
+    cache_dir: Path = field(default_factory=lambda: Path(".semiformal"))
     max_retries: int = 3
     enable_execution_test: bool = True
     verbose: bool = True

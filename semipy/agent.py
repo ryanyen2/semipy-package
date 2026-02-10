@@ -4,22 +4,21 @@ from __future__ import annotations
 import json
 from typing import Any, Callable, List, Optional
 
-from semipy.cache import _compile_source
+from semipy.compiler import _compile_source
 from semipy.config import get_config
 from semipy.console_io import (
     confirm,
     generation_progress,
     get_console,
     source_preview,
-    strategy_description,
+    decision_description,
     validation_error_panel,
 )
 from semipy.generator import SemiGenerator, SYSTEM_PROMPT
-from semipy.change_guidance import format_change_summary_for_prompt
 from semipy.types import (
     CacheEntry,
+    Decision,
     GenerationSpec,
-    GenerationStrategy,
     SemiGenerationError,
     SemiTool,
     ValidationResult,
@@ -59,9 +58,6 @@ class SemiAgent:
         )
         self.tools: List[SemiTool] = list(tools) if tools is not None else []
 
-    def _choose_strategy(self, spec: GenerationSpec) -> GenerationStrategy:
-        return GenerationStrategy.FRESH
-
     def _build_user_prompt(self, spec: GenerationSpec) -> str:
         parts = [
             "Implement a single Python function that satisfies this request:",
@@ -71,15 +67,20 @@ class SemiAgent:
             "Constraints:",
             f"- Return type must be: {spec.expected_type.__name__ if spec.expected_type is not type(None) else 'any'}",
         ]
-        if spec.change_summary is not None:
+        if spec.decision == Decision.ADVANCE and spec.parent_sources:
             parts.append("")
-            parts.append("Change context (use to decide refactor vs full rewrite):")
-            parts.append(format_change_summary_for_prompt(spec.change_summary))
-        if spec.existing_implementation_source:
-            parts.append("")
-            parts.append("Existing implementation (refactor or replace as needed):")
+            parts.append("Adapt from this previous implementation (same structure, new parameters):")
             parts.append("```python")
-            parts.append(spec.existing_implementation_source.strip())
+            parts.append(spec.parent_sources[0].strip())
+            parts.append("```")
+            if spec.lineage_summary:
+                parts.append("")
+                parts.append("Lineage: " + spec.lineage_summary.replace("\n", " "))
+        if spec.decision == Decision.FORK and spec.parent_sources:
+            parts.append("")
+            parts.append("Use as inspiration (structure has changed):")
+            parts.append("```python")
+            parts.append(spec.parent_sources[0].strip())
             parts.append("```")
         if spec.template and spec.template.variable_names:
             n = len(spec.template.variable_names)
@@ -110,13 +111,13 @@ class SemiAgent:
         )
 
     def generate(self, spec: GenerationSpec) -> CacheEntry:
-        strategy = self._choose_strategy(spec)
         total_attempts = self.max_retries + 1
 
+        decision = spec.decision if spec.decision is not None else Decision.GENERATE
         with generation_progress(self.verbose) as progress:
             progress.log_step("Generate")
-            progress.log_step(f"Strategy: {strategy_description(strategy)}")
-            progress.update(f"Cache miss. {strategy_description(strategy)}")
+            progress.log_step(f"Decision: {decision_description(decision)}")
+            progress.update(f"Cache miss. {decision_description(decision)}")
             if self.confirm_on_external_tools and getattr(spec, "require_external_tools", False):
                 config = get_config()
                 if not confirm(
