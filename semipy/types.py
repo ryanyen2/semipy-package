@@ -81,6 +81,7 @@ class GenerationSpec:
     sample_input: Optional[dict[str, Any]] = None
     constant_values: Optional[dict[str, Any]] = None
     variable_values: Optional[dict[str, Any]] = None
+    require_external_tools: bool = False
 
 
 @dataclass
@@ -104,3 +105,9 @@ class SemiGenerationError(Exception):
     """Raised when the agent cannot produce a valid function after retries."""
 
     pass
+
+
+# Protocol for deterministic tools run by the agent (e.g. code analyzer, checker).
+# Called after each validation failure with (spec, source, result); returns structured info for logging.
+SemiToolResult = dict[str, Any]
+SemiTool = Callable[[GenerationSpec, str, ValidationResult], SemiToolResult]

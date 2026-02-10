@@ -24,3 +24,5 @@ __pycache__/
 
 .DS_Store
 .vscode/
+
+.mcp.json

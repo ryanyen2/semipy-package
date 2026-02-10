@@ -71,11 +71,14 @@ def _eval_expressions(expressions: list[str], frame: Any) -> list[Any]:
     return values
 
 
-def semi(prompt: str, **kwargs: Any) -> Any:
+def semi(prompt: str, require_tools: bool = False, **kwargs: Any) -> Any:
     """
     Semiformal expression: at runtime, either runs a cached generated function
     or triggers LLM generation, then returns the result. Type and control-flow
     context constrain what the generated function may return.
+
+    If require_tools=True and config.confirm_on_external_tools is True, the user
+    will be prompted before generation when the task may need external tools (e.g. web/PDF/image).
     """
     call_site = _identify_call_site()
     context = get_semiformal_context()
@@ -112,6 +115,7 @@ def semi(prompt: str, **kwargs: Any) -> Any:
             sample_input=sample_input,
             constant_values=constant_values,
             variable_values={n: name_to_value[n] for n in site_info.template.variable_names},
+            require_external_tools=require_tools,
         )
         entry = agent.generate(spec)
         return entry.compiled_fn(*all_values_ordered, **kwargs)
@@ -150,6 +154,7 @@ def _semi_fallback(
         sample_input=None,
         constant_values=None,
         variable_values=None,
+        require_external_tools=require_tools,
     )
     entry = agent.generate(spec)
     return entry.compiled_fn(prompt, **kwargs)

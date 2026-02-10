@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -18,6 +18,11 @@ class SemiConfig:
     cache_dir: Path = field(default_factory=lambda: Path(".semiformal/runtime"))
     max_retries: int = 3
     enable_execution_test: bool = True
+    verbose: bool = True
+    stream: bool = False
+    confirm_on_failure: bool = False
+    confirm_on_external_tools: bool = False
+    confirm_callback: Optional[Callable[[str], str]] = None
 
     def configure(
         self,
@@ -26,6 +31,11 @@ class SemiConfig:
         cache_dir: Optional[Path] = None,
         max_retries: Optional[int] = None,
         enable_execution_test: Optional[bool] = None,
+        verbose: Optional[bool] = None,
+        stream: Optional[bool] = None,
+        confirm_on_failure: Optional[bool] = None,
+        confirm_on_external_tools: Optional[bool] = None,
+        confirm_callback: Optional[Callable[[str], str]] = None,
     ) -> None:
         if model is not None:
             self.model = model
@@ -37,6 +47,16 @@ class SemiConfig:
             self.max_retries = max_retries
         if enable_execution_test is not None:
             self.enable_execution_test = enable_execution_test
+        if verbose is not None:
+            self.verbose = verbose
+        if stream is not None:
+            self.stream = stream
+        if confirm_on_failure is not None:
+            self.confirm_on_failure = confirm_on_failure
+        if confirm_on_external_tools is not None:
+            self.confirm_on_external_tools = confirm_on_external_tools
+        if confirm_callback is not None:
+            self.confirm_callback = confirm_callback
 
 
 _config: Optional[SemiConfig] = None

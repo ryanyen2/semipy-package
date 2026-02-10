@@ -1,7 +1,7 @@
 """LLM wrapper for generating semi() function implementations."""
 from __future__ import annotations
 
-from typing import Optional
+from typing import Callable, Optional
 
 from semipy.config import get_config
 
@@ -26,18 +26,46 @@ class SemiGenerator:
             self._client = OpenAI(api_key=self._api_key)
         return self._client
 
-    def generate(self, system_prompt: str, user_prompt: str) -> str:
+    def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        stream: bool = False,
+        on_chunk: Optional[Callable[[str], None]] = None,
+    ) -> str:
         client = self._get_client()
-        response = client.chat.completions.create(
+        if not stream:
+            response = client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                stream=False,
+                reasoning_effort="minimal",
+            )
+            return response.choices[0].message.content or ""
+
+        accumulated: list[str] = []
+        stream_response = client.chat.completions.create(
             model=self.model,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            stream=False,
+            stream=True,
             reasoning_effort="minimal",
         )
-        return response.choices[0].message.content or ""
+        for chunk in stream_response:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            if getattr(delta, "content", None):
+                content = delta.content
+                accumulated.append(content)
+                if on_chunk is not None:
+                    on_chunk(content)
+        return "".join(accumulated)
 
 
 SYSTEM_PROMPT = """You generate a single Python function that implements the user's semantic request.
