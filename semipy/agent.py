@@ -9,10 +9,10 @@ from semipy.cache import SemiCache, build_template_hash, _compile_source
 from semipy.config import get_config
 from semipy.console_io import (
     confirm,
-    decision_summary,
+    generation_progress,
     get_console,
     source_preview,
-    step_log,
+    strategy_description,
     validation_error_panel,
 )
 from semipy.generator import SemiGenerator, SYSTEM_PROMPT
@@ -104,140 +104,71 @@ class SemiAgent:
     def generate(self, spec: GenerationSpec) -> CacheEntry:
         strategy = self._choose_strategy(spec)
         total_attempts = self.max_retries + 1
+        cache_dir = getattr(self.cache, "_cache_dir", None)
 
-        if self.verbose:
-            step_log("Cache lookup", spec.call_site.site_id)
-
-        if strategy == GenerationStrategy.REUSE and spec.template:
-            template_hash = build_template_hash(
-                spec.template.template_parts,
-                spec.constant_values or {},
-            )
-            existing = self.cache.get(spec.call_site.site_id, template_hash)
-            if existing and existing.compiled_fn:
-                if self.verbose:
-                    step_log("Cache hit", "returning cached function")
-                return existing
-
-        if self.verbose:
-            step_log("Cache miss")
-            decision_summary(f"Strategy: {strategy.value}")
-
-        if self.confirm_on_external_tools and getattr(spec, "require_external_tools", False):
-            config = get_config()
-            if not confirm(
-                "This may require external tools (web/PDF/image). Continue with current setup?",
-                default_no=True,
-                confirm_callback=config.confirm_callback,
-            ):
-                raise SemiGenerationError(
-                    "User declined to continue without external tools (require_external_tools=True, confirm_on_external_tools=True)."
+        with generation_progress(self.verbose) as progress:
+            progress.log_step("Cache lookup")
+            progress.update("Cache lookup...")
+            if strategy == GenerationStrategy.REUSE and spec.template:
+                template_hash = build_template_hash(
+                    spec.template.template_parts,
+                    spec.constant_values or {},
                 )
+                existing = self.cache.get(spec.call_site.site_id, template_hash)
+                if existing and existing.compiled_fn:
+                    progress.record_cache_hit(spec, existing, cache_dir=cache_dir)
+                    return existing
 
-        prompt = self._build_user_prompt(spec)
-        last_source = ""
-        last_result: Optional[ValidationResult] = None
-
-        for attempt in range(total_attempts):
-            if self.verbose:
-                step_log(
-                    f"Generating (attempt {attempt + 1}/{total_attempts})",
-                    None if attempt == 0 else f"Retry reason: {last_result.error_message if last_result else 'unknown'}",
-                )
-
-            on_chunk = None
-            if self.stream and self.verbose:
-                console = get_console()
-                on_chunk = lambda chunk, c=console: c.print(chunk, end="")
-            raw = self.generator.generate(
-                SYSTEM_PROMPT,
-                prompt,
-                stream=self.stream,
-                on_chunk=on_chunk,
-            )
-            if self.stream and self.verbose:
-                get_console().print()
-
-            source = _extract_function_source(raw)
-
-            if self.verbose:
-                step_log("Validating", "AST, type, execution")
-            result = validate(
-                source,
-                expected_type=spec.expected_type,
-                sample_input=spec.sample_input,
-                enable_execution=self.enable_execution_test,
-            )
-
-            if result.passed:
-                if self.verbose:
-                    step_log("Valid", "caching and returning")
-                fn = _compile_source(source)
-                if spec.template:
-                    template_hash = build_template_hash(
-                        spec.template.template_parts,
-                        spec.constant_values or {},
+            progress.log_step("Cache miss")
+            progress.log_step(f"Strategy: {strategy_description(strategy)}")
+            progress.update(f"Cache miss. {strategy_description(strategy)}")
+            if self.confirm_on_external_tools and getattr(spec, "require_external_tools", False):
+                config = get_config()
+                if not confirm(
+                    "This may require external tools (web/PDF/image). Continue with current setup?",
+                    default_no=True,
+                    confirm_callback=config.confirm_callback,
+                ):
+                    raise SemiGenerationError(
+                        "User declined to continue without external tools (require_external_tools=True, confirm_on_external_tools=True)."
                     )
-                else:
-                    template_hash = hashlib.sha256(spec.prompt.encode()).hexdigest()[:16]
-                entry = CacheEntry(
-                    site_id=spec.call_site.site_id,
-                    template_hash=template_hash,
-                    generated_source=source,
-                    compiled_fn=fn,
-                    expected_type=spec.expected_type,
+
+            prompt = self._build_user_prompt(spec)
+            last_source = ""
+            last_result: Optional[ValidationResult] = None
+
+            for attempt in range(total_attempts):
+                progress.log_step(f"Generating (attempt {attempt + 1}/{total_attempts})")
+                progress.update(
+                    f"Generating (attempt {attempt + 1}/{total_attempts})"
+                    + (f": {(last_result.error_message or '')[:50]!r}..." if last_result and (last_result.error_message or '') else "")
                 )
-                self.cache.put(entry)
-                return entry
 
-            if self.verbose:
-                validation_error_panel(result, source_preview(source))
-                decision_summary(f"Attempt {attempt + 1}/{total_attempts} failed: {result.error_message}")
-
-            for tool in self.tools:
-                try:
-                    tool_result = tool(spec, source, result)
-                    if self.verbose and tool_result:
-                        decision_summary(f"Tool result: {tool_result}")
-                except Exception as e:
-                    if self.verbose:
-                        decision_summary(f"Tool error: {e!r}")
-
-            last_source = source
-            last_result = result
-            prompt = self._build_retry_prompt(spec, source, result, attempt)
-
-        if self.confirm_on_failure and last_result is not None:
-            config = get_config()
-            error_summary = last_result.error_message or "Unknown error"
-            if confirm(
-                f"Generation failed after {total_attempts} attempts. Last error: {error_summary}\nRetry with one more attempt?",
-                default_no=True,
-                confirm_callback=config.confirm_callback,
-            ):
-                if self.verbose:
-                    step_log("Retry (user confirmed)", f"attempt {total_attempts + 1}")
+                on_chunk = None
+                if self.stream and self.verbose:
+                    console = get_console()
+                    on_chunk = lambda chunk, c=console: c.print(chunk, end="")
                 raw = self.generator.generate(
                     SYSTEM_PROMPT,
                     prompt,
                     stream=self.stream,
-                    on_chunk=(
-                        (lambda c=get_console(): lambda chunk: c.print(chunk, end=""))()
-                        if self.stream and self.verbose
-                        else None
-                    ),
+                    on_chunk=on_chunk,
                 )
                 if self.stream and self.verbose:
                     get_console().print()
+
                 source = _extract_function_source(raw)
+                progress.log_step("Validating (AST, type, execution)")
+                progress.update("Validating (AST, type, execution)...")
                 result = validate(
                     source,
                     expected_type=spec.expected_type,
                     sample_input=spec.sample_input,
                     enable_execution=self.enable_execution_test,
                 )
+
                 if result.passed:
-                    fn = _compile_source(source)
+                    progress.log_step("Valid (caching)")
                     if spec.template:
                         template_hash = build_template_hash(
                             spec.template.template_parts,
@@ -245,6 +176,14 @@ class SemiAgent:
                         )
                     else:
                         template_hash = hashlib.sha256(spec.prompt.encode()).hexdigest()[:16]
+                    progress.record_success(
+                        attempt + 1,
+                        cache_dir=cache_dir,
+                        site_id=spec.call_site.site_id,
+                        template_hash=template_hash,
+                        call_site=spec.call_site,
+                    )
+                    fn = _compile_source(source)
                     entry = CacheEntry(
                         site_id=spec.call_site.site_id,
                         template_hash=template_hash,
@@ -255,10 +194,76 @@ class SemiAgent:
                     self.cache.put(entry)
                     return entry
 
-        if self.verbose:
-            step_log(
-                "All attempts exhausted",
+                for tool in self.tools:
+                    try:
+                        tool(spec, source, result)
+                    except Exception:
+                        pass
+
+                last_source = source
+                last_result = result
+                prompt = self._build_retry_prompt(spec, source, result, attempt)
+
+            if self.confirm_on_failure and last_result is not None:
+                config = get_config()
+                error_summary = last_result.error_message or "Unknown error"
+                if confirm(
+                    f"Generation failed after {total_attempts} attempts. Last error: {error_summary}\nRetry with one more attempt?",
+                    default_no=True,
+                    confirm_callback=config.confirm_callback,
+                ):
+                    progress.log_step("Retry (user confirmed)")
+                    progress.update("Retry (user confirmed)...")
+                    raw = self.generator.generate(
+                        SYSTEM_PROMPT,
+                        prompt,
+                        stream=self.stream,
+                        on_chunk=(
+                            (lambda c=get_console(): lambda chunk: c.print(chunk, end=""))()
+                            if self.stream and self.verbose
+                            else None
+                        ),
+                    )
+                    if self.stream and self.verbose:
+                        get_console().print()
+                    source = _extract_function_source(raw)
+                    result = validate(
+                        source,
+                        expected_type=spec.expected_type,
+                        sample_input=spec.sample_input,
+                        enable_execution=self.enable_execution_test,
+                    )
+                    if result.passed:
+                        if spec.template:
+                            template_hash = build_template_hash(
+                                spec.template.template_parts,
+                                spec.constant_values or {},
+                            )
+                        else:
+                            template_hash = hashlib.sha256(spec.prompt.encode()).hexdigest()[:16]
+                        progress.record_success(
+                            total_attempts + 1,
+                            cache_dir=cache_dir,
+                            site_id=spec.call_site.site_id,
+                            template_hash=template_hash,
+                            call_site=spec.call_site,
+                        )
+                        fn = _compile_source(source)
+                        entry = CacheEntry(
+                            site_id=spec.call_site.site_id,
+                            template_hash=template_hash,
+                            generated_source=source,
+                            compiled_fn=fn,
+                            expected_type=spec.expected_type,
+                        )
+                        self.cache.put(entry)
+                        return entry
+
+            progress.record_failure(
                 last_result.error_message if last_result else "Unknown error",
+                validation_result=last_result,
+                source=last_source if last_source else None,
+                call_site=spec.call_site,
             )
         raise SemiGenerationError(
             f"Failed to generate valid function after {self.max_retries + 1} attempts. "
