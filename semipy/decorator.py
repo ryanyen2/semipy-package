@@ -1,0 +1,136 @@
+"""@semiformal decorator: source analysis and context injection."""
+from __future__ import annotations
+
+import functools
+import inspect
+from contextvars import ContextVar
+from typing import Any, Callable, Optional, Union
+
+from semipy.template import extract_semi_templates
+from semipy.types import SemiformalContext, SemiCallSiteInfo
+
+_semiformal_context_var: ContextVar[Optional[SemiformalContext]] = ContextVar(
+    "semiformal_context", default=None
+)
+
+
+def get_semiformal_context() -> Optional[SemiformalContext]:
+    return _semiformal_context_var.get()
+
+
+def _wrap_function(
+    fn: Callable[..., Any],
+    description: Optional[str] = None,
+    filename: Optional[str] = None,
+) -> Callable[..., Any]:
+    try:
+        source = inspect.getsource(fn)
+        try:
+            _, first_lineno = inspect.getsourcelines(fn)
+            first_lineno = first_lineno or 1
+        except (OSError, TypeError):
+            first_lineno = 1
+    except OSError:
+        source = ""
+        first_lineno = 1
+    if filename is None:
+        try:
+            raw = inspect.getsourcefile(fn) or "<unknown>"
+            if raw and raw != "<unknown>":
+                import os
+                filename = os.path.abspath(raw)
+            else:
+                filename = raw
+        except (OSError, TypeError):
+            filename = "<unknown>"
+    func_qualname = getattr(fn, "__qualname__", fn.__name__)
+    semi_sites = extract_semi_templates(
+        source, filename=filename, func_qualname=func_qualname, first_lineno=first_lineno
+    )
+    type_hints = {}
+    try:
+        for name, ann in (inspect.getannotations(fn) or {}).items():
+            if name != "return":
+                type_hints[name] = ann
+    except Exception:
+        pass
+
+    context = SemiformalContext(
+        func_name=func_qualname,
+        source_code=source,
+        type_hints=type_hints,
+        semi_call_sites=semi_sites,
+    )
+
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        token = _semiformal_context_var.set(context)
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _semiformal_context_var.reset(token)
+
+    return wrapper
+
+
+def _methods_with_semi(cls: type) -> list[str]:
+    """Return names of methods that contain semi() in their source."""
+    result: list[str] = []
+    try:
+        source = inspect.getsource(cls)
+    except (OSError, TypeError):
+        return result
+    try:
+        tree = __import__("ast").parse(source)
+    except SyntaxError:
+        return result
+    for node in __import__("ast").walk(tree):
+        if isinstance(node, __import__("ast").FunctionDef):
+            for n in __import__("ast").walk(node):
+                if isinstance(n, __import__("ast").Call) and isinstance(n.func, __import__("ast").Name) and n.func.id == "semi":
+                    result.append(node.name)
+                    break
+    return result
+
+
+def semiformal(
+    fn_or_desc: Optional[Union[Callable[..., Any], str]] = None,
+    *,
+    description: Optional[str] = None,
+) -> Any:
+    """
+    Decorate a function or class as semiformal.
+    Usage:
+      @semiformal
+      def f(): ...
+      @semiformal("description")
+      def g(): ...
+      @semiformal
+      class C: ...
+    """
+    if fn_or_desc is None and description is None:
+        def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
+            return _wrap_function(f, filename=None)
+        return decorator
+
+    if isinstance(fn_or_desc, str):
+        desc = fn_or_desc
+        def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
+            return _wrap_function(f, description=desc, filename=None)
+        return decorator
+
+    if callable(fn_or_desc):
+        f = fn_or_desc
+        if isinstance(f, type):
+            method_names = _methods_with_semi(f)
+            for name in method_names:
+                if name in f.__dict__:
+                    orig = f.__dict__[name]
+                    if callable(orig):
+                        setattr(f, name, _wrap_function(orig, filename=None))
+            return f
+        return _wrap_function(f, description=description, filename=None)
+
+    def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
+        return _wrap_function(f, description=description, filename=None)
+    return decorator
