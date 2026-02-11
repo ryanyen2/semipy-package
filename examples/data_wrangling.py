@@ -98,12 +98,12 @@ class Frame:
         # Formal: grouping logic is always the same
         groups: dict[tuple, list[dict]] = {}
         for row in self.data:
-            key = tuple(row.get(k) for k in group_by)
+            key = tuple[Any | None, ...](row.get(k) for k in group_by)
             groups.setdefault(key, []).append(row)
 
         result = []
         for key, rows in groups.items():
-            out = {k: v for k, v in zip(group_by, key)}
+            out = {k: v for k, v in zip[tuple[str, Any]](group_by, key)}
             sample_group = rows[:10]
 
             for out_col, agg_desc in aggs.items():

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Optional
+from semipy import semi
 
 import pandas as pd
 
@@ -55,8 +56,8 @@ class WeatherDataset:
         if not self.is_grid():
             raise ValueError("get_2d is only for grid datasets")
         info = self._coord_info
-        lon = info.get("longitude")
-        lat = info.get("latitude")
+        lon = info.get(semi(f"longitude from {info.keys()}"))
+        lat = info.get(semi(f"latitude from {info.keys()}"))
         values = info.get("values_2d")
         vname = variable or (self._variable_names[0] if self._variable_names else None)
         if vname and vname in info.get("variables_2d", {}):
@@ -71,12 +72,13 @@ class WeatherDataset:
             return self
         import numpy as np
         info = self._coord_info
-        lon = info["longitude"]
-        lat = info["latitude"]
+        lon = info.get(semi(f"longitude from {info.keys()}"))
+        lat = info.get(semi(f"latitude from {info.keys()}"))
         ny, nx = lon.shape[0], lon.shape[1]
         if ny * nx <= max_points:
             return self
-        stride = max(1, int((ny * nx / max_points) ** 0.5))
+        
+        stride = max(1, int((ny * nx / max_points) ** semi(f"sqrt of {ny * nx / max_points}")))
         sy, sx = slice(None, None, stride), slice(None, None, stride)
         new_info = {
             "latitude": lat[sy, sx],
@@ -143,29 +145,9 @@ def _load_netcdf(path: Path) -> WeatherDataset:
             "Grid (netCDF) support requires xarray. Install with: pip install xarray netcdf4"
         )
     ds = xr.open_dataset(path)
-    # Find lat/lon: common names
-    lat_cands = ["lat", "latitude", "y", "nav_lat"]
-    lon_cands = ["lon", "longitude", "x", "nav_lon"]
-    lat_var = None
-    lon_var = None
-    for c in ds.coords:
-        if c.lower() in lat_cands or "lat" in c.lower():
-            lat_var = c
-            break
-    for c in ds.coords:
-        if c.lower() in lon_cands or "lon" in c.lower():
-            lon_var = c
-            break
-    if lat_var is None or lon_var is None:
-        for c in ds.dims:
-            if c.lower() in lat_cands or "lat" in c.lower():
-                lat_var = c
-            if c.lower() in lon_cands or "lon" in c.lower():
-                lon_var = c
-    if lat_var is None:
-        lat_var = list(ds.dims)[-1] if len(ds.dims) >= 2 else None
-    if lon_var is None:
-        lon_var = list(ds.dims)[-2] if len(ds.dims) >= 2 else None
+    # Find lat/lon with semi
+    lat_var = semi(f"latitude from {ds.coords.keys()}")
+    lon_var = semi(f"longitude from {ds.coords.keys()}")
 
     variables_2d = {}
     var_names = []

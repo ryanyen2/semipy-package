@@ -13,6 +13,7 @@ Usage in prompts (inside f-string, double braces to avoid interpolation):
 from __future__ import annotations
 
 import csv
+import warnings
 import json
 import os
 import re
@@ -160,7 +161,15 @@ def FETCH_WEATHER(city: str, **kwargs: Any) -> dict[str, Any]:
     """
     Fetch current weather for a city via Open-Meteo. Use in prompts as {{FETCH_WEATHER(city)}}.
     Returns dict with temperature, weathercode, windspeed, winddirection, time. No API key needed.
+
+    Deprecated: Prefer semi.fetch_weather(city, ...) or semi(f\"fetch weather for {city}\") for
+    semiformal usage. This helper remains for backward compatibility.
     """
+    warnings.warn(
+        "FETCH_WEATHER is deprecated; use semi.fetch_weather(...) or semi(f\"...\") instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     impl = _TOOL_IMPLS["FETCH_WEATHER"]
     return impl(city, **kwargs)
 
@@ -169,7 +178,14 @@ def SEARCH(query: str, **kwargs: Any) -> str:
     """
     Web search via Firecrawl. Use in prompts as {{SEARCH(query)}} (double braces in f-strings).
     Returns concatenated title+description from web results.
+
+    Deprecated: Prefer semi.search(...) or semi(f\"search for ...\") for semiformal usage.
     """
+    warnings.warn(
+        "SEARCH is deprecated; use semi.search(...) or semi(f\"...\") instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     impl = _TOOL_IMPLS["SEARCH"]
     return impl(query, **kwargs)
 
@@ -178,7 +194,14 @@ def RAG(query: str, k: int = 3, data_path: Optional[str] = None, **kwargs: Any) 
     """
     Retrieve relevant rows from a CSV. Use as {{RAG(query, k=5, data_path=path)}}.
     Returns list of matching row strings.
+
+    Deprecated: Prefer semi(f\"retrieve from RAG ...\") or a named semi call for semiformal usage.
     """
+    warnings.warn(
+        "RAG is deprecated; use semi(f\"...\") or a named semi call instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     impl = _TOOL_IMPLS["RAG"]
     return impl(query, k=k, data_path=data_path, **kwargs)
 

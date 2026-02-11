@@ -111,12 +111,24 @@ class CacheEntry:
 
 @dataclass
 class SemiCallSiteInfo:
-    """Per-call-site template and type info from decorator analysis."""
+    """Per-call-site template and type info from decorator analysis (inline semi(f\"...\"))."""
 
     call_site: SemiCallSite
     template: PromptTemplate
     expected_type: type
     loop_variant_names: list[str]  # which variable_names are loop-variant (function params)
+
+
+@dataclass
+class NamedCallSiteInfo:
+    """Per-call-site info for semi.name(...) from decorator analysis."""
+
+    call_site: SemiCallSite
+    method_name: str
+    template: PromptTemplate
+    expected_type: type
+    loop_variant_names: list[str]
+    kwarg_names: list[str]
 
 
 @dataclass
@@ -127,6 +139,7 @@ class SemiformalContext:
     source_code: str
     type_hints: dict[str, Any]
     semi_call_sites: list[SemiCallSiteInfo] = field(default_factory=list)
+    named_call_sites: list[NamedCallSiteInfo] = field(default_factory=list)
 
 
 class Decision(Enum):
@@ -156,6 +169,7 @@ class GenerationSpec:
     parent_sources: Optional[list[str]] = None
     parent_commit_ids: Optional[list[str]] = None
     lineage_summary: Optional[str] = None
+    method_name: Optional[str] = None  # for semi.name(...) named calls
 
 
 @dataclass

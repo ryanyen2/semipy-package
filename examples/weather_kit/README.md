@@ -1,22 +1,18 @@
-# Weather kit: formal first, semiformal only when necessary
+# Weather kit: semi for inference, formal for structure
 
-Weather analysis and visualization with a clear split: **formal** (deterministic, typed) code does the work; **semiformal** is used only where we cannot predefine behavior (unknown schema, unknown data type, or schema-agnostic merge).
+Weather analysis and visualization. **Formal** code handles loading, plotting structure, and data flow. **Semi** handles inference: which column is date/time, how to map fetched weather to table columns, how to preprocess a column. No hardcoded patterns or long conditionals; behavior is inferred from data and context at runtime.
 
-## Formal layer
+## Layer
 
-- **`open_dataset(path)`** – Load CSV (tabular) or netCDF (grid). Returns `WeatherDataset`.
-- **`WeatherDataset`** – `.is_grid()` / `.is_table()`, `.variable_names()`, `.get_2d()`, `.subset_for_plot()`, `.table()`, `.description()`, `.from_table(df)`.
-- **`plot_map(ds, variable=None, title=None)`** – Deterministic: matplotlib + `get_2d()` / `subset_for_plot()`. No semi.
-- **`plot_timeseries(ds, variable, date_column=None)`** – Formal when `date_column` is given; if `None`, uses semi only to infer the date column.
-- **`latest_append(user_data, city)`** – Get the **latest** weather for `city` (FETCH_WEATHER) and **append** one row to the user’s existing table. Formal fetch + formal column mapping; semi only when the table has columns we cannot map from the fetch.
+- **`open_dataset(path)`** – Load CSV (tabular) or netCDF (grid). Returns `WeatherDataset`. Formal.
+- **`WeatherDataset`** – `.is_grid()` / `.is_table()`, `.variable_names()`, `.get_2d()`, `.table()`, etc. Formal.
+- **`plot_map(ds, variable=None, title=None)`** – Formal: matplotlib + `get_2d()`.
+- **`plot_timeseries(ds, variable, date_column=None)`** – When `date_column` is None, uses `semi.pick_date_column(columns)` to infer it.
+- **`latest_append(user_data, city)`** – Uses `semi.fetch_weather(city)` and `semi.map_fetched_weather_to_row(latest, columns)` to append one row; no manual mapping or weathercode tables.
+- **`infer_date_column(ds)`** – Uses `semi.pick_date_column(columns)`.
+- **`preprocess_column(ds, column)`** – Uses `semi.preprocess_series(series, column)`; type and semantics inferred from data.
 
-## Semiformal only for generalizability
-
-- **`infer_date_column(ds)`** – When the date/time column is unspecified; column names and types are unknown a priori.
-- **`_append_latest_row_semi(...)`** – Used inside `latest_append` only when some table columns cannot be filled from the formal mapping.
-- **`preprocess_column(ds, column)`** – Preprocess a column without knowing its data type or semantics.
-
-Semi is used only where it solves the “unknown schema / unknown type” problem that would otherwise require hardcoded patterns.
+Semi calls used: `semi.pick_date_column`, `semi.fetch_weather`, `semi.map_fetched_weather_to_row`, `semi.preprocess_series`. The program stays readable; inference is delegated to semi.
 
 ## Run
 
@@ -26,4 +22,4 @@ From repo root:
 uv run --extra example python examples/use_weather_kit.py
 ```
 
-Data: grid netCDF and `seattle-weather.csv`. No API keys for Open-Meteo.
+Data: grid netCDF and `seattle-weather.csv`. Open-Meteo is used for fetch (no API key).

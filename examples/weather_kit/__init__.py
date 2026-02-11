@@ -1,7 +1,7 @@
-"""Weather analysis and visualization: formal first, semiformal only when necessary.
+"""Weather analysis and visualization: semi for inference, formal for structure.
 
-Formal: open_dataset(), WeatherDataset, plot_map(), plot_timeseries(), latest_append (fetch + map).
-Semiformal only for generalizability: infer_date_column(), schema-agnostic append, preprocess_column().
+Formal: open_dataset(), WeatherDataset, plot_map structure.
+Semi: pick_date_column, fetch_weather, map_fetched_weather_to_row, preprocess_series (no patterns or conditionals).
 """
 
 from weather_kit.dataset import WeatherDataset, open_dataset

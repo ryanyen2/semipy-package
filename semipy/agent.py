@@ -83,7 +83,7 @@ class SemiAgent:
             parts.append("```python")
             parts.append(spec.parent_sources[0].strip())
             parts.append("```")
-        if spec.template and spec.template.variable_names:
+        if spec.template and spec.template.variable_names and not spec.method_name:
             n = len(spec.template.variable_names)
             parts.append(
                 f"- The function will be called with exactly {n} positional arguments (in order). "
@@ -97,6 +97,37 @@ class SemiAgent:
             parts.append(json.dumps(spec.constant_values, default=repr, indent=2))
         return "\n".join(parts)
 
+    def _build_named_user_prompt(self, spec: GenerationSpec) -> str:
+        """Prompt for semi.name(...): function name is the specification; describe args by position/type/sample."""
+        parts = [
+            spec.prompt,
+            "",
+            "Constraints:",
+            f"- Return type must be: {spec.expected_type.__name__ if spec.expected_type is not type(None) else 'any'}",
+        ]
+        if spec.decision == Decision.ADAPT and spec.parent_sources:
+            parts.append("")
+            parts.append("Adapt from this previous implementation (same structure, new parameters):")
+            parts.append("```python")
+            parts.append(spec.parent_sources[0].strip())
+            parts.append("```")
+            if spec.lineage_summary:
+                parts.append("")
+                parts.append("Lineage: " + spec.lineage_summary.replace("\n", " "))
+        if spec.decision == Decision.FORK and spec.parent_sources:
+            parts.append("")
+            parts.append("Use as inspiration (structure has changed):")
+            parts.append("```python")
+            parts.append(spec.parent_sources[0].strip())
+            parts.append("```")
+        if spec.sample_input:
+            parts.append("- Sample input for testing:")
+            parts.append(json.dumps(spec.sample_input, default=repr, indent=2))
+        if spec.constant_values:
+            parts.append("- Constant context (bake into the function or add as parameters):")
+            parts.append(json.dumps(spec.constant_values, default=repr, indent=2))
+        return "\n".join(parts)
+
     def _build_retry_prompt(
         self,
         spec: GenerationSpec,
@@ -104,8 +135,9 @@ class SemiAgent:
         result: ValidationResult,
         attempt: int,
     ) -> str:
+        base = self._build_named_user_prompt(spec) if spec.method_name else self._build_user_prompt(spec)
         return (
-            self._build_user_prompt(spec)
+            base
             + "\n\nPrevious attempt failed validation:\n"
             + result.error_message
             + "\n\nFix the function and output a corrected version in a ```python block."
@@ -130,9 +162,14 @@ class SemiAgent:
                         "User declined to continue without external tools (require_external_tools=True, confirm_on_external_tools=True)."
                     )
 
-            prompt = self._build_user_prompt(spec)
-            system_prompt = inject_tools_into_system_prompt(SYSTEM_PROMPT, prompt)
-            tool_refs = parse_tool_refs(prompt)
+            if spec.method_name:
+                prompt = self._build_named_user_prompt(spec)
+                system_prompt = SYSTEM_PROMPT
+                tool_refs = []
+            else:
+                prompt = self._build_user_prompt(spec)
+                system_prompt = inject_tools_into_system_prompt(SYSTEM_PROMPT, prompt)
+                tool_refs = parse_tool_refs(prompt)
             if tool_refs and self.verbose:
                 tool_names = ", ".join(sorted({name for name, _ in tool_refs}))
                 progress.update(f"Tools detected: {tool_names}. Calling LLM...")
@@ -198,7 +235,7 @@ class SemiAgent:
                 last_source = source
                 last_result = result
                 prompt = self._build_retry_prompt(spec, source, result, attempt)
-                system_prompt = inject_tools_into_system_prompt(SYSTEM_PROMPT, prompt)
+                system_prompt = SYSTEM_PROMPT if spec.method_name else inject_tools_into_system_prompt(SYSTEM_PROMPT, prompt)
 
             if self.confirm_on_failure and last_result is not None:
                 config = get_config()

@@ -74,7 +74,7 @@ SYSTEM_PROMPT = """You generate a single Python function that implements the use
 Rules:
 - Output only one function. No explanations, no markdown outside the code block.
 - Wrap the function in a ```python code block.
-- The function must be pure Python: no external API calls except those provided as tools (e.g. FETCH_WEATHER). For plotting or visualization you may use matplotlib.pyplot and numpy.
+- The function must be pure Python unless the request or function name clearly suggests external interaction (e.g. fetching data, searching, scraping). In that case use standard library (urllib, json) or common packages (requests) as needed. For plotting or visualization you may use matplotlib.pyplot and numpy.
 - Parameters: the user prompt may reference "the value" or "this row" or similar; those become the first parameter(s). Other fixed context (sample data, condition strings) are described in the prompt; bake them into the function or add parameters as needed.
 - Return type: match exactly what the user needs (bool for conditions, str for text, int/float for numbers, or the described type). Return that type only.
 - Handle edge cases: None, missing keys, empty data, type mismatches. Prefer safe defaults over raising.

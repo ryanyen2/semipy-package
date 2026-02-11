@@ -7,7 +7,13 @@ import json
 import textwrap
 from typing import Any, Optional
 
-from semipy.types import PromptTemplate, SemiCallSite, SemiCallSiteInfo, TemplatePart
+from semipy.types import (
+    NamedCallSiteInfo,
+    PromptTemplate,
+    SemiCallSite,
+    SemiCallSiteInfo,
+    TemplatePart,
+)
 
 # Template tree: list of ("literal", str) | ("var", str) for structural comparison.
 TemplateTree = list[tuple[str, str]]
@@ -172,6 +178,95 @@ def extract_semi_templates(
                     loop_variant_names=loop_variant_names,
                 )
             )
+
+    return results
+
+
+def extract_named_call_templates(
+    source: str,
+    filename: str = "<unknown>",
+    func_qualname: str = "",
+    first_lineno: int = 1,
+) -> list[NamedCallSiteInfo]:
+    """
+    Parse source and extract template info for every semi.<name>(...) call.
+    Returns a list of NamedCallSiteInfo, one per semi.name() call site.
+    """
+    dedented = textwrap.dedent(source)
+    try:
+        tree = ast.parse(dedented)
+    except SyntaxError:
+        return []
+
+    results: list[NamedCallSiteInfo] = []
+    loop_names_by_line: dict[int, set[str]] = {}
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Attribute):
+            continue
+        if not isinstance(func.value, ast.Name) or func.value.id != "semi":
+            continue
+        method_name = func.attr
+        if method_name.startswith("_"):
+            continue
+
+        line_in_tree = node.lineno or 0
+        lineno = line_in_tree + first_lineno - 1
+        if line_in_tree not in loop_names_by_line:
+            loop_names_by_line[line_in_tree] = _loop_target_names(tree, line_in_tree)
+        loop_names = loop_names_by_line[line_in_tree]
+
+        parts: list[TemplatePart] = [TemplatePart(is_literal=True, value=f"@named:{method_name}")]
+        variable_names: list[str] = []
+        variable_expressions: list[str] = []
+        kwarg_names: list[str] = []
+
+        for i, arg in enumerate(node.args):
+            expr_src = ast.get_source_segment(dedented, arg) or ""
+            names = _names_in_expr(arg)
+            is_loop = bool(names & loop_names)
+            name = f"v{i}" if is_loop else f"c{i}"
+            variable_names.append(name)
+            variable_expressions.append(expr_src)
+            parts.append(TemplatePart(is_literal=False, value=name))
+
+        for kw in sorted(node.keywords, key=lambda k: k.arg or ""):
+            if kw.arg is None:
+                continue
+            name = f"c_kw_{kw.arg}"
+            variable_names.append(name)
+            variable_expressions.append("")
+            kwarg_names.append(kw.arg)
+            parts.append(TemplatePart(is_literal=False, value=name))
+
+        template = PromptTemplate(
+            template_parts=parts,
+            variable_names=variable_names,
+            variable_expressions=variable_expressions,
+        )
+        call_site = SemiCallSite(
+            filename=filename,
+            lineno=lineno,
+            func_qualname=func_qualname,
+        )
+        expected = _infer_expected_type_from_usage(node, tree)
+        loop_variant_names = [n for n in variable_names if n.startswith("v")]
+        if not loop_variant_names and variable_names and not variable_names[0].startswith("c_kw_"):
+            loop_variant_names = [variable_names[0]]
+
+        results.append(
+            NamedCallSiteInfo(
+                call_site=call_site,
+                method_name=method_name,
+                template=template,
+                expected_type=expected,
+                loop_variant_names=loop_variant_names,
+                kwarg_names=kwarg_names,
+            )
+        )
 
     return results
 
