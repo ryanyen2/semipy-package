@@ -15,7 +15,6 @@ from weather_kit import (
     plot_map,
     plot_timeseries,
     latest_append,
-    infer_date_column,
 )
 
 

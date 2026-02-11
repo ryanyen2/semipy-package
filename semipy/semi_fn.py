@@ -121,8 +121,18 @@ def _readable_function_name(call_site: SemiCallSite) -> str:
     return "".join(c if c.isalnum() or c == "_" else "_" for c in base)
 
 
-def _usage_from_parts(call_site: SemiCallSite, template: PromptTemplate, constant_values: dict[str, Any]) -> Usage:
-    return Usage(call_site=call_site, template=template, constant_values=constant_values or {})
+def _usage_from_parts(
+    call_site: SemiCallSite,
+    template: PromptTemplate,
+    constant_values: dict[str, Any],
+    expected_type: type = type(None),
+) -> Usage:
+    return Usage(
+        call_site=call_site,
+        template=template,
+        constant_values=constant_values or {},
+        expected_type=expected_type,
+    )
 
 
 def _get_portal(cache_dir: Path, session_id: str, source_file: str, module_name: str) -> Any:
@@ -185,10 +195,17 @@ def _build_named_prompt(method_name: str, args: tuple[Any, ...], kwargs: dict[st
     return "\n".join(lines)
 
 
-def _semi_inline(prompt: str, require_tools: bool = False, **kwargs: Any) -> Any:
+def _semi_inline(
+    prompt: str,
+    *,
+    expected_type: Optional[type] = None,
+    require_tools: bool = False,
+    **kwargs: Any,
+) -> Any:
     """
     Inline semi(f\"...\"): at runtime, either runs a cached generated function
-    or triggers LLM generation, then returns the result.
+    or triggers LLM generation, then returns the result. When expected_type is
+    set (e.g. str, float), the generated function must return that type (value-style usage).
     """
     call_site = _identify_call_site(depth=3)  # user -> SemiProxy.__call__ -> _semi_inline -> _identify_call_site
     context = get_semiformal_context()
@@ -203,17 +220,18 @@ def _semi_inline(prompt: str, require_tools: bool = False, **kwargs: Any) -> Any
         frame = inspect.currentframe()
         if frame is None or frame.f_back is None:
             print("No frame found, using fallback")
-            return _semi_fallback(prompt, call_site, cache_dir, session_id, module_name, require_tools=require_tools, **kwargs)
+            return _semi_fallback(prompt, call_site, cache_dir, session_id, module_name, expected_type=expected_type, require_tools=require_tools, **kwargs)
         caller_frame = frame.f_back
         try:
             values = _eval_expressions(site_info.template.variable_expressions, caller_frame)
         except Exception:
-            return _semi_fallback(prompt, call_site, cache_dir, session_id, module_name, require_tools=require_tools, **kwargs)
+            return _semi_fallback(prompt, call_site, cache_dir, session_id, module_name, expected_type=expected_type, require_tools=require_tools, **kwargs)
         name_to_value = dict(zip(site_info.template.variable_names, values))
         loop_names = set(site_info.loop_variant_names)
         constant_values = {n: name_to_value[n] for n in site_info.template.variable_names if n not in loop_names}
         all_values_ordered = [name_to_value[n] for n in site_info.template.variable_names]
-        usage = _usage_from_parts(call_site, site_info.template, constant_values)
+        effective_type = expected_type if expected_type is not None else site_info.expected_type
+        usage = _usage_from_parts(call_site, site_info.template, constant_values, effective_type)
         tree = template_tree_from_prompt(site_info.template)
         fingerprint = structural_fingerprint(tree)
 
@@ -255,7 +273,7 @@ def _semi_inline(prompt: str, require_tools: bool = False, **kwargs: Any) -> Any
                 call_site=call_site,
                 template=site_info.template,
                 context=context,
-                expected_type=site_info.expected_type,
+                expected_type=effective_type,
                 sample_input=sample_input,
                 constant_values=constant_values,
                 variable_values={n: name_to_value[n] for n in site_info.template.variable_names},
@@ -318,7 +336,7 @@ def _semi_inline(prompt: str, require_tools: bool = False, **kwargs: Any) -> Any
                     )
             return fn(*all_values_ordered, **kwargs)
 
-    return _semi_fallback(prompt, call_site, cache_dir, session_id, module_name, require_tools=require_tools, **kwargs)
+    return _semi_fallback(prompt, call_site, cache_dir, session_id, module_name, expected_type=expected_type, require_tools=require_tools, **kwargs)
 
 
 def _semi_named(name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
@@ -364,7 +382,7 @@ def _semi_named(name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any
         expected_type = type(None)
         loop_variant_names = [f"v{i}" for i in range(len(args))]
 
-    usage = _usage_from_parts(call_site, template, constant_values)
+    usage = _usage_from_parts(call_site, template, constant_values, expected_type)
     tree = template_tree_from_prompt(template)
     fingerprint = structural_fingerprint(tree)
     portal = _get_portal(cache_dir, session_id, call_site.filename, module_name)
@@ -483,16 +501,23 @@ def _semi_fallback(
     cache_dir: Path,
     session_id: str,
     module_name: str,
+    *,
+    expected_type: Optional[type] = None,
     require_tools: bool = False,
     **kwargs: Any,
 ) -> Any:
-    """Standalone semi() without @semiformal context: one implementation per call site, reused for every prompt."""
+    """Standalone semi() without @semiformal context: one implementation per call site, reused for every prompt. Use expected_type for value-style return (e.g. str, float)."""
     fallback_template = PromptTemplate(
         template_parts=[TemplatePart(is_literal=True, value="<fallback>")],
         variable_names=[],
         variable_expressions=[],
     )
-    usage = _usage_from_parts(call_site, fallback_template, {})
+    usage = _usage_from_parts(
+        call_site,
+        fallback_template,
+        {},
+        expected_type=expected_type if expected_type is not None else type(None),
+    )
     tree = template_tree_from_prompt(fallback_template)
     fingerprint = structural_fingerprint(tree)
     portal = _get_portal(cache_dir, session_id, call_site.filename, module_name)
@@ -526,7 +551,7 @@ def _semi_fallback(
         call_site=call_site,
         template=None,
         context=None,
-        expected_type=type(None),
+        expected_type=expected_type if expected_type is not None else type(None),
         sample_input=None,
         constant_values=None,
         variable_values=None,
@@ -576,8 +601,15 @@ class SemiProxy:
     Proxy for semi: semi(prompt) runs inline semiformal; semi.<name>(*args, **kwargs) runs named call.
     """
 
-    def __call__(self, prompt: str, require_tools: bool = False, **kwargs: Any) -> Any:
-        return _semi_inline(prompt, require_tools=require_tools, **kwargs)
+    def __call__(
+        self,
+        prompt: str,
+        *,
+        expected_type: Optional[type] = None,
+        require_tools: bool = False,
+        **kwargs: Any,
+    ) -> Any:
+        return _semi_inline(prompt, expected_type=expected_type, require_tools=require_tools, **kwargs)
 
     def __getattr__(self, name: str) -> _SemiMethod:
         if name.startswith("_"):

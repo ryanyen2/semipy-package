@@ -88,14 +88,18 @@ class Usage:
     call_site: SemiCallSite
     template: PromptTemplate
     constant_values: dict[str, Any]  # param/precomputed values that are part of cache key
+    expected_type: type = type(None)  # when set, included in usage_id so value vs function style get distinct cache
 
     def usage_id(self) -> str:
-        """Stable id for this usage (site_id + template_hash with constants)."""
+        """Stable id for this usage (site_id + template_hash with constants + expected_type when set)."""
         th = _template_hash_for_usage(
             list(self.template.template_parts),
             self.constant_values,
         )
-        return f"{self.call_site.site_id}:{th}"
+        type_suffix = ""
+        if self.expected_type is not None and self.expected_type is not type(None):
+            type_suffix = f":{getattr(self.expected_type, '__name__', repr(self.expected_type))}"
+        return f"{self.call_site.site_id}:{th}{type_suffix}"
 
 
 @dataclass

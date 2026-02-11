@@ -53,9 +53,7 @@ def plot_timeseries(
     
     tbl = ds.table()
     date_columns = [col for col in tbl.columns if semi(f"date or time from {tbl.columns.tolist()}") in col.lower()]
-    print(date_columns)
-
-    date_column = date_columns[0]
+    date_column = date_columns[0] if date_columns else tbl.columns[0]
     
     plt.figure()
     # plt.plot(tbl[date_column], tbl[variable])

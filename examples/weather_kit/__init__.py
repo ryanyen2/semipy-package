@@ -6,7 +6,6 @@ Semi: pick_date_column, fetch_weather, map_fetched_weather_to_row, preprocess_se
 
 from weather_kit.dataset import WeatherDataset, open_dataset
 from weather_kit.ops import (
-    infer_date_column,
     latest_append,
     plot_map,
     plot_timeseries,
@@ -19,6 +18,5 @@ __all__ = [
     "plot_map",
     "plot_timeseries",
     "latest_append",
-    "infer_date_column",
     "preprocess_column",
 ]

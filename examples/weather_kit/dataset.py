@@ -56,8 +56,8 @@ class WeatherDataset:
         if not self.is_grid():
             raise ValueError("get_2d is only for grid datasets")
         info = self._coord_info
-        lon = info.get(semi(f"longitude from {info.keys()}"))
-        lat = info.get(semi(f"latitude from {info.keys()}"))
+        lon = info.get(semi(f"longitude from {info.keys()}", expected_type=str))
+        lat = info.get(semi(f"latitude from {info.keys()}", expected_type=str))
         values = info.get("values_2d")
         vname = variable or (self._variable_names[0] if self._variable_names else None)
         if vname and vname in info.get("variables_2d", {}):
@@ -72,13 +72,13 @@ class WeatherDataset:
             return self
         import numpy as np
         info = self._coord_info
-        lon = info.get(semi(f"longitude from {info.keys()}"))
-        lat = info.get(semi(f"latitude from {info.keys()}"))
+        lon = info.get(semi(f"longitude from {info.keys()}", expected_type=str))
+        lat = info.get(semi(f"latitude from {info.keys()}", expected_type=str))
         ny, nx = lon.shape[0], lon.shape[1]
         if ny * nx <= max_points:
             return self
         
-        stride = max(1, int((ny * nx / max_points) ** semi(f"sqrt of {ny * nx / max_points}")))
+        stride = max(1, int((ny * nx / max_points) ** semi(f"sqrt of {ny * nx / max_points}", expected_type=float)))
         sy, sx = slice(None, None, stride), slice(None, None, stride)
         new_info = {
             "latitude": lat[sy, sx],
@@ -145,9 +145,9 @@ def _load_netcdf(path: Path) -> WeatherDataset:
             "Grid (netCDF) support requires xarray. Install with: pip install xarray netcdf4"
         )
     ds = xr.open_dataset(path)
-    # Find lat/lon with semi
-    lat_var = semi(f"latitude from {ds.coords.keys()}")
-    lon_var = semi(f"longitude from {ds.coords.keys()}")
+    # Find lat/lon with semi (value-style: return key name)
+    lat_var = semi(f"latitude from {ds.coords.keys()}", expected_type=str)
+    lon_var = semi(f"longitude from {ds.coords.keys()}", expected_type=str)
 
     variables_2d = {}
     var_names = []

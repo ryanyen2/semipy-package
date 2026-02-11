@@ -91,7 +91,12 @@ def _parent_map(tree: ast.AST) -> dict[ast.AST, ast.AST]:
 
 
 def _infer_expected_type_from_usage(node: ast.Call, tree: ast.AST) -> type:
-    """Infer expected return type from how the semi() result is used (parent node)."""
+    """Infer expected return type from how the semi() result is used (parent node).
+
+    Value-style usage: semi() returns a value (str, int, float) used directly.
+    Function-style usage: semi() returns a callable's result (e.g. bool for conditionals).
+    We infer from context so the generated function returns the correct type.
+    """
     parents = _parent_map(tree)
     p = parents.get(node)
     if p is None:
@@ -108,7 +113,19 @@ def _infer_expected_type_from_usage(node: ast.Call, tree: ast.AST) -> type:
         if p.elt is node:
             return bool
     if isinstance(p, ast.Compare):
+        if p.left is node and len(p.ops) == 1:
+            op = p.ops[0]
+            if type(op) in (ast.In, ast.NotIn):
+                return str
         return bool
+    if isinstance(p, ast.Call) and node in p.args:
+        if isinstance(p.func, ast.Attribute) and p.func.attr == "get" and p.args and p.args[0] is node:
+            return str
+        return type(None)
+    if isinstance(p, ast.BinOp) and p.right is node and type(p.op) is ast.Pow:
+        return float
+    if isinstance(p, ast.Subscript) and p.slice is node:
+        return str
     return type(None)
 
 
