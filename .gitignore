@@ -7,7 +7,9 @@
 .env.test.local
 .env.production.local
 .semiformal/
-examples/
+examples/.semiformal/
+examples/data/
+examples/output/
 *.pyc
 *.pyo
 *.pyd
