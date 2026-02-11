@@ -58,9 +58,17 @@ def plot_timeseries(
     if variable not in tbl.columns:
         raise ValueError(f"Column {variable!r} not in {list(tbl.columns)}")
     if date_column is None:
-        date_column = infer_date_column(ds)
+        # date_column = infer_date_column(ds)
+        date_column = semi(f"field like date or time from {ds.table().columns.tolist()}")
+        date_columns = [col for col in tbl.columns if semi(f"date or time") in col.lower()]
+        if len(date_columns) == 1:
+            date_column = date_columns[0]
+        else:
+            raise ValueError(f"Multiple date columns found: {date_columns}")
+
     if date_column is None or date_column not in tbl.columns:
         raise ValueError("No date column found or specified")
+    
     import matplotlib.pyplot as plt
     import pandas as pd
     df = tbl.copy()
@@ -97,6 +105,25 @@ def latest_append(user_data: WeatherDataset, city: str, **kwargs: Any) -> Weathe
     """
     if not user_data.is_table():
         raise ValueError("latest_append requires a table dataset")
+
+    weather_format = {
+        "city": city,
+        "temperature": ":field temperature:",
+        "weathercode": ":field weathercode:",
+        "windspeed": ":field windspeed:",
+        "winddirection": ":field winddirection:",
+        "time": ":field time:",
+    }
+    latest_data = semi(f"fetch latest weather for {city} with {FETCH(city, output_format=weather_format)}")
+    if "error" in latest_data:
+        raise ValueError(latest_data["error"])
+    
+    try:
+        combined = pd.concat([user_data.table(), latest_data], ignore_index=True)
+    except Exception as e:
+        combined = semi.concat([user_data.table(), latest_data], ignore_index=True)
+
+
     from semipy.tools import FETCH_WEATHER
     latest = FETCH_WEATHER(city)
     if "error" in latest:
