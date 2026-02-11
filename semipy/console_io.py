@@ -33,8 +33,8 @@ def decision_description(decision: Decision) -> str:
     """Human-readable explanation of the resolution decision."""
     if decision == Decision.REUSE:
         return "Reuse cached implementation"
-    if decision == Decision.ADVANCE:
-        return "Advance on branch (adapt from parent)"
+    if decision == Decision.ADAPT:
+        return "Adapt from previous implementation"
     if decision == Decision.FORK:
         return "New branch (structure changed)"
     if decision == Decision.GENERATE:
@@ -45,11 +45,11 @@ def decision_description(decision: Decision) -> str:
 
 
 def _format_location(filename: str, lineno: int, func_qualname: str) -> str:
-    """Short location string: file:line function."""
+    """Short location string: file:line (function)."""
     from os.path import basename
     f = basename(filename) if filename else "<unknown>"
     fn = func_qualname or "?"
-    return f"{f}:{lineno} {fn}"
+    return f"{f}:{lineno} ({fn})"
 
 
 def _call_site_file_url(filename: str, lineno: int) -> str:
@@ -74,14 +74,13 @@ def _format_cache_path(cache_dir: Optional[Path], entry: CacheEntry) -> str:
 
 
 def _short_display_path(full_path: str) -> str:
-    """Short path for one-line display: .../site_id/hash.py so it fits and stays one line."""
+    """Short path for one-line display (e.g. .../runtime/module.semi.py)."""
     try:
         p = Path(full_path).resolve()
         parts = p.parts
         if "runtime" in parts:
             i = parts.index("runtime")
-            if i + 2 <= len(parts):
-                return ".../" + "/".join(parts[i + 1 : i + 3])
+            return ".../" + "/".join(parts[i:]) if i < len(parts) else p.name
         return p.name if len(p.name) <= 52 else f"...{p.name[-48:]}"
     except Exception:
         return full_path if len(full_path) <= 52 else f"...{full_path[-48:]}"
@@ -95,29 +94,41 @@ def _file_link_url(path: str) -> str:
         return ""
 
 
-# Dedupe: same (loc, outcome, path) only printed once per process.
+# Dedupe: same (source, generation, path) only printed once per process.
 _semipy_log_printed: set[tuple[str, str, str]] = set()
 
 
+def _format_call_source(call_site: SemiCallSite) -> str:
+    """Human-readable call site: file:line (function)."""
+    return _format_location(
+        call_site.filename,
+        call_site.lineno,
+        call_site.func_qualname or "",
+    )
+
+
 def _print_semipy_line_once(
-    loc: str,
-    outcome: str,
-    path_or_msg: str,
+    source: str,
+    generation: str,
+    code_path: str,
     style: str = "green",
-    loc_link: Optional[str] = None,
+    source_link: Optional[str] = None,
     path_link: Optional[str] = None,
 ) -> None:
-    """One line: [semipy] location -> outcome -> path/msg; location and path clickable when links given."""
-    key = (loc, outcome, path_or_msg)
+    """Print one line: [semipy] Call from {source}. {generation}. Code at {path}. Links optional."""
+    key = (source, generation, code_path)
     if key in _semipy_log_printed:
         return
     _semipy_log_printed.add(key)
     console = get_console()
-    loc_part = f"[link={loc_link}]{loc}[/link]" if loc_link else loc
-    path_display = _short_display_path(path_or_msg) if (path_link and path_or_msg.strip()) else path_or_msg
-    path_part = f"[link={path_link}]{path_display}[/link]" if path_link else path_display
+    source_part = f"[link={source_link}]{source}[/link]" if source_link else source
+    suffix = ""
+    if code_path.strip():
+        path_display = _short_display_path(code_path) if path_link else code_path
+        path_part = f"[link={path_link}]{path_display}[/link]" if path_link else path_display
+        suffix = f" Code at {path_part}."
     console.print(
-        f"[dim][semipy][/] {loc_part} [{style}]-> {outcome} ->[/] {path_part}",
+        f"[dim][semipy][/] Call from {source_part}. [{style}]{generation}[/]{suffix}",
         no_wrap=True,
     )
 
@@ -127,60 +138,55 @@ def print_cache_hit_from_semi(
     entry: CacheEntry,
     cache_dir: Optional[Path] = None,
 ) -> None:
-    """One line: user code location -> cache hit -> path (clickable); once per unique call site + path."""
+    """One line: Call from {source}. Reused cached implementation. Code at {path}."""
     cs = spec.call_site
-    loc = _format_location(cs.filename, cs.lineno, cs.func_qualname or "")
+    source = _format_call_source(cs)
     path = _format_cache_path(cache_dir, entry)
     _print_semipy_line_once(
-        loc, "cache hit", path, "green",
-        loc_link=_call_site_file_url(cs.filename, cs.lineno),
+        source, "Reused cached implementation.", path, "green",
+        source_link=_call_site_file_url(cs.filename, cs.lineno),
         path_link=_file_link_url(path),
     )
 
 
 def print_dag_reuse(
-    slot_name: str,
-    branch_name: Optional[str],
+    call_site: SemiCallSite,
     commit_id: str,
-    loc: str,
-    path: str,
-    loc_link: Optional[str] = None,
+    code_path: str,
+    source_link: Optional[str] = None,
     path_link: Optional[str] = None,
 ) -> None:
-    """Log REUSE: slot:branch -> REUSE -> commit id."""
-    branch = f":{branch_name}" if branch_name else ""
-    msg = f"{slot_name}{branch} -> REUSE -> commit {commit_id[:8]}"
-    _print_semipy_line_once(loc, msg, path, "green", loc_link=loc_link, path_link=path_link)
+    """Log REUSE: call source, reused implementation, code path."""
+    source = _format_call_source(call_site)
+    generation = f"Reused existing implementation (commit {commit_id[:8]})"
+    _print_semipy_line_once(source, generation, code_path, "green", source_link, path_link)
 
 
-def print_dag_advance(
-    slot_name: str,
-    branch_name: str,
+def print_dag_adapt(
+    call_site: SemiCallSite,
     commit_id: str,
-    parent_id: str,
-    loc: str,
-    path: str,
-    loc_link: Optional[str] = None,
+    parent_commit_id: str,
+    code_path: str,
+    source_link: Optional[str] = None,
     path_link: Optional[str] = None,
 ) -> None:
-    """Log ADVANCE: slot:branch -> ADVANCE -> commit (parent)."""
-    msg = f"{slot_name}:{branch_name} -> ADVANCE -> commit {commit_id[:8]} (parent {parent_id[:8]})"
-    _print_semipy_line_once(loc, msg, path, "cyan", loc_link=loc_link, path_link=path_link)
+    """Log ADAPT: call source, adapted from parent, code path."""
+    source = _format_call_source(call_site)
+    generation = f"Adapted from previous (commit {parent_commit_id[:8]} -> {commit_id[:8]})"
+    _print_semipy_line_once(source, generation, code_path, "cyan", source_link, path_link)
 
 
 def print_dag_generate(
-    slot_name: str,
-    branch_name: Optional[str],
+    call_site: SemiCallSite,
     commit_id: str,
-    loc: str,
-    path: str,
-    loc_link: Optional[str] = None,
+    code_path: str,
+    source_link: Optional[str] = None,
     path_link: Optional[str] = None,
 ) -> None:
-    """Log GENERATE: slot:branch -> GENERATE -> commit."""
-    branch = f":{branch_name}" if branch_name else ""
-    msg = f"{slot_name}{branch} -> GENERATE -> commit {commit_id[:8]}"
-    _print_semipy_line_once(loc, msg, path, "yellow", loc_link=loc_link, path_link=path_link)
+    """Log GENERATE: call source, new implementation, code path."""
+    source = _format_call_source(call_site)
+    generation = f"New implementation (commit {commit_id[:8]})"
+    _print_semipy_line_once(source, generation, code_path, "yellow", source_link, path_link)
 
 
 def print_slot_history(slot: Any, max_entries: int = 20) -> None:
@@ -376,36 +382,36 @@ class GenerationProgress:
         if self._result == "cache_hit" and self._cache_hit is not None:
             spec, entry = self._cache_hit
             cs = spec.call_site
-            loc = _format_location(cs.filename, cs.lineno, cs.func_qualname or "")
+            source = _format_call_source(cs)
             path = _format_cache_path(self._cache_dir, entry)
             _print_semipy_line_once(
-                loc, "cache hit", path, "green",
-                loc_link=_call_site_file_url(cs.filename, cs.lineno),
+                source, "Reused cached implementation.", path, "green",
+                source_link=_call_site_file_url(cs.filename, cs.lineno),
                 path_link=_file_link_url(path),
             )
         elif self._result == "success":
-            loc = ""
-            loc_link = None
+            source = ""
+            source_link = None
             if self._success_call_site is not None:
                 cs = self._success_call_site
-                loc = _format_location(cs.filename, cs.lineno, cs.func_qualname or "")
-                loc_link = _call_site_file_url(cs.filename, cs.lineno)
+                source = _format_call_source(cs)
+                source_link = _call_site_file_url(cs.filename, cs.lineno)
             path = self._success_display_path or ""
             path_link = _file_link_url(path) if path else None
             _print_semipy_line_once(
-                loc, "generated", path, "green",
-                loc_link=loc_link,
+                source, "Generated.", path, "green",
+                source_link=source_link,
                 path_link=path_link,
             )
         elif self._result == "failure":
-            loc = ""
-            loc_link = None
+            source = ""
+            source_link = None
             if self._failure_call_site is not None:
                 cs = self._failure_call_site
-                loc = _format_location(cs.filename, cs.lineno, cs.func_qualname or "")
-                loc_link = _call_site_file_url(cs.filename, cs.lineno)
+                source = _format_call_source(cs)
+                source_link = _call_site_file_url(cs.filename, cs.lineno)
             msg = self._failure_msg or "validation failed"
-            _print_semipy_line_once(loc, "failed", msg, "red", loc_link=loc_link)
+            _print_semipy_line_once(source, msg, "", "red", source_link=source_link)
             if self._failure_validation is not None and self._failure_source is not None:
                 validation_error_panel(
                     self._failure_validation,

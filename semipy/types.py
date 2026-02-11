@@ -133,7 +133,7 @@ class Decision(Enum):
     """Resolution decision: how this invocation was satisfied (reuse vs new commit)."""
 
     REUSE = "reuse"
-    ADVANCE = "advance"
+    ADAPT = "adapt"  # same structure, adapt from parent commit (e.g. new prompt/constants)
     FORK = "fork"
     GENERATE = "generate"
     MERGE = "merge"

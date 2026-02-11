@@ -35,7 +35,7 @@ def compute_commit_id(parent_ids: tuple[str, ...], source_hash: str) -> str:
 def message_for_decision(decision: str) -> str:
     if decision == "GENERATE":
         return "initial implementation"
-    if decision == "ADVANCE":
+    if decision == "ADAPT":
         return "adapt for new parameters"
     if decision == "FORK":
         return "new branch, structure changed"

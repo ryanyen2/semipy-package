@@ -8,12 +8,11 @@ from typing import Any, Optional
 from semipy.agent import SemiAgent
 from semipy.config import get_config
 from semipy.console_io import (
-    print_dag_advance,
+    print_dag_adapt,
     print_dag_generate,
     print_dag_reuse,
     _call_site_file_url,
     _file_link_url,
-    _format_location,
 )
 from semipy.dag import (
     Slot,
@@ -152,6 +151,7 @@ def semi(prompt: str, require_tools: bool = False, **kwargs: Any) -> Any:
     if site_info is not None and site_info.template.variable_expressions:
         frame = inspect.currentframe()
         if frame is None or frame.f_back is None:
+            print("No frame found, using fallback")
             return _semi_fallback(prompt, call_site, cache_dir, session_id, module_name, require_tools=require_tools, **kwargs)
         caller_frame = frame.f_back
         try:
@@ -182,21 +182,18 @@ def semi(prompt: str, require_tools: bool = False, **kwargs: Any) -> Any:
                 fn = load_function_from_dispatch(cache_dir, module_name, fn_name, _dispatch_globals_cache)
                 if fn is not None:
                     if config.verbose:
-                        loc = _format_location(call_site.filename, call_site.lineno, call_site.func_qualname or "")
                         path = str(_dispatch_module_path(cache_dir, module_name))
                         print_dag_reuse(
-                            resolution.slot.function_name_base,
-                            None,
+                            call_site,
                             resolution.commit_id,
-                            loc,
                             path,
-                            loc_link=_call_site_file_url(call_site.filename, call_site.lineno),
-                            path_link=_file_link_url(path),
+                            _call_site_file_url(call_site.filename, call_site.lineno),
+                            _file_link_url(path),
                         )
                     return fn(*all_values_ordered, **kwargs)
                 need_generate = True
 
-        if resolution.decision in (Decision.ADVANCE, Decision.GENERATE) or need_generate:
+        if resolution.decision in (Decision.ADAPT, Decision.GENERATE) or need_generate:
             sample_input = _sample_from_values(
                 site_info.template.variable_names,
                 name_to_value,
@@ -221,10 +218,10 @@ def semi(prompt: str, require_tools: bool = False, **kwargs: Any) -> Any:
             constants_snapshot = freeze_constants(constant_values)
             function_name_base = _readable_function_name(call_site)
             slot = resolution.slot if resolution.slot is not None else _ensure_slot(portal, call_site, function_name_base)
-            if resolution.decision == Decision.ADVANCE and resolution.branch_name:
+            if resolution.decision == Decision.ADAPT and resolution.branch_name:
                 branch_name = resolution.branch_name
                 parent_ids = tuple(resolution.parent_commit_ids)
-                decision_str = "ADVANCE"
+                decision_str = "ADAPT"
             else:
                 if not slot.branches:
                     branch_name = "main"
@@ -250,28 +247,23 @@ def semi(prompt: str, require_tools: bool = False, **kwargs: Any) -> Any:
             if fn is None:
                 fn = entry.compiled_fn
             if config.verbose:
-                loc = _format_location(call_site.filename, call_site.lineno, call_site.func_qualname or "")
                 path = str(_dispatch_module_path(cache_dir, module_name))
-                if resolution.decision == Decision.ADVANCE and resolution.parent_commit_ids:
-                    print_dag_advance(
-                        slot.function_name_base,
-                        branch_name,
+                if resolution.decision == Decision.ADAPT and resolution.parent_commit_ids:
+                    print_dag_adapt(
+                        call_site,
                         commit.commit_id,
                         resolution.parent_commit_ids[0],
-                        loc,
                         path,
-                        loc_link=_call_site_file_url(call_site.filename, call_site.lineno),
-                        path_link=_file_link_url(path),
+                        _call_site_file_url(call_site.filename, call_site.lineno),
+                        _file_link_url(path),
                     )
                 else:
                     print_dag_generate(
-                        slot.function_name_base,
-                        branch_name,
+                        call_site,
                         commit.commit_id,
-                        loc,
                         path,
-                        loc_link=_call_site_file_url(call_site.filename, call_site.lineno),
-                        path_link=_file_link_url(path),
+                        _call_site_file_url(call_site.filename, call_site.lineno),
+                        _file_link_url(path),
                     )
             return fn(*all_values_ordered, **kwargs)
 
@@ -321,16 +313,13 @@ def _semi_fallback(
             if fn is not None:
                 config = get_config()
                 if config.verbose:
-                    loc = _format_location(call_site.filename, call_site.lineno, call_site.func_qualname or "")
                     path = str(_dispatch_module_path(cache_dir, module_name))
                     print_dag_reuse(
-                        resolution.slot.function_name_base,
-                        None,
+                        call_site,
                         resolution.commit_id,
-                        loc,
                         path,
-                        loc_link=_call_site_file_url(call_site.filename, call_site.lineno),
-                        path_link=_file_link_url(path),
+                        _call_site_file_url(call_site.filename, call_site.lineno),
+                        _file_link_url(path),
                     )
                 return fn(prompt, **kwargs)
 
@@ -363,15 +352,12 @@ def _semi_fallback(
         fn = entry.compiled_fn
     config = get_config()
     if config.verbose:
-        loc = _format_location(call_site.filename, call_site.lineno, call_site.func_qualname or "")
         path = str(_dispatch_module_path(cache_dir, module_name))
         print_dag_generate(
-            slot.function_name_base,
-            "main",
+            call_site,
             commit.commit_id,
-            loc,
             path,
-            loc_link=_call_site_file_url(call_site.filename, call_site.lineno),
-            path_link=_file_link_url(path),
+            _call_site_file_url(call_site.filename, call_site.lineno),
+            _file_link_url(path),
         )
     return fn(prompt, **kwargs)

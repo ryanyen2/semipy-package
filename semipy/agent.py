@@ -15,6 +15,7 @@ from semipy.console_io import (
     validation_error_panel,
 )
 from semipy.generator import SemiGenerator, SYSTEM_PROMPT
+from semipy.tools import inject_tools_into_system_prompt
 from semipy.types import (
     CacheEntry,
     Decision,
@@ -67,7 +68,7 @@ class SemiAgent:
             "Constraints:",
             f"- Return type must be: {spec.expected_type.__name__ if spec.expected_type is not type(None) else 'any'}",
         ]
-        if spec.decision == Decision.ADVANCE and spec.parent_sources:
+        if spec.decision == Decision.ADAPT and spec.parent_sources:
             parts.append("")
             parts.append("Adapt from this previous implementation (same structure, new parameters):")
             parts.append("```python")
@@ -130,6 +131,9 @@ class SemiAgent:
                     )
 
             prompt = self._build_user_prompt(spec)
+            system_prompt = inject_tools_into_system_prompt(SYSTEM_PROMPT, prompt)
+            print('user prompt: ', prompt)
+            print('system prompt: ', system_prompt)
             last_source = ""
             last_result: Optional[ValidationResult] = None
 
@@ -145,7 +149,7 @@ class SemiAgent:
                     console = get_console()
                     on_chunk = lambda chunk, c=console: c.print(chunk, end="")
                 raw = self.generator.generate(
-                    SYSTEM_PROMPT,
+                    system_prompt,
                     prompt,
                     stream=self.stream,
                     on_chunk=on_chunk,
@@ -185,6 +189,7 @@ class SemiAgent:
                 last_source = source
                 last_result = result
                 prompt = self._build_retry_prompt(spec, source, result, attempt)
+                system_prompt = inject_tools_into_system_prompt(SYSTEM_PROMPT, prompt)
 
             if self.confirm_on_failure and last_result is not None:
                 config = get_config()
@@ -197,7 +202,7 @@ class SemiAgent:
                     progress.log_step("Retry (user confirmed)")
                     progress.update("Retry (user confirmed)...")
                     raw = self.generator.generate(
-                        SYSTEM_PROMPT,
+                        system_prompt,
                         prompt,
                         stream=self.stream,
                         on_chunk=(

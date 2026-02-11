@@ -1,30 +1,56 @@
-"""LLM wrapper for generating semi() function implementations."""
+"""LLM wrapper for generating semi() function implementations. Uses DSPy for all generation."""
 from __future__ import annotations
 
+import os
 from typing import Callable, Optional
 
 from semipy.config import get_config
 
 
+def _model_string(model: str) -> str:
+    """Return LiteLLM-style model string for DSPy (e.g. openai/gpt-4o-mini)."""
+    if "/" in model:
+        return model
+    return f"openai/{model}"
+
+
 class SemiGenerator:
-    """OpenAI API wrapper for generating Python functions from semantic prompts."""
+    """DSPy-based generator for producing Python functions from semantic prompts."""
 
     def __init__(self, model: Optional[str] = None, api_key: Optional[str] = None):
         config = get_config()
         self.model = model or config.model
         self._api_key = api_key or config.api_key
-        self._client = None
+        self._predict = None
 
-    def _get_client(self):
-        if self._client is None:
-            try:
-                from openai import OpenAI
-            except ImportError:
-                raise ImportError("openai package is required; install with: pip install openai")
-            if not self._api_key:
-                raise ValueError("OPENAI_API_KEY must be set (env or semi.configure(api_key=...))")
-            self._client = OpenAI(api_key=self._api_key)
-        return self._client
+    def _ensure_configured(self) -> None:
+        if self._predict is not None:
+            return
+        try:
+            import dspy
+        except ImportError:
+            raise ImportError(
+                "dspy package is required; install with: pip install dspy"
+            )
+        if not self._api_key:
+            raise ValueError(
+                "OPENAI_API_KEY must be set (env or semi.configure(api_key=...))"
+            )
+        os.environ["OPENAI_API_KEY"] = self._api_key
+        lm = dspy.LM(_model_string(self.model))
+        dspy.configure(lm=lm)
+
+        class CodeGenSignature(dspy.Signature):
+            """Generate a single Python function that implements the request. Output only the function in a ```python code block, no explanations."""
+
+            request: str = dspy.InputField(
+                desc="Full request: rules and the semantic request to implement"
+            )
+            python_function: str = dspy.OutputField(
+                desc="The complete Python function in a ```python code block"
+            )
+
+        self._predict = dspy.Predict(CodeGenSignature)
 
     def generate(
         self,
@@ -33,39 +59,14 @@ class SemiGenerator:
         stream: bool = False,
         on_chunk: Optional[Callable[[str], None]] = None,
     ) -> str:
-        client = self._get_client()
-        if not stream:
-            response = client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                stream=False,
-                reasoning_effort="minimal",
-            )
-            return response.choices[0].message.content or ""
-
-        accumulated: list[str] = []
-        stream_response = client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            stream=True,
-            reasoning_effort="minimal",
-        )
-        for chunk in stream_response:
-            if not chunk.choices:
-                continue
-            delta = chunk.choices[0].delta
-            if getattr(delta, "content", None):
-                content = delta.content
-                accumulated.append(content)
-                if on_chunk is not None:
-                    on_chunk(content)
-        return "".join(accumulated)
+        self._ensure_configured()
+        full_request = f"{system_prompt}\n\n{user_prompt}"
+        pred = self._predict(request=full_request)
+        raw = getattr(pred, "python_function", "") or ""
+        if stream and on_chunk is not None and raw:
+            for char in raw:
+                on_chunk(char)
+        return raw
 
 
 SYSTEM_PROMPT = """You generate a single Python function that implements the user's semantic request.

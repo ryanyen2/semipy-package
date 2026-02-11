@@ -1,4 +1,4 @@
-"""Resolve usage to REUSE, ADVANCE, FORK, or GENERATE using the DAG."""
+"""Resolve usage to REUSE, ADAPT, FORK, or GENERATE using the DAG."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -36,7 +36,7 @@ def resolve(
 ) -> ResolutionResult:
     """
     Resolve a usage against the portal. Returns REUSE (with commit_id), or
-    ADVANCE/GENERATE with parent context for the agent.
+    ADAPT/GENERATE with parent context for the agent.
     """
     slot_id = usage.call_site.site_id
     usage_id = usage.usage_id()
@@ -97,7 +97,7 @@ def resolve(
         parent_sources = [head_commit.generated_source]
         lineage = _lineage_summary(slot, head_commit.commit_id)
         return ResolutionResult(
-            decision=Decision.ADVANCE,
+            decision=Decision.ADAPT,
             slot=slot,
             branch_name=branch_name,
             parent_commit_ids=[head_commit.commit_id],
