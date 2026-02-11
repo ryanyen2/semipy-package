@@ -57,6 +57,7 @@ class Commit:
     timestamp: float
     message: str
     decision: str
+    usage_id: str = ""  # usage that produced this commit; required for REUSE by op_sig/fingerprint
 
 
 @dataclass
@@ -91,6 +92,7 @@ def create_commit(
     constants_snapshot: tuple[tuple[str, str], ...],
     prompt_snapshot: str,
     decision: str,
+    usage_id: str = "",
 ) -> Commit:
     source_hash = compute_source_hash(generated_source)
     commit_id = compute_commit_id(parent_ids, source_hash)
@@ -108,6 +110,7 @@ def create_commit(
         timestamp=time.time(),
         message=message,
         decision=decision,
+        usage_id=usage_id,
     )
 
 
@@ -122,16 +125,27 @@ def add_commit_to_slot(
     slot.refs[usage_id] = commit.commit_id
 
 
-def find_commit_by_operation_signature(slot: Slot, operation_signature: str) -> Commit | None:
+def find_commit_by_operation_signature(
+    slot: Slot, operation_signature: str, usage_id: str
+) -> Commit | None:
+    """Return a commit with this operation_signature only if it was generated for this usage_id."""
     for c in slot.commits.values():
-        if c.operation_signature == operation_signature:
+        if c.operation_signature != operation_signature:
+            continue
+        if not c.usage_id or c.usage_id == usage_id:
             return c
     return None
 
 
-def find_commit_by_fingerprint(slot: Slot, template_fingerprint: str) -> Commit | None:
-    """Return any commit in the slot with this template_fingerprint (most recent by timestamp)."""
-    candidates = [c for c in slot.commits.values() if c.template_fingerprint == template_fingerprint]
+def find_commit_by_fingerprint(
+    slot: Slot, template_fingerprint: str, usage_id: str
+) -> Commit | None:
+    """Return a commit with this template_fingerprint only if it was generated for this usage_id (most recent by timestamp)."""
+    candidates = [
+        c
+        for c in slot.commits.values()
+        if c.template_fingerprint == template_fingerprint and (not c.usage_id or c.usage_id == usage_id)
+    ]
     if not candidates:
         return None
     return max(candidates, key=lambda c: c.timestamp)

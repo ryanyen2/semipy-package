@@ -67,7 +67,7 @@ def resolve(
             commit_id=ref_commit_id,
         )
 
-    existing = find_commit_by_operation_signature(slot, operation_signature)
+    existing = find_commit_by_operation_signature(slot, operation_signature, usage_id)
     if existing is not None:
         return ResolutionResult(
             decision=Decision.REUSE,
@@ -79,7 +79,7 @@ def resolve(
             commit_id=existing.commit_id,
         )
 
-    by_fingerprint = find_commit_by_fingerprint(slot, template_fingerprint)
+    by_fingerprint = find_commit_by_fingerprint(slot, template_fingerprint, usage_id)
     if by_fingerprint is not None:
         return ResolutionResult(
             decision=Decision.REUSE,

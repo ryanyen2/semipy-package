@@ -239,6 +239,7 @@ def semi(prompt: str, require_tools: bool = False, **kwargs: Any) -> Any:
                 constants_snapshot,
                 prompt,
                 decision_str,
+                usage_id=usage.usage_id(),
             )
             add_commit_to_slot(slot, commit, branch_name, usage.usage_id())
             save_portal(cache_dir, portal)
@@ -349,7 +350,9 @@ def _semi_fallback(
     function_name_base = _readable_function_name(call_site)
     slot = _ensure_slot(portal, call_site, function_name_base)
     constants_snapshot = freeze_constants({})
-    commit = create_commit((), entry.generated_source, fingerprint, constants_snapshot, prompt, "GENERATE")
+    commit = create_commit(
+        (), entry.generated_source, fingerprint, constants_snapshot, prompt, "GENERATE", usage_id=usage.usage_id()
+    )
     add_commit_to_slot(slot, commit, "main", usage.usage_id())
     save_portal(cache_dir, portal)
     write_dispatch_module(cache_dir, portal)

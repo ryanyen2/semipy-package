@@ -39,6 +39,7 @@ def _commit_to_dict(c: Commit) -> dict[str, Any]:
         "timestamp": c.timestamp,
         "message": c.message,
         "decision": c.decision,
+        "usage_id": c.usage_id or "",
     }
 
 
@@ -55,6 +56,7 @@ def _commit_from_dict(d: dict[str, Any]) -> Commit:
         timestamp=float(d.get("timestamp", 0)),
         message=d.get("message", ""),
         decision=d.get("decision", "GENERATE"),
+        usage_id=d.get("usage_id", "") or "",
     )
 
 
