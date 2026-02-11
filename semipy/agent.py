@@ -15,7 +15,7 @@ from semipy.console_io import (
     validation_error_panel,
 )
 from semipy.generator import SemiGenerator, SYSTEM_PROMPT
-from semipy.tools import inject_tools_into_system_prompt
+from semipy.tools import inject_tools_into_system_prompt, parse_tool_refs
 from semipy.types import (
     CacheEntry,
     Decision,
@@ -132,17 +132,25 @@ class SemiAgent:
 
             prompt = self._build_user_prompt(spec)
             system_prompt = inject_tools_into_system_prompt(SYSTEM_PROMPT, prompt)
-            print('user prompt: ', prompt)
-            print('system prompt: ', system_prompt)
+            tool_refs = parse_tool_refs(prompt)
+            if tool_refs and self.verbose:
+                tool_names = ", ".join(sorted({name for name, _ in tool_refs}))
+                progress.update(f"Tools detected: {tool_names}. Calling LLM...")
             last_source = ""
             last_result: Optional[ValidationResult] = None
 
             for attempt in range(total_attempts):
                 progress.log_step(f"Generating (attempt {attempt + 1}/{total_attempts})")
-                progress.update(
-                    f"Generating (attempt {attempt + 1}/{total_attempts})"
-                    + (f": {(last_result.error_message or '')[:50]!r}..." if last_result and (last_result.error_message or '') else "")
-                )
+                if last_result and (last_result.error_message or ""):
+                    progress.update(
+                        f"Retrying (attempt {attempt + 1}/{total_attempts}): fixing validation error..."
+                    )
+                elif not tool_refs:
+                    progress.update(f"Calling LLM (attempt {attempt + 1}/{total_attempts})...")
+                else:
+                    progress.update(
+                        f"Calling LLM with tools (attempt {attempt + 1}/{total_attempts})..."
+                    )
 
                 on_chunk = None
                 if self.stream and self.verbose:
@@ -157,6 +165,7 @@ class SemiAgent:
                 if self.stream and self.verbose:
                     get_console().print()
 
+                progress.update("Parsing generated code...")
                 source = _extract_function_source(raw)
                 progress.log_step("Validating (AST, type, execution)")
                 progress.update("Validating (AST, type, execution)...")

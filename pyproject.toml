@@ -20,6 +20,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest", "python-dotenv"]
+example = [
+    "matplotlib>=3.10.8",
+    "netcdf4>=1.7.3",
+    "xarray>=2025.6.1",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]
