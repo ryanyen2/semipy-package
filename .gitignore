@@ -28,3 +28,6 @@ __pycache__/
 .mcp.json
 # next-agents-md
 .next-docs/
+
+
+.pytest_cache/
