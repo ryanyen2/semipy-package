@@ -1,53 +1,69 @@
-"""Weather kit: formal + semiformal, Herbie-style.
-Formal: open_dataset(), WeatherDataset. Semiformal: plot_map(), current_summary().
+"""Weather kit: formal first, semiformal only where schema/data are unknown.
+
   uv run --extra example python examples/use_weather_kit.py
 """
 
 from pathlib import Path
-
-# Ensure examples dir is on path for weather_kit
 import sys
+
 _examples = Path(__file__).resolve().parent
 if str(_examples) not in sys.path:
     sys.path.insert(0, str(_examples))
 
-from weather_kit import open_dataset, plot_map, current_summary, plot_timeseries
+from weather_kit import (
+    open_dataset,
+    plot_map,
+    plot_timeseries,
+    latest_append,
+    infer_date_column,
+)
 
 
 def main():
     data_dir = Path(__file__).parent / "data"
+    out_dir = Path(__file__).parent / "output"
+    out_dir.mkdir(exist_ok=True)
 
-    print("=== 1. Formal: load grid data (netCDF) ===")
+    # --- Formal: load and plot (no semi) ---
+    print("=== 1. Formal: load grid (netCDF) ===")
     nc_path = data_dir / "20190722000000-OSPO-L4_GHRSST-SSTfnd-Geo_Polar_Blended-GLOB-v02.0-fv01.0.nc"
-    if not nc_path.exists():
-        print("NetCDF not found; skipping grid demo.")
-    else:
-        ds = open_dataset(nc_path)
-        print(ds.description())
-        print("Variables:", ds.variable_names())
+    if nc_path.exists():
+        ds_grid = open_dataset(nc_path)
+        print(ds_grid.description())
+        print("Variables:", ds_grid.variable_names())
 
-        print("\n=== 2. Semiformal: plot map (generated code uses ds.get_2d, matplotlib) ===")
-        fig = plot_map(ds, variable="analysed_sst", title="Sea surface temperature")
+        print("\n=== 2. Formal: plot map (deterministic) ===")
+        fig = plot_map(ds_grid, variable="analysed_sst", title="Sea surface temperature")
         if fig is not None:
-            fig.savefig(Path(__file__).parent / "output/weather_map_sst.png", dpi=120)
-            print("Saved weather_map_sst.png")
-        else:
-            print("plot_map returned None")
+            fig.savefig(out_dir / "weather_map_sst.png", dpi=120)
+            print("Saved output/weather_map_sst.png")
 
+    # --- Formal: load table; plot with explicit or inferred date column ---
     print("\n=== 3. Formal: load table (CSV) ===")
     csv_path = data_dir / "seattle-weather.csv"
     ds_table = open_dataset(csv_path)
     print(ds_table.description())
 
-    print("\n=== 4. Semiformal: time series (generated code plots variable vs date) ===")
+    print("\n=== 4. Formal: plot time series (explicit date_column) ===")
     fig_ts = plot_timeseries(ds_table, variable="temp_max", date_column="date")
     if fig_ts is not None:
-        fig_ts.savefig(Path(__file__).parent / "output/weather_timeseries.png", dpi=120)
-        print("Saved weather_timeseries.png")
+        fig_ts.savefig(out_dir / "weather_timeseries.png", dpi=120)
+        print("Saved output/weather_timeseries.png")
 
-    print("\n=== 5. Semiformal: current conditions (fetch-augmented) ===")
-    summary = current_summary("Seattle")
-    print("Seattle now:", summary)
+    # --- Semiformal only when needed: infer date column if we didn't know it ---
+    print("\n=== 5. Semiformal: infer date column (when schema unknown) ===")
+    inferred = infer_date_column(ds_table)
+    print("Inferred date column:", inferred)
+
+    # --- latest_append: formal fetch + append (semi only if schema unmapped) ---
+    print("\n=== 6. latest_append: fetch latest and append to existing data ===")
+    try:
+        ds_with_latest = latest_append(ds_table, "Seattle")
+        tbl = ds_with_latest.table()
+        print("Rows before:", len(ds_table.table()), "-> after:", len(tbl))
+        print("Last row (appended):", tbl.iloc[-1].to_dict())
+    except Exception as e:
+        print("latest_append error:", e)
 
 
 if __name__ == "__main__":

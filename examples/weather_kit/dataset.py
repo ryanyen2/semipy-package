@@ -110,6 +110,20 @@ class WeatherDataset:
         df = self._data
         return f"Table dataset from {self.source_path}; columns: {', '.join(df.columns.tolist())}; rows: {len(df)}"
 
+    @classmethod
+    def from_table(
+        cls,
+        df: pd.DataFrame,
+        source_path: str | Path = "memory",
+    ) -> "WeatherDataset":
+        """Build a table WeatherDataset from a pandas DataFrame (e.g. after appending rows)."""
+        return cls(
+            source_path=str(source_path),
+            data=df,
+            kind="table",
+            variable_names=df.columns.tolist(),
+        )
+
 
 def _load_csv(path: Path) -> WeatherDataset:
     df = pd.read_csv(path)
