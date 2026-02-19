@@ -59,7 +59,7 @@ def _call_site_file_url(filename: str, lineno: int) -> str:
     p = Path(filename).resolve()
     try:
         uri = p.as_uri()
-        return f"{uri}#L{lineno}" if lineno else uri
+        return f"{uri}:{lineno}" if lineno else uri
     except Exception:
         return ""
 
@@ -130,7 +130,7 @@ def print_pipeline_log(
 
 
 def _path_with_line_range(path: str, line_range: tuple[int, int]) -> str:
-    """Return path#Lstart-Lend for IDE link when line_range is non-zero."""
+    """Return path:start-end for IDE link when line_range is non-zero."""
     if not path or line_range == (0, 0):
         return path
     s, e = line_range
@@ -138,9 +138,20 @@ def _path_with_line_range(path: str, line_range: tuple[int, int]) -> str:
         return path
     try:
         uri = Path(path).resolve().as_uri()
-        return f"{uri}#L{s}-L{e}" if e > s else f"{uri}#L{s}"
+        return f"{uri}:{s}-{e}" if e > s else f"{uri}:{s}"
     except Exception:
         return path
+
+
+def _traceback_style_location(path: str, line: int, end_line: Optional[int] = None) -> str:
+    """Format as Python traceback so VSCode/terminal makes it command-clickable: File \"path\", line N."""
+    try:    
+        abs_path = str(Path(path).resolve())
+    except Exception:
+        abs_path = path
+    if end_line is not None and end_line != line:
+        return f'File "{abs_path}":{line}-{end_line}'
+    return f'File "{abs_path}":{line}'
 
 
 def _print_semipy_line_once(
@@ -161,13 +172,13 @@ def _print_semipy_line_once(
     source_part = f"[link={source_link}]{source}[/link]" if source_link else source
     suffix = ""
     if code_path.strip():
-        path_display = _short_display_path(code_path)
-        if code_line_range and code_line_range != (0, 0):
-            s, e = code_line_range
-            path_display = f"{path_display} (lines {s}-{e})"
         link = path_link or _file_link_url(code_path)
         if code_line_range and code_line_range != (0, 0):
+            s, e = code_line_range
+            path_display = _traceback_style_location(code_path, s, e)
             link = _path_with_line_range(code_path, code_line_range)
+        else:
+            path_display = _short_display_path(code_path)
         path_part = f"[link={link}]{path_display}[/link]" if link else path_display
         suffix = f" Code at {path_part}."
     console.print(
@@ -201,7 +212,7 @@ def print_dag_reuse(
     code_line_range: Optional[tuple[int, int]] = None,
 ) -> None:
     """Log REUSE: call source, reused implementation, code path (optional line range)."""
-    source = _format_call_source(call_site)
+    source = _traceback_style_location(call_site.filename, call_site.lineno)
     generation = f"Reused existing implementation (commit {commit_id[:8]})"
     _print_semipy_line_once(source, generation, code_path, "green", source_link, path_link, code_line_range)
 
@@ -216,7 +227,7 @@ def print_dag_adapt(
     code_line_range: Optional[tuple[int, int]] = None,
 ) -> None:
     """Log ADAPT: call source, adapted from parent, code path (optional line range)."""
-    source = _format_call_source(call_site)
+    source = _traceback_style_location(call_site.filename, call_site.lineno)
     generation = f"Adapted from previous (commit {parent_commit_id[:8]} -> {commit_id[:8]})"
     _print_semipy_line_once(source, generation, code_path, "cyan", source_link, path_link, code_line_range)
 
@@ -230,7 +241,7 @@ def print_dag_generate(
     code_line_range: Optional[tuple[int, int]] = None,
 ) -> None:
     """Log GENERATE: call source, new implementation, code path (optional line range)."""
-    source = _format_call_source(call_site)
+    source = _traceback_style_location(call_site.filename, call_site.lineno)
     generation = f"New implementation (commit {commit_id[:8]})"
     _print_semipy_line_once(source, generation, code_path, "yellow", source_link, path_link, code_line_range)
 

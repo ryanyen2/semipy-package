@@ -57,11 +57,15 @@ def _call_generated_fn(
     line_range: tuple[int, int],
     prompt_preview: str,
     *args: Any,
+    usage_hint: str = "",
     **kwargs: Any,
 ) -> Any:
-    """Invoke generated function; on exception raise SemiCallError pointing to user call site."""
+    """Invoke generated function; on exception raise SemiCallError with debugger-style summary.
+    *args must come before usage_hint so that all_values_ordered is not interpreted as usage_hint.
+    """
+    kwargs_for_fn = {k: v for k, v in kwargs.items() if k != "usage_hint"}
     try:
-        return fn(*args, **kwargs)
+        return fn(*args, **kwargs_for_fn)
     except Exception as e:
         raise SemiCallError(
             "Generated semi() function raised at runtime",
@@ -69,6 +73,7 @@ def _call_generated_fn(
             generated_path=generated_path,
             line_range=line_range,
             prompt_preview=prompt_preview,
+            usage_hint=usage_hint,
             cause=e,
         ) from e
 
@@ -288,9 +293,12 @@ def _semi_inline(
                             _file_link_url(path_str),
                             code_line_range=code_line_range if code_line_range != (0, 0) else None,
                         )
+                    _kwargs = {k: v for k, v in kwargs.items() if k != "usage_hint"}
                     return _call_generated_fn(
                         fn, call_site, path_str, code_line_range, prompt,
-                        *all_values_ordered, **kwargs,
+                        *all_values_ordered,
+                        usage_hint=getattr(site_info, "usage_hint", ""),
+                        **_kwargs,
                     )
                 need_generate = True
 
@@ -370,9 +378,12 @@ def _semi_inline(
                         _file_link_url(path_str),
                         code_line_range=code_line_range if code_line_range != (0, 0) else None,
                     )
+            _kwargs = {k: v for k, v in kwargs.items() if k != "usage_hint"}
             return _call_generated_fn(
                 fn, call_site, path_str, code_line_range, prompt,
-                *all_values_ordered, **kwargs,
+                *all_values_ordered,
+                usage_hint=getattr(site_info, "usage_hint", ""),
+                **_kwargs,
             )
 
     return _semi_fallback(prompt, call_site, cache_dir, session_id, module_name, expected_type=expected_type, require_tools=require_tools, **kwargs)
@@ -452,7 +463,13 @@ def _semi_named(name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any
                         code_line_range=code_line_range if code_line_range != (0, 0) else None,
                     )
                 prompt_preview = f"semi.{name}(...)"
-                return _call_generated_fn(fn, call_site, path_str, code_line_range, prompt_preview, *args, **kwargs)
+                _kwargs = {k: v for k, v in kwargs.items() if k != "usage_hint"}
+                return _call_generated_fn(
+                    fn, call_site, path_str, code_line_range, prompt_preview,
+                    *args,
+                    usage_hint=getattr(site_info, "usage_hint", "") if site_info is not None else "",
+                    **_kwargs,
+                )
             need_generate = True
 
     if resolution.decision in (Decision.ADAPT, Decision.GENERATE) or need_generate:
@@ -530,7 +547,13 @@ def _semi_named(name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any
                     _file_link_url(path_str),
                     code_line_range=code_line_range if code_line_range != (0, 0) else None,
                 )
-        return _call_generated_fn(fn, call_site, path_str, code_line_range, prompt, *args, **kwargs)
+        _kwargs = {k: v for k, v in kwargs.items() if k != "usage_hint"}
+        return _call_generated_fn(
+            fn, call_site, path_str, code_line_range, prompt,
+            *args,
+            usage_hint=getattr(site_info, "usage_hint", "") if site_info is not None else "",
+            **_kwargs,
+        )
 
 
 def _sample_from_values(
@@ -594,7 +617,13 @@ def _semi_fallback(
                         _file_link_url(path_str),
                         code_line_range=code_line_range if code_line_range != (0, 0) else None,
                     )
-                return _call_generated_fn(fn, call_site, path_str, code_line_range, prompt, prompt, **kwargs)
+                _kwargs = {k: v for k, v in kwargs.items() if k != "usage_hint"}
+                return _call_generated_fn(
+                    fn, call_site, path_str, code_line_range, prompt,
+                    *(prompt,),
+                    usage_hint="",
+                    **_kwargs
+                )
 
     spec = GenerationSpec(
         prompt=prompt,
@@ -635,7 +664,8 @@ def _semi_fallback(
             _file_link_url(path_str),
             code_line_range=code_line_range if code_line_range != (0, 0) else None,
         )
-    return _call_generated_fn(fn, call_site, path_str, code_line_range, prompt, prompt, **kwargs)
+    _kwargs = {k: v for k, v in kwargs.items() if k != "usage_hint"}
+    return _call_generated_fn(fn, call_site, path_str, code_line_range, prompt, *(prompt,), usage_hint="", **_kwargs)
 
 
 class _SemiMethod:

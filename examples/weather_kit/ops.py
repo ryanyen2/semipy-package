@@ -58,12 +58,10 @@ def plot_timeseries(
     plt.figure()
     plt.plot(tbl[date_column], tbl[variable])
     plt.xlabel(date_column)
-    # TODO: this example showng the error of incompatibility with the matplotlib type hints: TypeError: 'locator' must be an instance of matplotlib.ticker.Locator, not a tuple
-    # plt.gca().xaxis.set_major_locator(semi(f"set major locator for {date_column} based on the data"))
     plt.gca().xaxis.set_major_locator(plt.MaxNLocator(integer=True))
     plt.gca().xaxis.set_major_formatter(plt.FormatStrFormatter(semi(f"format major ticks for {date_column} based on the data")))
     plt.ylabel(variable)
-    plt.gca().tick_params(axis="x", rotation=45)
+    plt.gca().tick_params(semi(f"tick params for {date_column} based on the data"))
     return plt.gcf()
 
 def map_fetched_weather_to_row(fetched_weather: dict[str, Any], table: pd.DataFrame) -> dict[str, Any]:

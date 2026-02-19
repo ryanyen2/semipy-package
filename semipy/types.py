@@ -196,8 +196,51 @@ class SemiGenerationError(Exception):
     pass
 
 
+def _interpret_semi_call_cause(cause: BaseException) -> tuple[str, str]:
+    """From the underlying exception, return (what_went_wrong, fix_hint) for the debugger summary."""
+    msg = str(cause).strip()
+    what = msg
+    fix = "Adjust your semi() prompt or the generated implementation so the return value matches what the callee expects."
+    if "is not a valid value for" in msg and "supported values are" in msg:
+        try:
+            import re
+            m = re.search(r"supported values are ([^.]+)", msg, re.IGNORECASE)
+            supported = (m.group(1).strip() if m else "").strip("'\" ")
+            m2 = re.search(r"^(.+?) is not a valid value", msg)
+            raw = m2.group(1).strip() if m2 else ""
+            if raw.startswith("{") and "}" in raw:
+                received = "a dict (e.g. kwargs). The callee expects a single value, not a dict."
+            else:
+                received = raw if len(raw) <= 60 else raw[:57] + "..."
+            what = f"The callee expects one of {supported}, but received: {received}"
+            fix = f"Make your semi() return one of {supported} (e.g. a string), not a dict."
+        except Exception:
+            pass
+    elif "must be an instance of" in msg or ("must be" in msg and "not" in msg):
+        what = msg
+        fix = "Make your semi() return the type the callee expects (see the error above)."
+    return (what, fix)
+
+
+def _read_source_line(filename: str, lineno: int) -> Optional[str]:
+    """Return the source line at filename:lineno, or None."""
+    if not filename or lineno <= 0 or filename == "<unknown>":
+        return None
+    try:
+        from pathlib import Path
+        path = Path(filename).resolve()
+        if not path.exists():
+            return None
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        if 0 <= lineno - 1 < len(lines):
+            return lines[lineno - 1].strip()
+    except Exception:
+        pass
+    return None
+
+
 class SemiCallError(Exception):
-    """Raised when a generated semi() function raises at runtime. Points to user call site first."""
+    """Raised when a generated semi() function raises at runtime. Includes a debugger-style summary."""
 
     def __init__(
         self,
@@ -206,6 +249,7 @@ class SemiCallError(Exception):
         generated_path: str = "",
         line_range: tuple[int, int] = (0, 0),
         prompt_preview: str = "",
+        usage_hint: str = "",
         cause: Optional[BaseException] = None,
     ):
         super().__init__(message)
@@ -213,25 +257,62 @@ class SemiCallError(Exception):
         self.generated_path = generated_path
         self.line_range = line_range
         self.prompt_preview = prompt_preview
+        self.usage_hint = usage_hint
         self.__cause__ = cause
 
     def __str__(self) -> str:
-        parts = [super().__str__()]
+        lines = []
+        cause = self.__cause__
+        what, fix = _interpret_semi_call_cause(cause) if cause else (str(self), "Fix the generated code or your prompt.")
+
+        lines.append("SEMIPY: semi() failed at runtime. Fix your code or prompt in the file below.")
+        lines.append("")
+
         if self.call_site is not None:
-            loc = f"{self.call_site.filename}:{self.call_site.lineno}"
+            try:
+                from pathlib import Path
+                user_path = str(Path(self.call_site.filename).resolve())
+            except Exception:
+                user_path = self.call_site.filename
+            lines.append(f"  Where: {user_path}:{self.call_site.lineno}")
+            lines.append(f"  (open this path in your editor and go to the line above)")
             if self.call_site.func_qualname:
-                loc += f" ({self.call_site.func_qualname})"
-            parts.append(f"semi() call at {loc}")
-        if self.generated_path and self.line_range != (0, 0):
-            s, e = self.line_range
-            parts.append(f"generated code at {self.generated_path}:L{s}-L{e}")
-        elif self.generated_path:
-            parts.append(f"generated code at {self.generated_path}")
-        if self.prompt_preview:
-            parts.append(f"prompt: {self.prompt_preview[:80]}...")
-        if self.__cause__ is not None:
-            parts.append(f"cause: {self.__cause__}")
-        return " | ".join(parts)
+                lines.append(f"  In:    {self.call_site.func_qualname}")
+            source_line = _read_source_line(self.call_site.filename, self.call_site.lineno)
+            if source_line:
+                lines.append(f"  Your code: {source_line}")
+            elif self.prompt_preview:
+                lines.append(f"  Prompt:   {self.prompt_preview[:100]}{'...' if len(self.prompt_preview) > 100 else ''}")
+            lines.append("")
+
+        if self.usage_hint:
+            lines.append(f"  Result is used as: {self.usage_hint}")
+            lines.append("")
+
+        lines.append(f"  What went wrong: {what}")
+        lines.append(f"  Fix: {fix}")
+        lines.append("")
+
+        if self.generated_path:
+            try:
+                from pathlib import Path
+                gen_path = str(Path(self.generated_path).resolve())
+            except Exception:
+                gen_path = self.generated_path
+            if self.line_range != (0, 0):
+                s, e = self.line_range
+                lines.append(f"  Generated implementation: {gen_path}:{s}-{e}")
+            else:
+                lines.append(f"  Generated implementation: {gen_path}")
+            lines.append("")
+
+        lines.append("Original error:")
+        if cause is not None:
+            lines.append(f"  {type(cause).__name__}: {cause}")
+        else:
+            lines.append(f"  {super().__str__()}")
+
+        return "\n".join(lines)
 
 
 # Protocol for deterministic tools run by the agent (e.g. code analyzer, checker).
