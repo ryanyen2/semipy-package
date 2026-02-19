@@ -143,8 +143,8 @@ def function_name_for_commit(slot: Slot, commit: Commit) -> str:
     return f"{base}_{short}"
 
 
-def write_dispatch_module(cache_dir: Path, portal: Portal) -> Path:
-    """Write dispatch module with only functions referenced by refs. Returns path."""
+def write_dispatch_module(cache_dir: Path, portal: Portal) -> tuple[Path, dict[str, tuple[int, int]]]:
+    """Write dispatch module with only functions referenced by refs. Returns (path, fn_line_map)."""
     path = _dispatch_module_path(cache_dir, portal.module_name)
     _dispatch_dir(cache_dir).mkdir(parents=True, exist_ok=True)
 
@@ -156,6 +156,7 @@ def write_dispatch_module(cache_dir: Path, portal: Portal) -> Path:
         "",
     ]
     dispatch_entries: list[str] = []
+    fn_line_map: dict[str, tuple[int, int]] = {}
 
     for slot in portal.slots.values():
         refd_commit_ids = set(slot.refs.values())
@@ -165,8 +166,13 @@ def write_dispatch_module(cache_dir: Path, portal: Portal) -> Path:
                 continue
             fn_name = function_name_for_commit(slot, commit)
             lines.append(f"# slot: {slot.function_name_base} | commit: {commit_id[:8]} | {commit.decision}")
-            lines.append(_source_with_function_name(commit.generated_source, fn_name))
+            start_line = len(lines) + 1
+            fn_source = _source_with_function_name(commit.generated_source, fn_name)
+            fn_lines = fn_source.splitlines()
+            lines.extend(fn_lines)
             lines.append("")
+            end_line = len(lines)
+            fn_line_map[fn_name] = (start_line, end_line)
         for usage_id, commit_id in slot.refs.items():
             commit = slot.commits.get(commit_id)
             if commit is not None:
@@ -178,7 +184,32 @@ def write_dispatch_module(cache_dir: Path, portal: Portal) -> Path:
         lines.extend(dispatch_entries)
 
     path.write_text("\n".join(lines), encoding="utf-8")
-    return path
+    return path, fn_line_map
+
+
+def get_dispatch_function_line_range(dispatch_path: Path, function_name: str) -> tuple[int, int]:
+    """Return (start_line, end_line) for the function in the dispatch module, or (0, 0)."""
+    if not dispatch_path.exists():
+        return (0, 0)
+    content = dispatch_path.read_text(encoding="utf-8")
+    file_lines = content.splitlines()
+    pattern = f"def {re.escape(function_name)}("
+    start = 0
+    for i, line in enumerate(file_lines, 1):
+        if pattern in line and line.strip().startswith("def "):
+            start = i
+            break
+    if start == 0:
+        return (0, 0)
+    indent = len(file_lines[start - 1]) - len(file_lines[start - 1].lstrip())
+    end_line = len(file_lines)
+    for j in range(start, len(file_lines)):
+        line = file_lines[j]
+        if line.strip() and line.strip().startswith("def ") and (len(line) - len(line.lstrip())) <= indent:
+            end_line = j
+            break
+        end_line = j + 1
+    return (start, end_line)
 
 
 def load_function_from_dispatch(

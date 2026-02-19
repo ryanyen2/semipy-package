@@ -44,7 +44,10 @@ def main():
     print(ds_table.description())
 
     print("\n=== 4. Formal: plot time series (explicit date_column) ===")
-    fig_ts = plot_timeseries(ds_table, variable="temp_max")
+    fig_ts = plot_timeseries(
+        ds_table, 
+        variable="temp_max"
+    )
     fig_ts.savefig(out_dir / "weather_timeseries.png", dpi=120)
     print("Saved output/weather_timeseries.png")
 
@@ -53,7 +56,7 @@ def main():
     # inferred = infer_date_column(ds_table)
     # print("Inferred date column:", inferred)
 
-    # # --- latest_append: formal fetch + append (semi only if schema unmapped) ---
+    # --- latest_append: formal fetch + append (semi only if schema unmapped) ---
     # print("\n=== 6. latest_append: fetch latest and append to existing data ===")
     # try:
     #     ds_with_latest = latest_append(ds_table, "Seattle")

@@ -90,6 +90,52 @@ def _parent_map(tree: ast.AST) -> dict[ast.AST, ast.AST]:
     return parents
 
 
+def _func_name_from_ast(node: ast.expr) -> str:
+    """Extract a readable name from an AST expression (handles Name, Attribute chains)."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        prefix = _func_name_from_ast(node.value)
+        return f"{prefix}.{node.attr}" if prefix else node.attr
+    if isinstance(node, ast.Call):
+        return _func_name_from_ast(node.func)
+    return ""
+
+
+def _infer_usage_hint(node: ast.Call, tree: ast.AST) -> str:
+    """Describe how the semi() result is used (e.g. passed as argument, assigned, condition)."""
+    parents = _parent_map(tree)
+    p = parents.get(node)
+    if p is None:
+        return ""
+    if isinstance(p, ast.Assign) and p.value is node:
+        targets = p.targets
+        if len(targets) == 1:
+            t = targets[0]
+            if isinstance(t, ast.Name):
+                return f"assigned to variable: {t.id}"
+            if isinstance(t, ast.Tuple) and t.elts:
+                names = [e.id for e in t.elts if isinstance(e, ast.Name)]
+                if names:
+                    return f"assigned to variables: {', '.join(names)}"
+        return "assigned to a target"
+    if isinstance(p, ast.If) and p.test is node:
+        return "used as a boolean condition"
+    if isinstance(p, ast.Return) and p.value is node:
+        return "returned from the function"
+    if isinstance(p, ast.Call) and node in p.args:
+        idx = p.args.index(node)
+        func_name = _func_name_from_ast(p.func)
+        if func_name:
+            return f"passed as argument {idx} to {func_name}"
+        return f"passed as argument {idx} to a call"
+    if isinstance(p, ast.Subscript) and p.slice is node:
+        return "used as a subscript key"
+    if isinstance(p, ast.Compare) and p.left is node:
+        return "used in a comparison"
+    return ""
+
+
 def _infer_expected_type_from_usage(node: ast.Call, tree: ast.AST) -> type:
     """Infer expected return type from how the semi() result is used (parent node).
 
@@ -184,6 +230,7 @@ def extract_semi_templates(
                 func_qualname=func_qualname,
             )
             expected = _infer_expected_type_from_usage(node, tree)
+            usage_hint = _infer_usage_hint(node, tree)
             loop_variant_names = [n for n in variable_names if n.startswith("v")]
             if not loop_variant_names and variable_names:
                 loop_variant_names = [variable_names[0]]
@@ -193,6 +240,7 @@ def extract_semi_templates(
                     template=template,
                     expected_type=expected,
                     loop_variant_names=loop_variant_names,
+                    usage_hint=usage_hint,
                 )
             )
 
@@ -270,6 +318,7 @@ def extract_named_call_templates(
             func_qualname=func_qualname,
         )
         expected = _infer_expected_type_from_usage(node, tree)
+        usage_hint = _infer_usage_hint(node, tree)
         loop_variant_names = [n for n in variable_names if n.startswith("v")]
         if not loop_variant_names and variable_names and not variable_names[0].startswith("c_kw_"):
             loop_variant_names = [variable_names[0]]
@@ -282,6 +331,7 @@ def extract_named_call_templates(
                 expected_type=expected,
                 loop_variant_names=loop_variant_names,
                 kwarg_names=kwarg_names,
+                usage_hint=usage_hint,
             )
         )
 

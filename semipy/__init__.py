@@ -2,7 +2,7 @@
 from semipy.decorator import semiformal
 from semipy.semi_fn import semi
 from semipy.config import SemiConfig, configure, get_config
-from semipy.types import Decision, SemiGenerationError
+from semipy.types import Decision, SemiCallError, SemiGenerationError
 from semipy.tools import register_tool, parse_tool_refs
 
 __all__ = [
@@ -12,6 +12,7 @@ __all__ = [
     "configure",
     "get_config",
     "Decision",
+    "SemiCallError",
     "SemiGenerationError",
     "register_tool",
     "parse_tool_refs",

@@ -11,6 +11,7 @@ from semipy.console_io import (
     print_dag_adapt,
     print_dag_generate,
     print_dag_reuse,
+    print_pipeline_log,
     _call_site_file_url,
     _file_link_url,
 )
@@ -24,6 +25,7 @@ from semipy.decorator import get_semiformal_context
 from semipy.resolver import resolve
 from semipy.store import (
     function_name_for_commit,
+    get_dispatch_function_line_range,
     load_function_from_dispatch,
     load_portal,
     save_portal,
@@ -36,6 +38,7 @@ from semipy.types import (
     GenerationSpec,
     NamedCallSiteInfo,
     PromptTemplate,
+    SemiCallError,
     SemiCallSite,
     TemplatePart,
     Usage,
@@ -45,6 +48,29 @@ from semipy.types import (
 
 _portal_cache: dict[str, Any] = {}
 _dispatch_globals_cache: dict[str, dict[str, Any]] = {}
+
+
+def _call_generated_fn(
+    fn: Any,
+    call_site: SemiCallSite,
+    generated_path: str,
+    line_range: tuple[int, int],
+    prompt_preview: str,
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
+    """Invoke generated function; on exception raise SemiCallError pointing to user call site."""
+    try:
+        return fn(*args, **kwargs)
+    except Exception as e:
+        raise SemiCallError(
+            "Generated semi() function raised at runtime",
+            call_site=call_site,
+            generated_path=generated_path,
+            line_range=line_range,
+            prompt_preview=prompt_preview,
+            cause=e,
+        ) from e
 
 
 def _normalize_filename(path: str) -> str:
@@ -250,16 +276,22 @@ def _semi_inline(
                 fn_name = function_name_for_commit(resolution.slot, commit)
                 fn = load_function_from_dispatch(cache_dir, module_name, fn_name, _dispatch_globals_cache)
                 if fn is not None:
+                    dispatch_path = _dispatch_module_path(cache_dir, module_name)
+                    path_str = str(dispatch_path)
+                    code_line_range = get_dispatch_function_line_range(dispatch_path, fn_name)
                     if config.verbose:
-                        path = str(_dispatch_module_path(cache_dir, module_name))
                         print_dag_reuse(
                             call_site,
                             resolution.commit_id,
-                            path,
+                            path_str,
                             _call_site_file_url(call_site.filename, call_site.lineno),
-                            _file_link_url(path),
+                            _file_link_url(path_str),
+                            code_line_range=code_line_range if code_line_range != (0, 0) else None,
                         )
-                    return fn(*all_values_ordered, **kwargs)
+                    return _call_generated_fn(
+                        fn, call_site, path_str, code_line_range, prompt,
+                        *all_values_ordered, **kwargs,
+                    )
                 need_generate = True
 
         if resolution.decision in (Decision.ADAPT, Decision.GENERATE) or need_generate:
@@ -282,6 +314,7 @@ def _semi_inline(
                 parent_sources=resolution.parent_sources,
                 parent_commit_ids=resolution.parent_commit_ids,
                 lineage_summary=resolution.lineage_summary,
+                usage_hint=getattr(site_info, "usage_hint", ""),
             )
             entry = SemiAgent().generate(spec)
             constants_snapshot = freeze_constants(constant_values)
@@ -309,32 +342,38 @@ def _semi_inline(
             )
             add_commit_to_slot(slot, commit, branch_name, usage.usage_id())
             save_portal(cache_dir, portal)
-            write_dispatch_module(cache_dir, portal)
+            _dispatch_path, fn_line_map = write_dispatch_module(cache_dir, portal)
             _dispatch_globals_cache.pop(module_name, None)
             fn_name = function_name_for_commit(slot, commit)
             fn = load_function_from_dispatch(cache_dir, module_name, fn_name, _dispatch_globals_cache)
             if fn is None:
                 fn = entry.compiled_fn
+            path_str = str(_dispatch_path)
+            code_line_range = fn_line_map.get(fn_name, (0, 0))
             if config.verbose:
-                path = str(_dispatch_module_path(cache_dir, module_name))
                 if resolution.decision == Decision.ADAPT and resolution.parent_commit_ids:
                     print_dag_adapt(
                         call_site,
                         commit.commit_id,
                         resolution.parent_commit_ids[0],
-                        path,
+                        path_str,
                         _call_site_file_url(call_site.filename, call_site.lineno),
-                        _file_link_url(path),
+                        _file_link_url(path_str),
+                        code_line_range=code_line_range if code_line_range != (0, 0) else None,
                     )
                 else:
                     print_dag_generate(
                         call_site,
                         commit.commit_id,
-                        path,
+                        path_str,
                         _call_site_file_url(call_site.filename, call_site.lineno),
-                        _file_link_url(path),
+                        _file_link_url(path_str),
+                        code_line_range=code_line_range if code_line_range != (0, 0) else None,
                     )
-            return fn(*all_values_ordered, **kwargs)
+            return _call_generated_fn(
+                fn, call_site, path_str, code_line_range, prompt,
+                *all_values_ordered, **kwargs,
+            )
 
     return _semi_fallback(prompt, call_site, cache_dir, session_id, module_name, expected_type=expected_type, require_tools=require_tools, **kwargs)
 
@@ -400,16 +439,20 @@ def _semi_named(name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any
             fn_name = function_name_for_commit(resolution.slot, commit)
             fn = load_function_from_dispatch(cache_dir, module_name, fn_name, _dispatch_globals_cache)
             if fn is not None:
+                dispatch_path = _dispatch_module_path(cache_dir, module_name)
+                path_str = str(dispatch_path)
+                code_line_range = get_dispatch_function_line_range(dispatch_path, fn_name)
                 if config.verbose:
-                    path = str(_dispatch_module_path(cache_dir, module_name))
                     print_dag_reuse(
                         call_site,
                         resolution.commit_id,
-                        path,
+                        path_str,
                         _call_site_file_url(call_site.filename, call_site.lineno),
-                        _file_link_url(path),
+                        _file_link_url(path_str),
+                        code_line_range=code_line_range if code_line_range != (0, 0) else None,
                     )
-                return fn(*args, **kwargs)
+                prompt_preview = f"semi.{name}(...)"
+                return _call_generated_fn(fn, call_site, path_str, code_line_range, prompt_preview, *args, **kwargs)
             need_generate = True
 
     if resolution.decision in (Decision.ADAPT, Decision.GENERATE) or need_generate:
@@ -434,6 +477,7 @@ def _semi_named(name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any
             parent_commit_ids=resolution.parent_commit_ids,
             lineage_summary=resolution.lineage_summary,
             method_name=name,
+            usage_hint=getattr(site_info, "usage_hint", "") if site_info is not None else "",
         )
         entry = SemiAgent().generate(spec)
         constants_snapshot = freeze_constants(constant_values)
@@ -458,32 +502,35 @@ def _semi_named(name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any
         )
         add_commit_to_slot(slot, commit, branch_name, usage.usage_id())
         save_portal(cache_dir, portal)
-        write_dispatch_module(cache_dir, portal)
+        _dispatch_path, fn_line_map = write_dispatch_module(cache_dir, portal)
         _dispatch_globals_cache.pop(module_name, None)
         fn_name = function_name_for_commit(slot, commit)
         fn = load_function_from_dispatch(cache_dir, module_name, fn_name, _dispatch_globals_cache)
         if fn is None:
             fn = entry.compiled_fn
+        path_str = str(_dispatch_path)
+        code_line_range = fn_line_map.get(fn_name, (0, 0))
         if config.verbose:
-            path = str(_dispatch_module_path(cache_dir, module_name))
             if resolution.decision == Decision.ADAPT and resolution.parent_commit_ids:
                 print_dag_adapt(
                     call_site,
                     commit.commit_id,
                     resolution.parent_commit_ids[0],
-                    path,
+                    path_str,
                     _call_site_file_url(call_site.filename, call_site.lineno),
-                    _file_link_url(path),
+                    _file_link_url(path_str),
+                    code_line_range=code_line_range if code_line_range != (0, 0) else None,
                 )
             else:
                 print_dag_generate(
                     call_site,
                     commit.commit_id,
-                    path,
+                    path_str,
                     _call_site_file_url(call_site.filename, call_site.lineno),
-                    _file_link_url(path),
+                    _file_link_url(path_str),
+                    code_line_range=code_line_range if code_line_range != (0, 0) else None,
                 )
-        return fn(*args, **kwargs)
+        return _call_generated_fn(fn, call_site, path_str, code_line_range, prompt, *args, **kwargs)
 
 
 def _sample_from_values(
@@ -535,16 +582,19 @@ def _semi_fallback(
             fn = load_function_from_dispatch(cache_dir, module_name, fn_name, _dispatch_globals_cache)
             if fn is not None:
                 config = get_config()
+                dispatch_path = _dispatch_module_path(cache_dir, module_name)
+                path_str = str(dispatch_path)
+                code_line_range = get_dispatch_function_line_range(dispatch_path, fn_name)
                 if config.verbose:
-                    path = str(_dispatch_module_path(cache_dir, module_name))
                     print_dag_reuse(
                         call_site,
                         resolution.commit_id,
-                        path,
+                        path_str,
                         _call_site_file_url(call_site.filename, call_site.lineno),
-                        _file_link_url(path),
+                        _file_link_url(path_str),
+                        code_line_range=code_line_range if code_line_range != (0, 0) else None,
                     )
-                return fn(prompt, **kwargs)
+                return _call_generated_fn(fn, call_site, path_str, code_line_range, prompt, prompt, **kwargs)
 
     spec = GenerationSpec(
         prompt=prompt,
@@ -567,23 +617,25 @@ def _semi_fallback(
     )
     add_commit_to_slot(slot, commit, "main", usage.usage_id())
     save_portal(cache_dir, portal)
-    write_dispatch_module(cache_dir, portal)
+    _dispatch_path, fn_line_map = write_dispatch_module(cache_dir, portal)
     _dispatch_globals_cache.pop(module_name, None)
     fn_name = function_name_for_commit(slot, commit)
     fn = load_function_from_dispatch(cache_dir, module_name, fn_name, _dispatch_globals_cache)
     if fn is None:
         fn = entry.compiled_fn
+    path_str = str(_dispatch_path)
+    code_line_range = fn_line_map.get(fn_name, (0, 0))
     config = get_config()
     if config.verbose:
-        path = str(_dispatch_module_path(cache_dir, module_name))
         print_dag_generate(
             call_site,
             commit.commit_id,
-            path,
+            path_str,
             _call_site_file_url(call_site.filename, call_site.lineno),
-            _file_link_url(path),
+            _file_link_url(path_str),
+            code_line_range=code_line_range if code_line_range != (0, 0) else None,
         )
-    return fn(prompt, **kwargs)
+    return _call_generated_fn(fn, call_site, path_str, code_line_range, prompt, prompt, **kwargs)
 
 
 class _SemiMethod:

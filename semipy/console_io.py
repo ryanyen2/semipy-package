@@ -107,6 +107,42 @@ def _format_call_source(call_site: SemiCallSite) -> str:
     )
 
 
+def _format_call_site_short(call_site: SemiCallSite) -> str:
+    """Short call site for progress line: file:line (func)."""
+    from os.path import basename
+    f = basename(call_site.filename) if call_site.filename else "<unknown>"
+    fn = call_site.func_qualname or "?"
+    return f"{f}:{call_site.lineno} ({fn})"
+
+
+def print_pipeline_log(
+    call_site: Optional[SemiCallSite],
+    stage: str,
+    message: str,
+) -> None:
+    """Print one pipeline line: [semipy] [stage] call_site message (cohesive format)."""
+    console = get_console()
+    loc = _format_call_site_short(call_site) if call_site else "?"
+    console.print(
+        f"[dim][semipy][/] [cyan][{stage}][/] {loc} {message}",
+        no_wrap=True,
+    )
+
+
+def _path_with_line_range(path: str, line_range: tuple[int, int]) -> str:
+    """Return path#Lstart-Lend for IDE link when line_range is non-zero."""
+    if not path or line_range == (0, 0):
+        return path
+    s, e = line_range
+    if s <= 0:
+        return path
+    try:
+        uri = Path(path).resolve().as_uri()
+        return f"{uri}#L{s}-L{e}" if e > s else f"{uri}#L{s}"
+    except Exception:
+        return path
+
+
 def _print_semipy_line_once(
     source: str,
     generation: str,
@@ -114,9 +150,10 @@ def _print_semipy_line_once(
     style: str = "green",
     source_link: Optional[str] = None,
     path_link: Optional[str] = None,
+    code_line_range: Optional[tuple[int, int]] = None,
 ) -> None:
     """Print one line: [semipy] Call from {source}. {generation}. Code at {path}. Links optional."""
-    key = (source, generation, code_path)
+    key = (source, generation, code_path, str(code_line_range) if code_line_range else "")
     if key in _semipy_log_printed:
         return
     _semipy_log_printed.add(key)
@@ -124,8 +161,14 @@ def _print_semipy_line_once(
     source_part = f"[link={source_link}]{source}[/link]" if source_link else source
     suffix = ""
     if code_path.strip():
-        path_display = _short_display_path(code_path) if path_link else code_path
-        path_part = f"[link={path_link}]{path_display}[/link]" if path_link else path_display
+        path_display = _short_display_path(code_path)
+        if code_line_range and code_line_range != (0, 0):
+            s, e = code_line_range
+            path_display = f"{path_display} (lines {s}-{e})"
+        link = path_link or _file_link_url(code_path)
+        if code_line_range and code_line_range != (0, 0):
+            link = _path_with_line_range(code_path, code_line_range)
+        path_part = f"[link={link}]{path_display}[/link]" if link else path_display
         suffix = f" Code at {path_part}."
     console.print(
         f"[dim][semipy][/] Call from {source_part}. [{style}]{generation}[/]{suffix}",
@@ -155,11 +198,12 @@ def print_dag_reuse(
     code_path: str,
     source_link: Optional[str] = None,
     path_link: Optional[str] = None,
+    code_line_range: Optional[tuple[int, int]] = None,
 ) -> None:
-    """Log REUSE: call source, reused implementation, code path."""
+    """Log REUSE: call source, reused implementation, code path (optional line range)."""
     source = _format_call_source(call_site)
     generation = f"Reused existing implementation (commit {commit_id[:8]})"
-    _print_semipy_line_once(source, generation, code_path, "green", source_link, path_link)
+    _print_semipy_line_once(source, generation, code_path, "green", source_link, path_link, code_line_range)
 
 
 def print_dag_adapt(
@@ -169,11 +213,12 @@ def print_dag_adapt(
     code_path: str,
     source_link: Optional[str] = None,
     path_link: Optional[str] = None,
+    code_line_range: Optional[tuple[int, int]] = None,
 ) -> None:
-    """Log ADAPT: call source, adapted from parent, code path."""
+    """Log ADAPT: call source, adapted from parent, code path (optional line range)."""
     source = _format_call_source(call_site)
     generation = f"Adapted from previous (commit {parent_commit_id[:8]} -> {commit_id[:8]})"
-    _print_semipy_line_once(source, generation, code_path, "cyan", source_link, path_link)
+    _print_semipy_line_once(source, generation, code_path, "cyan", source_link, path_link, code_line_range)
 
 
 def print_dag_generate(
@@ -182,11 +227,12 @@ def print_dag_generate(
     code_path: str,
     source_link: Optional[str] = None,
     path_link: Optional[str] = None,
+    code_line_range: Optional[tuple[int, int]] = None,
 ) -> None:
-    """Log GENERATE: call source, new implementation, code path."""
+    """Log GENERATE: call source, new implementation, code path (optional line range)."""
     source = _format_call_source(call_site)
     generation = f"New implementation (commit {commit_id[:8]})"
-    _print_semipy_line_once(source, generation, code_path, "yellow", source_link, path_link)
+    _print_semipy_line_once(source, generation, code_path, "yellow", source_link, path_link, code_line_range)
 
 
 def print_slot_history(slot: Any, max_entries: int = 20) -> None:
@@ -311,15 +357,32 @@ class GenerationProgress:
         self._failure_source: Optional[str] = None
         self._steps: list[str] = []
         self._status = None
+        self._call_site: Optional[SemiCallSite] = None
+        self._stage: str = ""
+
+    def set_call_site(self, call_site: Optional[SemiCallSite]) -> None:
+        self._call_site = call_site
+
+    def set_stage(self, stage: str) -> None:
+        self._stage = stage
+
+    def _status_message(self, message: str) -> str:
+        prefix = ""
+        if self._call_site is not None:
+            prefix = _format_call_site_short(self._call_site) + " "
+        if self._stage:
+            prefix = f"[{self._stage}] " + prefix
+        return f"[bold blue]{prefix}{message}[/]"
 
     def update(self, message: str) -> None:
         if not self._verbose:
             return
         console = get_console()
+        full = self._status_message(message)
         if self._status is not None:
-            self._status.update(f"[bold blue]{message}[/]")
+            self._status.update(full)
         else:
-            self._status = console.status(f"[bold blue]{message}[/]")
+            self._status = console.status(full)
             self._status.__enter__()
 
     def log_step(self, step: str) -> None:

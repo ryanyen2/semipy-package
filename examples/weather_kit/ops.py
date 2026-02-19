@@ -52,17 +52,28 @@ def plot_timeseries(
     """Plot variable vs time. date_column inferred via semi when None."""
     
     tbl = ds.table()
-    date_columns = [col for col in tbl.columns if semi(f"date or time from {tbl.columns.tolist()}") in col.lower()]
+    date_columns = [col for col in tbl.columns if semi(f"field as datetime from {tbl.columns.tolist()}") in col.lower()]
     date_column = date_columns[0] if date_columns else tbl.columns[0]
-    
+
     plt.figure()
-    # plt.plot(tbl[date_column], tbl[variable])
-    semi.plot_scalable_timeseries(tbl, variable, date_column)
+    plt.plot(tbl[date_column], tbl[variable])
     plt.xlabel(date_column)
+    # TODO: this example showng the error of incompatibility with the matplotlib type hints: TypeError: 'locator' must be an instance of matplotlib.ticker.Locator, not a tuple
+    # plt.gca().xaxis.set_major_locator(semi(f"set major locator for {date_column} based on the data"))
+    plt.gca().xaxis.set_major_locator(plt.MaxNLocator(integer=True))
+    plt.gca().xaxis.set_major_formatter(plt.FormatStrFormatter(semi(f"format major ticks for {date_column} based on the data")))
     plt.ylabel(variable)
     plt.gca().tick_params(axis="x", rotation=45)
     return plt.gcf()
 
+def map_fetched_weather_to_row(fetched_weather: dict[str, Any], table: pd.DataFrame) -> dict[str, Any]:
+    # 1. find the date column
+    # 2. map the fetched weather to the table columns
+    
+    # 3. return the new row
+    date_column = semi.pick_date_column(table.columns.tolist())
+    new_row = {date_column: fetched_weather.get("time"), **fetched_weather}
+    return new_row
 
 @semiformal("fetch latest weather and append one row to the table")
 def latest_append(user_data: WeatherDataset, city: str, **kwargs: Any) -> WeatherDataset:

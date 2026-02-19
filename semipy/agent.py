@@ -10,6 +10,7 @@ from semipy.console_io import (
     confirm,
     generation_progress,
     get_console,
+    print_pipeline_log,
     source_preview,
     decision_description,
     validation_error_panel,
@@ -59,6 +60,58 @@ class SemiAgent:
         )
         self.tools: List[SemiTool] = list(tools) if tools is not None else []
 
+    def _describe_value(self, name: str, value: Any) -> str:
+        """Data-agnostic introspection via duck typing; truncates to limit prompt size."""
+        lines: list[str] = [f"{name}: type={type(value).__name__}"]
+        try:
+            if hasattr(value, "columns") and hasattr(value, "dtypes"):
+                lines.append(f"  columns: {list(value.columns)}")
+                try:
+                    dtypes = getattr(value.dtypes, "to_dict", lambda: dict(value.dtypes))()
+                    lines.append(f"  dtypes: {dtypes}")
+                except Exception:
+                    pass
+            elif hasattr(value, "columns"):
+                lines.append(f"  columns: {list(value.columns)}")
+            if hasattr(value, "shape"):
+                lines.append(f"  shape: {value.shape}")
+            if hasattr(value, "keys") and callable(value.keys):
+                keys = list(value.keys())[:20]
+                lines.append(f"  keys (sample): {keys}")
+            if hasattr(value, "__len__") and not hasattr(value, "shape"):
+                try:
+                    lines.append(f"  len: {len(value)}")
+                except Exception:
+                    pass
+            if hasattr(value, "__iter__") and not hasattr(value, "columns") and not hasattr(value, "keys"):
+                try:
+                    sample = list(value)[:10]
+                    lines.append(f"  sample: {sample}")
+                except Exception:
+                    pass
+        except Exception:
+            lines.append("  (introspection skipped)")
+        raw = "\n".join(lines)
+        max_len = 800
+        return raw if len(raw) <= max_len else raw[: max_len - 3] + "..."
+
+    def _describe_context(self, spec: GenerationSpec) -> str:
+        """Aggregate data context: variable_values descriptions, type_hints, trimmed source."""
+        parts: list[str] = []
+        if spec.variable_values:
+            for n, v in spec.variable_values.items():
+                parts.append(self._describe_value(n, v))
+        if spec.context:
+            if spec.context.type_hints:
+                parts.append("Type hints: " + str(spec.context.type_hints))
+            if spec.context.source_code:
+                lines = spec.context.source_code.strip().splitlines()
+                trimmed = lines[:30] if len(lines) > 30 else lines
+                parts.append("Source (excerpt):\n" + "\n".join(trimmed))
+        if not parts:
+            return ""
+        return "Data context:\n" + "\n\n".join(parts)
+
     def _build_user_prompt(self, spec: GenerationSpec) -> str:
         parts = [
             "Implement a single Python function that satisfies this request:",
@@ -89,8 +142,18 @@ class SemiAgent:
                 f"- The function will be called with exactly {n} positional arguments (in order). "
                 "The first argument is the value that changes per invocation; the rest are fixed context for this call."
             )
+        context_block = self._describe_context(spec)
+        if context_block:
+            parts.append("")
+            parts.append(context_block)
+        if getattr(spec, "usage_hint", ""):
+            parts.append(f"- Usage context: the result will be {spec.usage_hint}")
+            if "FormatStrFormatter" in spec.usage_hint:
+                parts.append(
+                    "- The result is passed to matplotlib FormatStrFormatter: use a Python % format (e.g. %.1f, %d), not strftime (e.g. %Y-%m-%d)."
+                )
         if spec.sample_input:
-            parts.append("- Sample input for testing:")
+            parts.append("- Sample input (the function will be called with these argument types):")
             parts.append(json.dumps(spec.sample_input, default=repr, indent=2))
         if spec.constant_values:
             parts.append("- Constant context (use as parameters after the first, or bake into the function):")
@@ -120,8 +183,18 @@ class SemiAgent:
             parts.append("```python")
             parts.append(spec.parent_sources[0].strip())
             parts.append("```")
+        context_block = self._describe_context(spec)
+        if context_block:
+            parts.append("")
+            parts.append(context_block)
+        if getattr(spec, "usage_hint", ""):
+            parts.append(f"- Usage context: the result will be {spec.usage_hint}")
+            if "FormatStrFormatter" in spec.usage_hint:
+                parts.append(
+                    "- The result is passed to matplotlib FormatStrFormatter: use a Python % format (e.g. %.1f, %d), not strftime (e.g. %Y-%m-%d)."
+                )
         if spec.sample_input:
-            parts.append("- Sample input for testing:")
+            parts.append("- Sample input (the function will be called with these argument types):")
             parts.append(json.dumps(spec.sample_input, default=repr, indent=2))
         if spec.constant_values:
             parts.append("- Constant context (bake into the function or add as parameters):")
@@ -148,8 +221,11 @@ class SemiAgent:
 
         decision = spec.decision if spec.decision is not None else Decision.GENERATE
         with generation_progress(self.verbose) as progress:
+            progress.set_call_site(spec.call_site)
             progress.log_step("Generate")
             progress.log_step(f"Decision: {decision_description(decision)}")
+            print_pipeline_log(spec.call_site, "resolve", f"Cache miss. {decision_description(decision)}")
+            progress.set_stage("generate")
             progress.update(f"Cache miss. {decision_description(decision)}")
             if self.confirm_on_external_tools and getattr(spec, "require_external_tools", False):
                 config = get_config()
@@ -179,15 +255,17 @@ class SemiAgent:
             for attempt in range(total_attempts):
                 progress.log_step(f"Generating (attempt {attempt + 1}/{total_attempts})")
                 if last_result and (last_result.error_message or ""):
-                    progress.update(
-                        f"Retrying (attempt {attempt + 1}/{total_attempts}): fixing validation error..."
-                    )
+                    print_pipeline_log(spec.call_site, "generate", f"Retry {attempt + 1}/{total_attempts}: fixing validation error")
+                    progress.set_stage("generate")
+                    progress.update(f"Retrying (attempt {attempt + 1}/{total_attempts}): fixing validation error...")
                 elif not tool_refs:
+                    print_pipeline_log(spec.call_site, "generate", f"Calling LLM (attempt {attempt + 1}/{total_attempts})")
+                    progress.set_stage("generate")
                     progress.update(f"Calling LLM (attempt {attempt + 1}/{total_attempts})...")
                 else:
-                    progress.update(
-                        f"Calling LLM with tools (attempt {attempt + 1}/{total_attempts})..."
-                    )
+                    print_pipeline_log(spec.call_site, "generate", f"Calling LLM with tools (attempt {attempt + 1}/{total_attempts})")
+                    progress.set_stage("generate")
+                    progress.update(f"Calling LLM with tools (attempt {attempt + 1}/{total_attempts})...")
 
                 on_chunk = None
                 if self.stream and self.verbose:
@@ -204,6 +282,8 @@ class SemiAgent:
 
                 progress.update("Parsing generated code...")
                 source = _extract_function_source(raw)
+                print_pipeline_log(spec.call_site, "validate", "Validating (AST, type, execution)")
+                progress.set_stage("validate")
                 progress.log_step("Validating (AST, type, execution)")
                 progress.update("Validating (AST, type, execution)...")
                 result = validate(
@@ -214,6 +294,7 @@ class SemiAgent:
                 )
 
                 if result.passed:
+                    print_pipeline_log(spec.call_site, "validate", "Valid (AST, type, execution)")
                     progress.log_step("Valid")
                     progress.record_success(
                         attempt + 1,

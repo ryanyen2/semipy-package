@@ -6,6 +6,11 @@ from typing import Any, Optional
 
 from semipy.types import ValidationResult
 
+_UNKNOWN_RETURN_NONE_MSG = (
+    "Return type is unknown (expected_type is None) and the function returned None. "
+    "Consider adding a type hint so validation can verify the result."
+)
+
 
 def _extract_function_source(raw: str) -> str:
     """Extract Python code from markdown code block if present."""
@@ -25,18 +30,26 @@ def _extract_function_source(raw: str) -> str:
 
 def _get_return_type_from_ast(tree: ast.AST) -> type:
     """Infer return type from the single function def in the source."""
+    _name_to_type = {
+        "bool": bool,
+        "str": str,
+        "int": int,
+        "float": float,
+        "list": list,
+        "dict": dict,
+        "tuple": tuple,
+        "set": set,
+        "bytes": bytes,
+    }
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.returns:
-            if isinstance(node.returns, ast.Name):
-                name = node.returns.id
-                if name == "bool":
-                    return bool
-                if name == "str":
-                    return str
-                if name == "int":
-                    return int
-                if name == "float":
-                    return float
+            ret = node.returns
+            if isinstance(ret, ast.Name):
+                return _name_to_type.get(ret.id, type(None))
+            if isinstance(ret, ast.Subscript) and isinstance(ret.value, ast.Name):
+                return _name_to_type.get(ret.value.id, type(None))
+            if isinstance(ret, ast.Constant) and ret.value is None:
+                return type(None)
             return type(None)
     return type(None)
 
@@ -114,6 +127,9 @@ def validate(
                 if expected_type is not type(None) and not isinstance(result, expected_type):
                     execution_ok = False
                     exec_error = f"Returned {type(result).__name__}, expected {expected_type.__name__}"
+                elif expected_type is type(None) and result is None:
+                    execution_ok = False
+                    exec_error = _UNKNOWN_RETURN_NONE_MSG
         except Exception as e:
             execution_ok = False
             exec_error = str(e)

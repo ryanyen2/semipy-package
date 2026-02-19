@@ -121,6 +121,7 @@ class SemiCallSiteInfo:
     template: PromptTemplate
     expected_type: type
     loop_variant_names: list[str]  # which variable_names are loop-variant (function params)
+    usage_hint: str = ""
 
 
 @dataclass
@@ -133,6 +134,7 @@ class NamedCallSiteInfo:
     expected_type: type
     loop_variant_names: list[str]
     kwarg_names: list[str]
+    usage_hint: str = ""
 
 
 @dataclass
@@ -174,6 +176,7 @@ class GenerationSpec:
     parent_commit_ids: Optional[list[str]] = None
     lineage_summary: Optional[str] = None
     method_name: Optional[str] = None  # for semi.name(...) named calls
+    usage_hint: str = ""
 
 
 @dataclass
@@ -191,6 +194,44 @@ class SemiGenerationError(Exception):
     """Raised when the agent cannot produce a valid function after retries."""
 
     pass
+
+
+class SemiCallError(Exception):
+    """Raised when a generated semi() function raises at runtime. Points to user call site first."""
+
+    def __init__(
+        self,
+        message: str,
+        call_site: Optional[SemiCallSite] = None,
+        generated_path: str = "",
+        line_range: tuple[int, int] = (0, 0),
+        prompt_preview: str = "",
+        cause: Optional[BaseException] = None,
+    ):
+        super().__init__(message)
+        self.call_site = call_site
+        self.generated_path = generated_path
+        self.line_range = line_range
+        self.prompt_preview = prompt_preview
+        self.__cause__ = cause
+
+    def __str__(self) -> str:
+        parts = [super().__str__()]
+        if self.call_site is not None:
+            loc = f"{self.call_site.filename}:{self.call_site.lineno}"
+            if self.call_site.func_qualname:
+                loc += f" ({self.call_site.func_qualname})"
+            parts.append(f"semi() call at {loc}")
+        if self.generated_path and self.line_range != (0, 0):
+            s, e = self.line_range
+            parts.append(f"generated code at {self.generated_path}:L{s}-L{e}")
+        elif self.generated_path:
+            parts.append(f"generated code at {self.generated_path}")
+        if self.prompt_preview:
+            parts.append(f"prompt: {self.prompt_preview[:80]}...")
+        if self.__cause__ is not None:
+            parts.append(f"cause: {self.__cause__}")
+        return " | ".join(parts)
 
 
 # Protocol for deterministic tools run by the agent (e.g. code analyzer, checker).
