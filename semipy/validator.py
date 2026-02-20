@@ -1,10 +1,62 @@
-"""Three-stage validation of generated semi() functions."""
+"""Three-stage validation of generated semi() functions.
+
+Validation runs the generated function in isolation with sample_input. To catch
+errors that only appear when the return value is used by the callee, we
+optionally run a usage-context check: when usage_hint describes "passed as
+argument N to <path>", we try to resolve that callable and call it with the
+result. If the callee raises, we use that exception as the validation error
+(no library-specific rules). If the callable cannot be resolved safely, we
+skip. Runtime errors remain the source of truth and produce SemiCallError
+with full context; regeneration can use that feedback on the next run.
+"""
 from __future__ import annotations
 
 import ast
+import re
 from typing import Any, Optional
 
 from semipy.types import ValidationResult
+
+# Whitelist of prefix -> module for usage-context execution (no arbitrary imports).
+_USAGE_CONTEXT_IMPORTS: dict[str, str] = {
+    "plt": "matplotlib.pyplot",
+    "np": "numpy",
+}
+
+
+def _run_in_usage_context(usage_hint: str, result: Any) -> Optional[str]:
+    """If usage_hint is 'passed as argument N to <path>', try calling that with result; return error message or None."""
+    if not usage_hint:
+        return None
+    m = re.search(r"passed as argument \d+ to ([a-zA-Z0-9_.()]+)", usage_hint, re.IGNORECASE)
+    if not m:
+        return None
+    path = m.group(1).strip()
+    if not path:
+        return None
+    parts = path.split(".")
+    if not parts:
+        return None
+    prefix = parts[0]
+    if prefix not in _USAGE_CONTEXT_IMPORTS:
+        return None
+    try:
+        mod = __import__(_USAGE_CONTEXT_IMPORTS[prefix], fromlist=[prefix])
+    except Exception:
+        return None
+    ns: dict[str, Any] = {prefix: mod}
+    try:
+        if len(parts) == 1:
+            callable_obj = mod
+        else:
+            receiver_expr = ".".join(parts[:-1])
+            receiver = eval(receiver_expr, ns)
+            callable_obj = getattr(receiver, parts[-1])
+        callable_obj(result)
+        return None
+    except Exception as e:
+        return f"When calling {path}(result): {type(e).__name__}: {e}"
+
 
 _UNKNOWN_RETURN_NONE_MSG = (
     "Return type is unknown (expected_type is None) and the function returned None. "
@@ -59,6 +111,7 @@ def validate(
     expected_type: type,
     sample_input: Optional[dict[str, Any]] = None,
     enable_execution: bool = True,
+    usage_hint: str = "",
 ) -> ValidationResult:
     """
     Stage 1: AST - parse and ensure one function def.
@@ -130,6 +183,11 @@ def validate(
                 elif expected_type is type(None) and result is None:
                     execution_ok = False
                     exec_error = _UNKNOWN_RETURN_NONE_MSG
+                else:
+                    usage_msg = _run_in_usage_context(usage_hint, result)
+                    if usage_msg:
+                        execution_ok = False
+                        exec_error = usage_msg
         except Exception as e:
             execution_ok = False
             exec_error = str(e)

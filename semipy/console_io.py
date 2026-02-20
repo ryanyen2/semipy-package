@@ -86,6 +86,33 @@ def _short_display_path(full_path: str) -> str:
         return full_path if len(full_path) <= 52 else f"...{full_path[-48:]}"
 
 
+def _relative_display_path(
+    path: str,
+    line: Optional[int] = None,
+    end_line: Optional[int] = None,
+    max_len: int = 56,
+) -> str:
+    """Path relative to cwd for log display; keeps under max_len."""
+    try:
+        p = Path(path).resolve()
+        try:
+            s = str(p.relative_to(Path.cwd()))
+        except ValueError:
+            s = p.name
+        if line is not None:
+            s = f"{s}:{line}" if end_line is None or end_line == line else f"{s}:{line}-{end_line}"
+        if len(s) <= max_len:
+            return s
+        if ":" in s:
+            path_part, line_part = s.split(":", 1)
+            budget = max_len - len(line_part) - 1
+            path_part = ("..." + path_part[-budget + 3 :]) if len(path_part) > budget else path_part
+            return f"{path_part}:{line_part}"
+        return "..." + s[-(max_len - 3) :]
+    except Exception:
+        return (path[: max_len - 3] + "...") if len(path) > max_len else path
+
+
 def _file_link_url(path: str) -> str:
     """file:// URL for terminal hyperlink (Rich [link=...])."""
     try:
@@ -145,13 +172,16 @@ def _path_with_line_range(path: str, line_range: tuple[int, int]) -> str:
 
 def _traceback_style_location(path: str, line: int, end_line: Optional[int] = None) -> str:
     """Format as Python traceback so VSCode/terminal makes it command-clickable: File \"path\", line N."""
-    try:    
+    try:
         abs_path = str(Path(path).resolve())
     except Exception:
         abs_path = path
     if end_line is not None and end_line != line:
         return f'File "{abs_path}":{line}-{end_line}'
     return f'File "{abs_path}":{line}'
+
+
+_LOG_MAX_WIDTH = 96
 
 
 def _print_semipy_line_once(
@@ -163,7 +193,7 @@ def _print_semipy_line_once(
     path_link: Optional[str] = None,
     code_line_range: Optional[tuple[int, int]] = None,
 ) -> None:
-    """Print one line: [semipy] Call from {source}. {generation}. Code at {path}. Links optional."""
+    """Print [semipy] Call from {source}. {generation}. Code at {path}. Uses relative path; splits to two lines if over width."""
     key = (source, generation, code_path, str(code_line_range) if code_line_range else "")
     if key in _semipy_log_printed:
         return
@@ -175,16 +205,23 @@ def _print_semipy_line_once(
         link = path_link or _file_link_url(code_path)
         if code_line_range and code_line_range != (0, 0):
             s, e = code_line_range
-            path_display = _traceback_style_location(code_path, s, e)
+            path_display = _relative_display_path(code_path, s, e, max_len=48)
             link = _path_with_line_range(code_path, code_line_range)
         else:
-            path_display = _short_display_path(code_path)
+            path_display = _relative_display_path(code_path, max_len=48)
         path_part = f"[link={link}]{path_display}[/link]" if link else path_display
         suffix = f" Code at {path_part}."
-    console.print(
-        f"[dim][semipy][/] Call from {source_part}. [{style}]{generation}[/]{suffix}",
-        no_wrap=True,
-    )
+    line1 = f"[dim][semipy][/] Call from {source_part}. [{style}]{generation}[/]"
+    plain_len = len(f"[semipy] Call from {source}. {generation}") + (len(suffix) if suffix else 0)
+    try:
+        width = console.width if getattr(console, "width", None) else _LOG_MAX_WIDTH
+    except Exception:
+        width = _LOG_MAX_WIDTH
+    if plain_len > width and suffix:
+        console.print(line1 + ".")
+        console.print(f"  [dim]Code at[/] {path_part}.")
+    else:
+        console.print(line1 + suffix, no_wrap=True)
 
 
 def print_cache_hit_from_semi(
@@ -212,7 +249,7 @@ def print_dag_reuse(
     code_line_range: Optional[tuple[int, int]] = None,
 ) -> None:
     """Log REUSE: call source, reused implementation, code path (optional line range)."""
-    source = _traceback_style_location(call_site.filename, call_site.lineno)
+    source = _relative_display_path(call_site.filename, call_site.lineno)
     generation = f"Reused existing implementation (commit {commit_id[:8]})"
     _print_semipy_line_once(source, generation, code_path, "green", source_link, path_link, code_line_range)
 
@@ -227,7 +264,7 @@ def print_dag_adapt(
     code_line_range: Optional[tuple[int, int]] = None,
 ) -> None:
     """Log ADAPT: call source, adapted from parent, code path (optional line range)."""
-    source = _traceback_style_location(call_site.filename, call_site.lineno)
+    source = _relative_display_path(call_site.filename, call_site.lineno)
     generation = f"Adapted from previous (commit {parent_commit_id[:8]} -> {commit_id[:8]})"
     _print_semipy_line_once(source, generation, code_path, "cyan", source_link, path_link, code_line_range)
 
@@ -241,7 +278,7 @@ def print_dag_generate(
     code_line_range: Optional[tuple[int, int]] = None,
 ) -> None:
     """Log GENERATE: call source, new implementation, code path (optional line range)."""
-    source = _traceback_style_location(call_site.filename, call_site.lineno)
+    source = _relative_display_path(call_site.filename, call_site.lineno)
     generation = f"New implementation (commit {commit_id[:8]})"
     _print_semipy_line_once(source, generation, code_path, "yellow", source_link, path_link, code_line_range)
 

@@ -239,6 +239,42 @@ def _read_source_line(filename: str, lineno: int) -> Optional[str]:
     return None
 
 
+def _read_source_lines(path: str, start_line: int, end_line: int, max_lines: int = 25) -> list[str]:
+    """Return source lines from path [start_line, end_line], with line numbers. Caps at max_lines."""
+    if not path or start_line <= 0:
+        return []
+    try:
+        from pathlib import Path
+        p = Path(path).resolve()
+        if not p.exists():
+            return []
+        lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+        start = max(0, start_line - 1)
+        end = min(len(lines), end_line)
+        if start >= end:
+            return []
+        snippet = lines[start:end]
+        if len(snippet) > max_lines:
+            snippet = snippet[: max_lines - 1] + ["  ..."]
+        return [f"  {start + i + 1:4d} | {s}" for i, s in enumerate(snippet)]
+    except Exception:
+        return []
+
+
+def _relative_path_display(path: str, max_len: int = 64) -> str:
+    """Return path relative to cwd for display."""
+    try:
+        from pathlib import Path
+        p = Path(path).resolve()
+        try:
+            s = str(p.relative_to(Path.cwd()))
+        except ValueError:
+            s = p.name
+        return s if len(s) <= max_len else "..." + s[-(max_len - 3) :]
+    except Exception:
+        return path[:max_len] if len(path) > max_len else path
+
+
 class SemiCallError(Exception):
     """Raised when a generated semi() function raises at runtime. Includes a debugger-style summary."""
 
@@ -269,13 +305,8 @@ class SemiCallError(Exception):
         lines.append("")
 
         if self.call_site is not None:
-            try:
-                from pathlib import Path
-                user_path = str(Path(self.call_site.filename).resolve())
-            except Exception:
-                user_path = self.call_site.filename
+            user_path = _relative_path_display(self.call_site.filename)
             lines.append(f"  Where: {user_path}:{self.call_site.lineno}")
-            lines.append(f"  (open this path in your editor and go to the line above)")
             if self.call_site.func_qualname:
                 lines.append(f"  In:    {self.call_site.func_qualname}")
             source_line = _read_source_line(self.call_site.filename, self.call_site.lineno)
@@ -293,17 +324,16 @@ class SemiCallError(Exception):
         lines.append(f"  Fix: {fix}")
         lines.append("")
 
-        if self.generated_path:
-            try:
-                from pathlib import Path
-                gen_path = str(Path(self.generated_path).resolve())
-            except Exception:
-                gen_path = self.generated_path
-            if self.line_range != (0, 0):
-                s, e = self.line_range
-                lines.append(f"  Generated implementation: {gen_path}:{s}-{e}")
-            else:
-                lines.append(f"  Generated implementation: {gen_path}")
+        if self.generated_path and self.line_range != (0, 0):
+            gen_path = _relative_path_display(self.generated_path)
+            s, e = self.line_range
+            lines.append(f"  Generated code ({gen_path}:{s}-{e}) — this return value caused the error:")
+            snippet = _read_source_lines(self.generated_path, s, e)
+            lines.extend(snippet)
+            lines.append("")
+        elif self.generated_path:
+            gen_path = _relative_path_display(self.generated_path)
+            lines.append(f"  Generated implementation: {gen_path}")
             lines.append("")
 
         lines.append("Original error:")

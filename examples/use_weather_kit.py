@@ -57,14 +57,14 @@ def main():
     # print("Inferred date column:", inferred)
 
     # --- latest_append: formal fetch + append (semi only if schema unmapped) ---
-    # print("\n=== 6. latest_append: fetch latest and append to existing data ===")
-    # try:
-    #     ds_with_latest = latest_append(ds_table, "Seattle")
-    #     tbl = ds_with_latest.table()
-    #     print("Rows before:", len(ds_table.table()), "-> after:", len(tbl))
-    #     print("Last row (appended):", tbl.iloc[-1].to_dict())
-    # except Exception as e:
-    #     print("latest_append error:", e)
+    print("\n=== 6. latest_append: fetch latest and append to existing data ===")
+    try:
+        ds_with_latest = latest_append(ds_table, "Seattle")
+        tbl = ds_with_latest.table()
+        print("Rows before:", len(ds_table.table()), "-> after:", len(tbl))
+        print("Last row (appended):", tbl.iloc[-1].to_dict())
+    except Exception as e:
+        print("latest_append error:", e)
 
 
 if __name__ == "__main__":
