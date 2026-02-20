@@ -1,4 +1,11 @@
-"""Runtime semiformal system: @semiformal and semi() for semantically underspecified logic."""
+"""
+Runtime semiformal system: @semiformal and semi() for semantically underspecified logic.
+
+Decorated functions call semi(f\"...\") or semi.name(...); the first run generates
+and caches a Python function, later runs reuse it. Exports: semiformal, semi,
+SemiConfig, configure, get_config, Decision, SemiCallError, SemiGenerationError,
+register_tool, parse_tool_refs.
+"""
 from semipy.decorator import semiformal
 from semipy.semi_fn import semi
 from semipy.config import SemiConfig, configure, get_config

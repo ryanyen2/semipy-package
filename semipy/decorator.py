@@ -1,4 +1,9 @@
-"""@semiformal decorator: source analysis and context injection."""
+"""
+@semiformal decorator: source analysis and context injection.
+
+Wraps functions (or methods on classes) to set SemiformalContext for the duration
+of the call. Extracts semi() and semi.name() call sites from source via AST.
+"""
 from __future__ import annotations
 
 import functools
@@ -15,6 +20,7 @@ _semiformal_context_var: ContextVar[Optional[SemiformalContext]] = ContextVar(
 
 
 def get_semiformal_context() -> Optional[SemiformalContext]:
+    """Return the current SemiformalContext if we are inside a @semiformal-decorated call."""
     return _semiformal_context_var.get()
 
 

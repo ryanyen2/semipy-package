@@ -8,6 +8,7 @@ from typing import Any
 
 
 def compute_source_hash(generated_source: str) -> str:
+    """Return a 20-char hash of the generated source for commit identity."""
     return hashlib.sha256(generated_source.encode()).hexdigest()[:20]
 
 
@@ -28,6 +29,7 @@ def compute_operation_signature(template_fingerprint: str, constants_snapshot: t
 
 
 def compute_commit_id(parent_ids: tuple[str, ...], source_hash: str) -> str:
+    """Stable commit id from parent ids and source hash."""
     key = "".join(sorted(parent_ids)) + source_hash
     return hashlib.sha256(key.encode()).hexdigest()[:20]
 
@@ -94,6 +96,7 @@ def create_commit(
     decision: str,
     usage_id: str = "",
 ) -> Commit:
+    """Build a new Commit and compute its id, source_hash, and operation_signature."""
     source_hash = compute_source_hash(generated_source)
     commit_id = compute_commit_id(parent_ids, source_hash)
     operation_signature = compute_operation_signature(template_fingerprint, constants_snapshot)
@@ -120,6 +123,7 @@ def add_commit_to_slot(
     branch_name: str,
     usage_id: str,
 ) -> None:
+    """Add commit to slot, set branch head, and register ref from usage_id to commit."""
     slot.commits[commit.commit_id] = commit
     slot.branches[branch_name] = Branch(name=branch_name, head=commit.commit_id)
     slot.refs[usage_id] = commit.commit_id

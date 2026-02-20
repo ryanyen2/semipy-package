@@ -58,7 +58,7 @@ def filter_errors(rows):
 # First run: generates and caches a predicate. Later runs: use cached function only.
 ```
 
-See `examples/data_wrangling.py`, `examples/use_wrangling.py`, and `examples/extend_wrangler.py` for full patterns.
+See `examples/use_wrangling.py`, `examples/wrangler.py`, and `examples/extend_wrangler.py` for patterns.
 
 ## Cache
 

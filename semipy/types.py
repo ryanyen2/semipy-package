@@ -47,7 +47,7 @@ class SemiCallSite:
 
     @property
     def site_id(self) -> str:
-        import hashlib
+        """Stable 16-char hash identifying this call site."""
         key = f"{self.filename}:{self.lineno}:{self.func_qualname}"
         return hashlib.sha256(key.encode()).hexdigest()[:16]
 

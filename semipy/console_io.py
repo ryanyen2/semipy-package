@@ -1,4 +1,9 @@
-"""Rich-based console output for agent steps, validation errors, and confirmations."""
+"""
+Rich-based console output for the semiformal pipeline.
+
+Provides one-line DAG logs (reuse/adapt/generate), validation error panels,
+progress status, and confirmation prompts.
+"""
 from __future__ import annotations
 
 from contextlib import contextmanager

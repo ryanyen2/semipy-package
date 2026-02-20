@@ -1,4 +1,9 @@
-"""Agentic generate-validate-retry loop for semi() function generation."""
+"""
+Agentic generate-validate-retry loop for semi() function generation.
+
+Builds user and system prompts from GenerationSpec, calls the generator,
+validates (AST, type, execution), and retries with validation feedback on failure.
+"""
 from __future__ import annotations
 
 import json

@@ -1,24 +1,20 @@
-"""Deterministic tool system for semi(): SEARCH, RAG, and other tools.
+"""
+Tool system for semi(): SEARCH, RAG, and custom tools.
 
-Library builders reference tools in prompts via literal {TOOL()} or {TOOL(arg)}.
-In f-strings use double braces so the reference stays literal: {{SEARCH(query)}}.
-At generation time, the system injects tool docs so the LLM generates code that
-calls the tools at runtime.
+Prompts reference tools via literal {TOOL(...)}; in f-strings use double braces
+so the reference stays literal: {{SEARCH(query)}}. At generation time the system
+injects tool docs so the LLM can generate code that calls the tools at runtime.
 
-Usage in prompts (inside f-string, double braces to avoid interpolation):
-    semi(f"look up {{SEARCH(query)}} for {topic}")
-    semi(f"augment with {{RAG(context, k=3)}}")
+Public API: register_tool(name, impl), parse_tool_refs(prompt). SEARCH and RAG
+are built-in implementations (Firecrawl and CSV RAG); override with register_tool.
 """
 
 from __future__ import annotations
 
 import csv
-import warnings
-import json
 import os
 import re
-import urllib.parse
-import urllib.request
+import warnings
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -45,48 +41,6 @@ def parse_tool_refs(prompt: str) -> list[tuple[str, str]]:
     for m in TOOL_REF_PATTERN.finditer(prompt):
         refs.append((m.group(1), m.group(2).strip()))
     return refs
-
-
-def _fetch_weather(city: str, **kwargs: Any) -> dict[str, Any]:
-    """FETCH_WEATHER implementation via Open-Meteo (no API key). Returns current weather for a city."""
-    _log_tool_call("FETCH_WEATHER", f"city={city!r}")
-    try:
-        geocode_url = "https://geocoding-api.open-meteo.com/v1/search"
-        req = urllib.request.Request(
-            f"{geocode_url}?{urllib.parse.urlencode({'name': city, 'count': '1'})}",
-            headers={"User-Agent": "semipy/1.0"},
-        )
-        with urllib.request.urlopen(req, timeout=10) as r:
-            geo = json.loads(r.read().decode())
-        results = geo.get("results", [])
-        if not results:
-            return {"error": f"No location found for {city}"}
-        lat = results[0]["latitude"]
-        lon = results[0]["longitude"]
-
-        forecast_url = "https://api.open-meteo.com/v1/forecast"
-        params = {
-            "latitude": lat,
-            "longitude": lon,
-            "current_weather": "true",
-        }
-        req = urllib.request.Request(
-            f"{forecast_url}?{urllib.parse.urlencode(params)}",
-            headers={"User-Agent": "semipy/1.0"},
-        )
-        with urllib.request.urlopen(req, timeout=10) as r:
-            data = json.loads(r.read().decode())
-        cw = data.get("current_weather", {})
-        return {
-            "city": city,
-            "temperature": cw.get("temperature"),
-            "weathercode": cw.get("weathercode"),
-            "windspeed": cw.get("windspeed"),
-            "winddirection": cw.get("winddirection"),
-            "time": cw.get("time"),
-        }
-    except Exception as e:
-        return {"error": str(e), "city": city}
 
 
 def _firecrawl_search(query: str, limit: int = 3, **kwargs: Any) -> str:
@@ -151,27 +105,9 @@ def _rag_from_csv(query: str, k: int = 3, data_path: Optional[str] = None, **kwa
 
 
 _TOOL_IMPLS: dict[str, Callable[..., Any]] = {
-    "FETCH_WEATHER": _fetch_weather,
     "SEARCH": _firecrawl_search,
     "RAG": _rag_from_csv,
 }
-
-
-def FETCH_WEATHER(city: str, **kwargs: Any) -> dict[str, Any]:
-    """
-    Fetch current weather for a city via Open-Meteo. Use in prompts as {{FETCH_WEATHER(city)}}.
-    Returns dict with temperature, weathercode, windspeed, winddirection, time. No API key needed.
-
-    Deprecated: Prefer semi.fetch_weather(city, ...) or semi(f\"fetch weather for {city}\") for
-    semiformal usage. This helper remains for backward compatibility.
-    """
-    warnings.warn(
-        "FETCH_WEATHER is deprecated; use semi.fetch_weather(...) or semi(f\"...\") instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    impl = _TOOL_IMPLS["FETCH_WEATHER"]
-    return impl(city, **kwargs)
 
 
 def SEARCH(query: str, **kwargs: Any) -> str:
@@ -214,11 +150,6 @@ def register_tool(name: str, impl: Callable[..., Any]) -> None:
 def tool_docstring_for_prompt(tool_names: set[str]) -> str:
     """Generate the tool documentation block to inject into the system prompt."""
     doc = {
-        "FETCH_WEATHER": (
-            "FETCH_WEATHER(city: str) -> dict: Fetch current weather for a city via Open-Meteo (no API key). "
-            "Use when the prompt references {FETCH_WEATHER(...)}. Returns dict with temperature, weathercode, windspeed, etc. "
-            "Import: from semipy.tools import FETCH_WEATHER"
-        ),
         "SEARCH": (
             "SEARCH(query: str) -> str: Web search via Firecrawl. Use when the prompt references {SEARCH(...)}. "
             "Returns concatenated title+description from web results. Import: from semipy.tools import SEARCH"

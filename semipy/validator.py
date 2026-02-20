@@ -17,7 +17,7 @@ from typing import Any, Optional
 
 from semipy.types import ValidationResult
 
-# Whitelist of prefix -> module for usage-context execution (no arbitrary imports).
+# Allowed module prefixes for usage-context execution (e.g. calling plt.x or np.y with result).
 _USAGE_CONTEXT_IMPORTS: dict[str, str] = {
     "plt": "matplotlib.pyplot",
     "np": "numpy",

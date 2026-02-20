@@ -109,6 +109,7 @@ def _portal_from_dict(d: dict[str, Any]) -> Portal:
 
 
 def load_portal(cache_dir: Path, session_id: str, source_file: str, module_name: str) -> Portal:
+    """Load portal from JSON or return a new empty Portal if the file is missing or invalid."""
     path = _portal_path(cache_dir, session_id)
     if not path.exists():
         return Portal(
@@ -129,6 +130,7 @@ def load_portal(cache_dir: Path, session_id: str, source_file: str, module_name:
 
 
 def save_portal(cache_dir: Path, portal: Portal) -> None:
+    """Persist portal to JSON in the cache directory."""
     path = _portal_path(cache_dir, portal.session_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     data = _portal_to_dict(portal)
@@ -218,6 +220,7 @@ def load_function_from_dispatch(
     function_name: str,
     module_cache: dict[str, dict[str, Any]],
 ) -> Optional[Callable[..., Any]]:
+    """Load a generated function by name from the dispatch module; uses module_cache to avoid re-executing the file."""
     path = _dispatch_module_path(cache_dir, module_name)
     if not path.exists():
         return None

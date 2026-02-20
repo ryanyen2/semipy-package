@@ -1,4 +1,9 @@
-"""LLM wrapper for generating semi() function implementations. Uses DSPy for all generation."""
+"""
+LLM wrapper for generating semi() function implementations.
+
+Uses DSPy for all generation; model string is passed through as openai/<model>
+when no slash is present.
+"""
 from __future__ import annotations
 
 import os
@@ -74,7 +79,7 @@ SYSTEM_PROMPT = """You generate a single Python function that implements the use
 Rules:
 - Output only one function. No explanations, no markdown outside the code block.
 - Wrap the function in a ```python code block.
-- The function must be pure Python unless the request or function name clearly suggests external interaction (e.g. fetching data, searching, scraping). In that case use standard library (urllib, json) or common packages (requests) as needed. For plotting or visualization you may use matplotlib.pyplot and numpy.
+- The function must be pure Python unless the request or function name clearly suggests external interaction (e.g. fetching data, searching, scraping). For any "fetch X" style request (weather, news, APIs, etc.), implement the fetch in generated code using standard library (urllib, json) or requests and appropriate public APIs; do not rely on built-in domain-specific tools. Use SEARCH or RAG only when the prompt explicitly contains {SEARCH(...)} or {RAG(...)}. For plotting use matplotlib.pyplot and numpy.
 - Parameters: the user prompt may reference "the value" or "this row" or similar; those become the first parameter(s). Other fixed context (sample data, condition strings) are described in the prompt; bake them into the function or add parameters as needed.
 - Return type: match exactly what the user needs (bool for conditions, str for text, int/float for numbers, or the described type). Return that type only.
 - Handle edge cases: None, missing keys, empty data, type mismatches. Prefer safe defaults over raising.

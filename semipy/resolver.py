@@ -35,8 +35,11 @@ def resolve(
     constants: dict[str, Any],
 ) -> ResolutionResult:
     """
-    Resolve a usage against the portal. Returns REUSE (with commit_id), or
-    ADAPT/GENERATE with parent context for the agent.
+    Resolve a usage against the portal DAG.
+
+    Returns REUSE with commit_id when a matching implementation exists;
+    returns ADAPT or GENERATE with parent_commit_ids and lineage when a new
+    or adapted implementation is needed.
     """
     slot_id = usage.call_site.site_id
     usage_id = usage.usage_id()

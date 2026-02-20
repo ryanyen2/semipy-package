@@ -1,4 +1,10 @@
-"""Core runtime primitive: semi() function and call-site resolution."""
+"""
+Core runtime primitive: semi() and call-site resolution.
+
+semi(prompt) resolves to a cached or newly generated function, then runs it with
+runtime arguments. semi.name(...) does the same for named calls. Standalone
+semi() (without @semiformal) uses a single implementation per call site.
+"""
 from __future__ import annotations
 
 import inspect
@@ -250,7 +256,6 @@ def _semi_inline(
     if site_info is not None and site_info.template.variable_expressions:
         frame = inspect.currentframe()
         if frame is None or frame.f_back is None:
-            print("No frame found, using fallback")
             return _semi_fallback(prompt, call_site, cache_dir, session_id, module_name, expected_type=expected_type, require_tools=require_tools, **kwargs)
         caller_frame = frame.f_back
         try:

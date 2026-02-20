@@ -62,6 +62,7 @@ Requires `OPENAI_API_KEY` in `.env` or environment. Python >= 3.10. Uses `uv` fo
 | `validator.py` | 3-stage validation: AST parse, type check, execution test with sample input |
 | `agent.py` | Generate-validate-retry loop; uses GenerationSpec.decision and parent_sources for ADAPT/FORK prompts |
 | `console_io.py` | Rich-based console output; DAG-aware logs (print_dag_reuse, print_dag_adapt, print_dag_generate); print_slot_history (git-log-style) |
+| `tools.py` | Tool refs in prompts ({TOOL(...)}); parse_tool_refs, register_tool; inject_tools_into_system_prompt for generator |
 
 ### Key abstractions
 
@@ -82,7 +83,7 @@ Requires `OPENAI_API_KEY` in `.env` or environment. Python >= 3.10. Uses `uv` fo
 
 ### Public API
 
-Exports from `semipy/__init__.py`: `semiformal`, `semi`, `SemiConfig`, `configure`, `get_config`, `Decision`, `SemiGenerationError`.
+Exports from `semipy/__init__.py`: `semiformal`, `semi`, `SemiConfig`, `configure`, `get_config`, `Decision`, `SemiCallError`, `SemiGenerationError`, `register_tool`, `parse_tool_refs`.
 
 ## Code conventions
 

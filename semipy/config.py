@@ -37,6 +37,7 @@ class SemiConfig:
         confirm_on_external_tools: Optional[bool] = None,
         confirm_callback: Optional[Callable[[str], str]] = None,
     ) -> None:
+        """Update config attributes from the given keyword arguments (only non-None values)."""
         if model is not None:
             self.model = model
         if api_key is not None:
@@ -63,6 +64,7 @@ _config: Optional[SemiConfig] = None
 
 
 def get_config() -> SemiConfig:
+    """Return the global SemiConfig singleton, creating it with defaults if needed."""
     global _config
     if _config is None:
         _config = SemiConfig()
@@ -70,4 +72,5 @@ def get_config() -> SemiConfig:
 
 
 def configure(**kwargs: object) -> None:
+    """Update global config with the given options (model, api_key, cache_dir, etc.)."""
     get_config().configure(**kwargs)

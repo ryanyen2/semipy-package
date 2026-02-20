@@ -156,8 +156,6 @@ def _infer_expected_type_from_usage(node: ast.Call, tree: ast.AST) -> type:
     if isinstance(p, (ast.ListComp, ast.DictComp, ast.GeneratorExp)):
         if getattr(p, "elt", None) is node or (hasattr(p, "generators") and any(g.iter is node for g in p.generators)):
             return bool
-        if p.elt is node:
-            return bool
     if isinstance(p, ast.Compare):
         if p.left is node and len(p.ops) == 1:
             op = p.ops[0]
