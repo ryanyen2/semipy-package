@@ -70,6 +70,7 @@ def _wrap_function(
         type_hints=type_hints,
         semi_call_sites=semi_sites,
         named_call_sites=named_sites,
+        first_lineno=first_lineno,
     )
 
     @functools.wraps(fn)

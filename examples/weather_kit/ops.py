@@ -52,7 +52,7 @@ def plot_timeseries(
 ) -> Any:
     """Plot variable vs time. Date column inferred via semi from table columns."""
     tbl = ds.table()
-    date_column = semi.pick_date_column(tbl.columns.tolist())
+    date_column = semi(f"date column from {tbl.columns}", expected_type=str)
     if not date_column or date_column not in tbl.columns:
         date_column = tbl.columns[0] if len(tbl.columns) else None
     if date_column is None:
@@ -62,7 +62,7 @@ def plot_timeseries(
     plt.figure()
     plt.plot(tbl[date_column], tbl[variable])
     plt.xlabel(date_column)
-    plt.gca().xaxis.set_major_locator(plt.MaxNLocator(integer=True))
+    plt.gca().xaxis.set_major_locator(semi(f"major locator for {date_column}", expected_type=plt.Locator))
     plt.ylabel(variable)
     if extra:
         semi.apply_plot_extra(plt.gca(), extra, date_column=date_column, variable=variable)

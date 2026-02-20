@@ -146,6 +146,7 @@ class SemiformalContext:
     type_hints: dict[str, Any]
     semi_call_sites: list[SemiCallSiteInfo] = field(default_factory=list)
     named_call_sites: list[NamedCallSiteInfo] = field(default_factory=list)
+    first_lineno: int = 1  # file line number where function source starts
 
 
 class Decision(Enum):
@@ -177,6 +178,8 @@ class GenerationSpec:
     lineage_summary: Optional[str] = None
     method_name: Optional[str] = None  # for semi.name(...) named calls
     usage_hint: str = ""
+    caller_locals: Optional[dict[str, Any]] = None  # snapshot of caller frame locals
+    source_file_imports: Optional[list[str]] = None  # module-level import statements
 
 
 @dataclass

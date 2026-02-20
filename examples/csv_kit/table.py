@@ -31,17 +31,15 @@ def _df_from_rows(rows: list[dict[str, Any]], columns: Optional[list[str]] = Non
 
 @semiformal("column names matching semantic category")
 def _columns_like(columns: list[str], category: str) -> list[str]:
-    """Resolve a category (e.g. 'numeric', 'date') to column names. Used only for select(like=...)."""
     return semi(f"column names from {columns} that match: {category}", expected_type=list)
 
 
 @semiformal("filter rows by semantic condition")
 def _filter_semantic(rows: list[dict[str, Any]], spec: str) -> list[dict[str, Any]]:
-    """Keep rows that satisfy a semantic spec (e.g. outliers, duplicates). Used only for where_semantic()."""
     if not rows or not spec.strip():
         return rows
     sample = rows[: min(20, len(rows))]
-    return [row for row in rows if semi.matches(row, spec, sample=sample)]
+    return [row for row in rows if semi(f"row {row} matches semantic condition {spec}", expected_type=bool)]
 
 
 @semiformal("sort key for semantic order")
@@ -58,19 +56,16 @@ def _merge_semantic_rows(
     right_cols: list[str],
     how: str,
 ) -> list[dict[str, Any]]:
-    """Match rows from left and right by meaning (how). Returns list of merged row dicts."""
     return semi.merge_tables(left_rows, right_rows, left_columns=left_cols, right_columns=right_cols, how=how)
 
 
 @semiformal("apply extra parameters to table operation result")
 def _apply_extra(rows: list[dict[str, Any]], columns: list[str], operation: str, params: dict[str, Any]) -> list[dict[str, Any]]:
-    """Post-process operation result with extra parameters (e.g. top=N, rename={...})."""
     return semi(f"apply {params} to result of {operation} on table with columns {columns}", expected_type=list)
 
 
 @semiformal("compute one new column value per row from a semantic spec")
 def _compute_column(rows: list[dict[str, Any]], columns: list[str], spec: str) -> list[Any]:
-    """Return a list of values, one per row, from interpreting spec over rows with given columns."""
     return semi(f"for each row compute a single value: {spec}. columns: {columns}. return a list of values, one per row, same length as rows.", expected_type=list)
 
 

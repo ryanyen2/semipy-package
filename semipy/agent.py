@@ -273,6 +273,7 @@ class SemiAgent:
                     sample_input=spec.sample_input,
                     enable_execution=self.enable_execution_test,
                     usage_hint=getattr(spec, "usage_hint", ""),
+                    spec=spec,
                 )
 
                 if result.passed:
@@ -329,6 +330,7 @@ class SemiAgent:
                         sample_input=spec.sample_input,
                         enable_execution=self.enable_execution_test,
                         usage_hint=getattr(spec, "usage_hint", ""),
+                        spec=spec,
                     )
                     if result.passed:
                         progress.record_success(

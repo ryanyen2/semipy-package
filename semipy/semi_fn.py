@@ -7,6 +7,7 @@ semi() (without @semiformal) uses a single implementation per call site.
 """
 from __future__ import annotations
 
+import ast
 import inspect
 from pathlib import Path
 from typing import Any, Optional
@@ -91,6 +92,27 @@ def _normalize_filename(path: str) -> str:
         return str(__import__("os").path.abspath(path))
     except Exception:
         return path
+
+
+def _extract_source_file_imports(filename: str) -> list[str]:
+    """Extract module-level import statements from the source file as source strings."""
+    if not filename or filename == "<unknown>":
+        return []
+    try:
+        path = Path(filename).resolve()
+        if not path.exists():
+            return []
+        source = path.read_text(encoding="utf-8", errors="replace")
+        tree = ast.parse(source)
+        lines: list[str] = []
+        for node in tree.body:
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                seg = ast.get_source_segment(source, node)
+                if seg:
+                    lines.append(seg.strip())
+        return lines
+    except Exception:
+        return []
 
 
 def _identify_call_site(depth: int = 2) -> SemiCallSite:
@@ -258,6 +280,7 @@ def _semi_inline(
         if frame is None or frame.f_back is None:
             return _semi_fallback(prompt, call_site, cache_dir, session_id, module_name, expected_type=expected_type, require_tools=require_tools, **kwargs)
         caller_frame = frame.f_back
+        caller_locals_snapshot = dict(caller_frame.f_locals)
         try:
             values = _eval_expressions(site_info.template.variable_expressions, caller_frame)
         except Exception:
@@ -328,6 +351,8 @@ def _semi_inline(
                 parent_commit_ids=resolution.parent_commit_ids,
                 lineage_summary=resolution.lineage_summary,
                 usage_hint=getattr(site_info, "usage_hint", ""),
+                caller_locals=caller_locals_snapshot,
+                source_file_imports=_extract_source_file_imports(call_site.filename),
             )
             entry = SemiAgent().generate(spec)
             constants_snapshot = freeze_constants(constant_values)
@@ -478,6 +503,13 @@ def _semi_named(name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any
             need_generate = True
 
     if resolution.decision in (Decision.ADAPT, Decision.GENERATE) or need_generate:
+        frame = inspect.currentframe()
+        caller_frame = frame
+        for _ in range(3):
+            if caller_frame is None:
+                break
+            caller_frame = caller_frame.f_back
+        caller_locals_snapshot = dict(caller_frame.f_locals) if caller_frame else None
         prompt = _build_named_prompt(name, args, kwargs)
         sample_input = _sample_from_values(
             template.variable_names,
@@ -500,6 +532,8 @@ def _semi_named(name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any
             lineage_summary=resolution.lineage_summary,
             method_name=name,
             usage_hint=getattr(site_info, "usage_hint", "") if site_info is not None else "",
+            caller_locals=caller_locals_snapshot,
+            source_file_imports=_extract_source_file_imports(call_site.filename),
         )
         entry = SemiAgent().generate(spec)
         constants_snapshot = freeze_constants(constant_values)
