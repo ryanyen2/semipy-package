@@ -10,14 +10,22 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "dotenv>=0.9.9",
+    "dspy>=2.4",
+    "firecrawl-py>=1.0",
     "ipykernel>=7.2.0",
     "ipywidgets>=8.1.8",
-    "openai>=1.0",
+    "pandas>=2.3.3",
+    "pretty-little-summary>=0.1.1",
     "rich>=14.3.2",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest", "python-dotenv"]
+example = [
+    "matplotlib>=3.10.8",
+    "netcdf4>=1.7.3",
+    "xarray>=2025.6.1",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]

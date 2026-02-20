@@ -58,8 +58,12 @@ def filter_errors(rows):
 # First run: generates and caches a predicate. Later runs: use cached function only.
 ```
 
-See `examples/data_wrangling.py`, `examples/use_wrangling.py`, and `examples/extend_wrangler.py` for full patterns.
+See `examples/use_wrangling.py`, `examples/wrangler.py`, and `examples/extend_wrangler.py` for patterns.
 
 ## Cache
 
-Generated functions are stored under `.semiformal/runtime/` (by default). Delete that directory to force regeneration. See `.claude/plans/PLAN.md` for architecture and module roles.
+Generated functions are stored under `.semiformal/runtime/` (by default) as session entry modules (one `.semi.py` file per source file) plus a JSON index. Delete that directory to force regeneration.
+
+Optional: install `automerge` for Automerge-backed index storage (`.index.automerge`). On macOS, building from source requires Rust ([rustup](https://rustup.rs)); Linux may get a prebuilt wheel. The package works without automerge (uses JSON only).
+
+See `.claude/plans/PLAN.md` for architecture and module roles.

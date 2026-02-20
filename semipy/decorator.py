@@ -1,4 +1,9 @@
-"""@semiformal decorator: source analysis and context injection."""
+"""
+@semiformal decorator: source analysis and context injection.
+
+Wraps functions (or methods on classes) to set SemiformalContext for the duration
+of the call. Extracts semi() and semi.name() call sites from source via AST.
+"""
 from __future__ import annotations
 
 import functools
@@ -6,7 +11,7 @@ import inspect
 from contextvars import ContextVar
 from typing import Any, Callable, Optional, Union
 
-from semipy.template import extract_semi_templates
+from semipy.template import extract_named_call_templates, extract_semi_templates
 from semipy.types import SemiformalContext, SemiCallSiteInfo
 
 _semiformal_context_var: ContextVar[Optional[SemiformalContext]] = ContextVar(
@@ -15,6 +20,7 @@ _semiformal_context_var: ContextVar[Optional[SemiformalContext]] = ContextVar(
 
 
 def get_semiformal_context() -> Optional[SemiformalContext]:
+    """Return the current SemiformalContext if we are inside a @semiformal-decorated call."""
     return _semiformal_context_var.get()
 
 
@@ -47,6 +53,9 @@ def _wrap_function(
     semi_sites = extract_semi_templates(
         source, filename=filename, func_qualname=func_qualname, first_lineno=first_lineno
     )
+    named_sites = extract_named_call_templates(
+        source, filename=filename, func_qualname=func_qualname, first_lineno=first_lineno
+    )
     type_hints = {}
     try:
         for name, ann in (inspect.getannotations(fn) or {}).items():
@@ -60,6 +69,7 @@ def _wrap_function(
         source_code=source,
         type_hints=type_hints,
         semi_call_sites=semi_sites,
+        named_call_sites=named_sites,
     )
 
     @functools.wraps(fn)
@@ -74,20 +84,27 @@ def _wrap_function(
 
 
 def _methods_with_semi(cls: type) -> list[str]:
-    """Return names of methods that contain semi() in their source."""
+    """Return names of methods that contain semi() or semi.<name>() in their source."""
+    import ast as _ast
     result: list[str] = []
     try:
         source = inspect.getsource(cls)
     except (OSError, TypeError):
         return result
     try:
-        tree = __import__("ast").parse(source)
+        tree = _ast.parse(source)
     except SyntaxError:
         return result
-    for node in __import__("ast").walk(tree):
-        if isinstance(node, __import__("ast").FunctionDef):
-            for n in __import__("ast").walk(node):
-                if isinstance(n, __import__("ast").Call) and isinstance(n.func, __import__("ast").Name) and n.func.id == "semi":
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.FunctionDef):
+            for n in _ast.walk(node):
+                if not isinstance(n, _ast.Call):
+                    continue
+                func = n.func
+                if isinstance(func, _ast.Name) and func.id == "semi":
+                    result.append(node.name)
+                    break
+                if isinstance(func, _ast.Attribute) and isinstance(func.value, _ast.Name) and func.value.id == "semi":
                     result.append(node.name)
                     break
     return result

@@ -1,29 +1,36 @@
-"""Agentic generate-validate-retry loop for semi() function generation."""
+"""
+Agentic generate-validate-retry loop for semi() function generation.
+
+Builds user and system prompts from GenerationSpec, calls the generator,
+validates (AST, type, execution), and retries with validation feedback on failure.
+"""
 from __future__ import annotations
 
-import hashlib
 import json
 from typing import Any, Callable, List, Optional
 
-from semipy.cache import SemiCache, build_template_hash, _compile_source
+from semipy.compiler import _compile_source
 from semipy.config import get_config
 from semipy.console_io import (
     confirm,
     generation_progress,
     get_console,
+    print_pipeline_log,
     source_preview,
-    strategy_description,
+    decision_description,
     validation_error_panel,
 )
 from semipy.generator import SemiGenerator, SYSTEM_PROMPT
+from semipy.tools import inject_tools_into_system_prompt, parse_tool_refs
 from semipy.types import (
     CacheEntry,
+    Decision,
     GenerationSpec,
-    GenerationStrategy,
     SemiGenerationError,
     SemiTool,
     ValidationResult,
 )
+from semipy.profiler import profile_value
 from semipy.validator import validate, _extract_function_source
 
 
@@ -33,7 +40,6 @@ class SemiAgent:
     def __init__(
         self,
         generator: Optional[SemiGenerator] = None,
-        cache: Optional[SemiCache] = None,
         max_retries: Optional[int] = None,
         enable_execution_test: Optional[bool] = None,
         verbose: Optional[bool] = None,
@@ -44,7 +50,6 @@ class SemiAgent:
     ):
         config = get_config()
         self.generator = generator or SemiGenerator()
-        self.cache = cache or SemiCache(config.cache_dir)
         self.max_retries = max_retries if max_retries is not None else config.max_retries
         self.enable_execution_test = (
             enable_execution_test if enable_execution_test is not None else config.enable_execution_test
@@ -61,8 +66,26 @@ class SemiAgent:
         )
         self.tools: List[SemiTool] = list(tools) if tools is not None else []
 
-    def _choose_strategy(self, spec: GenerationSpec) -> GenerationStrategy:
-        return GenerationStrategy.FRESH
+    def _describe_value(self, name: str, value: Any) -> str:
+        """Data-agnostic introspection via duck typing; delegates to profiler."""
+        return profile_value(name, value)
+
+    def _describe_context(self, spec: GenerationSpec) -> str:
+        """Aggregate data context: variable_values descriptions, type_hints, trimmed source."""
+        parts: list[str] = []
+        if spec.variable_values:
+            for n, v in spec.variable_values.items():
+                parts.append(self._describe_value(n, v))
+        if spec.context:
+            if spec.context.type_hints:
+                parts.append("Type hints: " + str(spec.context.type_hints))
+            if spec.context.source_code:
+                lines = spec.context.source_code.strip().splitlines()
+                trimmed = lines[:30] if len(lines) > 30 else lines
+                parts.append("Source (excerpt):\n" + "\n".join(trimmed))
+        if not parts:
+            return ""
+        return "Data context:\n" + "\n\n".join(parts)
 
     def _build_user_prompt(self, spec: GenerationSpec) -> str:
         parts = [
@@ -73,17 +96,83 @@ class SemiAgent:
             "Constraints:",
             f"- Return type must be: {spec.expected_type.__name__ if spec.expected_type is not type(None) else 'any'}",
         ]
-        if spec.template and spec.template.variable_names:
+        if spec.decision == Decision.ADAPT and spec.parent_sources:
+            parts.append("")
+            parts.append("Adapt from this previous implementation (same structure, new parameters):")
+            parts.append("```python")
+            parts.append(spec.parent_sources[0].strip())
+            parts.append("```")
+            if spec.lineage_summary:
+                parts.append("")
+                parts.append("Lineage: " + spec.lineage_summary.replace("\n", " "))
+        if spec.decision == Decision.FORK and spec.parent_sources:
+            parts.append("")
+            parts.append("Use as inspiration (structure has changed):")
+            parts.append("```python")
+            parts.append(spec.parent_sources[0].strip())
+            parts.append("```")
+        if spec.template and spec.template.variable_names and not spec.method_name:
             n = len(spec.template.variable_names)
             parts.append(
                 f"- The function will be called with exactly {n} positional arguments (in order). "
                 "The first argument is the value that changes per invocation; the rest are fixed context for this call."
             )
+        context_block = self._describe_context(spec)
+        if context_block:
+            parts.append("")
+            parts.append(context_block)
+        if getattr(spec, "usage_hint", ""):
+            parts.append(f"- Usage context: the result will be {spec.usage_hint}")
+            if "FormatStrFormatter" in spec.usage_hint:
+                parts.append(
+                    "- The result is passed to matplotlib FormatStrFormatter: use a Python % format (e.g. %.1f, %d), not strftime (e.g. %Y-%m-%d)."
+                )
         if spec.sample_input:
-            parts.append("- Sample input for testing:")
+            parts.append("- Sample input (the function will be called with these argument types):")
             parts.append(json.dumps(spec.sample_input, default=repr, indent=2))
         if spec.constant_values:
             parts.append("- Constant context (use as parameters after the first, or bake into the function):")
+            parts.append(json.dumps(spec.constant_values, default=repr, indent=2))
+        return "\n".join(parts)
+
+    def _build_named_user_prompt(self, spec: GenerationSpec) -> str:
+        """Prompt for semi.name(...): function name is the specification; describe args by position/type/sample."""
+        parts = [
+            spec.prompt,
+            "",
+            "Constraints:",
+            f"- Return type must be: {spec.expected_type.__name__ if spec.expected_type is not type(None) else 'any'}",
+        ]
+        if spec.decision == Decision.ADAPT and spec.parent_sources:
+            parts.append("")
+            parts.append("Adapt from this previous implementation (same structure, new parameters):")
+            parts.append("```python")
+            parts.append(spec.parent_sources[0].strip())
+            parts.append("```")
+            if spec.lineage_summary:
+                parts.append("")
+                parts.append("Lineage: " + spec.lineage_summary.replace("\n", " "))
+        if spec.decision == Decision.FORK and spec.parent_sources:
+            parts.append("")
+            parts.append("Use as inspiration (structure has changed):")
+            parts.append("```python")
+            parts.append(spec.parent_sources[0].strip())
+            parts.append("```")
+        context_block = self._describe_context(spec)
+        if context_block:
+            parts.append("")
+            parts.append(context_block)
+        if getattr(spec, "usage_hint", ""):
+            parts.append(f"- Usage context: the result will be {spec.usage_hint}")
+            if "FormatStrFormatter" in spec.usage_hint:
+                parts.append(
+                    "- The result is passed to matplotlib FormatStrFormatter: use a Python % format (e.g. %.1f, %d), not strftime (e.g. %Y-%m-%d)."
+                )
+        if spec.sample_input:
+            parts.append("- Sample input (the function will be called with these argument types):")
+            parts.append(json.dumps(spec.sample_input, default=repr, indent=2))
+        if spec.constant_values:
+            parts.append("- Constant context (bake into the function or add as parameters):")
             parts.append(json.dumps(spec.constant_values, default=repr, indent=2))
         return "\n".join(parts)
 
@@ -94,34 +183,25 @@ class SemiAgent:
         result: ValidationResult,
         attempt: int,
     ) -> str:
+        base = self._build_named_user_prompt(spec) if spec.method_name else self._build_user_prompt(spec)
         return (
-            self._build_user_prompt(spec)
+            base
             + "\n\nPrevious attempt failed validation:\n"
             + result.error_message
             + "\n\nFix the function and output a corrected version in a ```python block."
         )
 
     def generate(self, spec: GenerationSpec) -> CacheEntry:
-        strategy = self._choose_strategy(spec)
         total_attempts = self.max_retries + 1
-        cache_dir = getattr(self.cache, "_cache_dir", None)
 
+        decision = spec.decision if spec.decision is not None else Decision.GENERATE
         with generation_progress(self.verbose) as progress:
-            progress.log_step("Cache lookup")
-            progress.update("Cache lookup...")
-            if strategy == GenerationStrategy.REUSE and spec.template:
-                template_hash = build_template_hash(
-                    spec.template.template_parts,
-                    spec.constant_values or {},
-                )
-                existing = self.cache.get(spec.call_site.site_id, template_hash)
-                if existing and existing.compiled_fn:
-                    progress.record_cache_hit(spec, existing, cache_dir=cache_dir)
-                    return existing
-
-            progress.log_step("Cache miss")
-            progress.log_step(f"Strategy: {strategy_description(strategy)}")
-            progress.update(f"Cache miss. {strategy_description(strategy)}")
+            progress.set_call_site(spec.call_site)
+            progress.log_step("Generate")
+            progress.log_step(f"Decision: {decision_description(decision)}")
+            print_pipeline_log(spec.call_site, "resolve", f"Cache miss. {decision_description(decision)}")
+            progress.set_stage("generate")
+            progress.update(f"Cache miss. {decision_description(decision)}")
             if self.confirm_on_external_tools and getattr(spec, "require_external_tools", False):
                 config = get_config()
                 if not confirm(
@@ -133,23 +213,41 @@ class SemiAgent:
                         "User declined to continue without external tools (require_external_tools=True, confirm_on_external_tools=True)."
                     )
 
-            prompt = self._build_user_prompt(spec)
+            if spec.method_name:
+                prompt = self._build_named_user_prompt(spec)
+                system_prompt = SYSTEM_PROMPT
+                tool_refs = []
+            else:
+                prompt = self._build_user_prompt(spec)
+                system_prompt = inject_tools_into_system_prompt(SYSTEM_PROMPT, prompt)
+                tool_refs = parse_tool_refs(prompt)
+            if tool_refs and self.verbose:
+                tool_names = ", ".join(sorted({name for name, _ in tool_refs}))
+                progress.update(f"Tools detected: {tool_names}. Calling LLM...")
             last_source = ""
             last_result: Optional[ValidationResult] = None
 
             for attempt in range(total_attempts):
                 progress.log_step(f"Generating (attempt {attempt + 1}/{total_attempts})")
-                progress.update(
-                    f"Generating (attempt {attempt + 1}/{total_attempts})"
-                    + (f": {(last_result.error_message or '')[:50]!r}..." if last_result and (last_result.error_message or '') else "")
-                )
+                if last_result and (last_result.error_message or ""):
+                    print_pipeline_log(spec.call_site, "generate", f"Retry {attempt + 1}/{total_attempts}: fixing validation error")
+                    progress.set_stage("generate")
+                    progress.update(f"Retrying (attempt {attempt + 1}/{total_attempts}): fixing validation error...")
+                elif not tool_refs:
+                    print_pipeline_log(spec.call_site, "generate", f"Calling LLM (attempt {attempt + 1}/{total_attempts})")
+                    progress.set_stage("generate")
+                    progress.update(f"Calling LLM (attempt {attempt + 1}/{total_attempts})...")
+                else:
+                    print_pipeline_log(spec.call_site, "generate", f"Calling LLM with tools (attempt {attempt + 1}/{total_attempts})")
+                    progress.set_stage("generate")
+                    progress.update(f"Calling LLM with tools (attempt {attempt + 1}/{total_attempts})...")
 
                 on_chunk = None
                 if self.stream and self.verbose:
                     console = get_console()
                     on_chunk = lambda chunk, c=console: c.print(chunk, end="")
                 raw = self.generator.generate(
-                    SYSTEM_PROMPT,
+                    system_prompt,
                     prompt,
                     stream=self.stream,
                     on_chunk=on_chunk,
@@ -157,7 +255,10 @@ class SemiAgent:
                 if self.stream and self.verbose:
                     get_console().print()
 
+                progress.update("Parsing generated code...")
                 source = _extract_function_source(raw)
+                print_pipeline_log(spec.call_site, "validate", "Validating (AST, type, execution)")
+                progress.set_stage("validate")
                 progress.log_step("Validating (AST, type, execution)")
                 progress.update("Validating (AST, type, execution)...")
                 result = validate(
@@ -165,34 +266,22 @@ class SemiAgent:
                     expected_type=spec.expected_type,
                     sample_input=spec.sample_input,
                     enable_execution=self.enable_execution_test,
+                    usage_hint=getattr(spec, "usage_hint", ""),
                 )
 
                 if result.passed:
-                    progress.log_step("Valid (caching)")
-                    if spec.template:
-                        template_hash = build_template_hash(
-                            spec.template.template_parts,
-                            spec.constant_values or {},
-                        )
-                    else:
-                        template_hash = hashlib.sha256(spec.prompt.encode()).hexdigest()[:16]
+                    print_pipeline_log(spec.call_site, "validate", "Valid (AST, type, execution)")
+                    progress.log_step("Valid")
                     progress.record_success(
                         attempt + 1,
-                        cache_dir=cache_dir,
-                        site_id=spec.call_site.site_id,
-                        template_hash=template_hash,
                         call_site=spec.call_site,
                     )
                     fn = _compile_source(source)
-                    entry = CacheEntry(
-                        site_id=spec.call_site.site_id,
-                        template_hash=template_hash,
+                    return CacheEntry(
                         generated_source=source,
                         compiled_fn=fn,
                         expected_type=spec.expected_type,
                     )
-                    self.cache.put(entry)
-                    return entry
 
                 for tool in self.tools:
                     try:
@@ -203,6 +292,7 @@ class SemiAgent:
                 last_source = source
                 last_result = result
                 prompt = self._build_retry_prompt(spec, source, result, attempt)
+                system_prompt = SYSTEM_PROMPT if spec.method_name else inject_tools_into_system_prompt(SYSTEM_PROMPT, prompt)
 
             if self.confirm_on_failure and last_result is not None:
                 config = get_config()
@@ -215,7 +305,7 @@ class SemiAgent:
                     progress.log_step("Retry (user confirmed)")
                     progress.update("Retry (user confirmed)...")
                     raw = self.generator.generate(
-                        SYSTEM_PROMPT,
+                        system_prompt,
                         prompt,
                         stream=self.stream,
                         on_chunk=(
@@ -232,32 +322,19 @@ class SemiAgent:
                         expected_type=spec.expected_type,
                         sample_input=spec.sample_input,
                         enable_execution=self.enable_execution_test,
+                        usage_hint=getattr(spec, "usage_hint", ""),
                     )
                     if result.passed:
-                        if spec.template:
-                            template_hash = build_template_hash(
-                                spec.template.template_parts,
-                                spec.constant_values or {},
-                            )
-                        else:
-                            template_hash = hashlib.sha256(spec.prompt.encode()).hexdigest()[:16]
                         progress.record_success(
                             total_attempts + 1,
-                            cache_dir=cache_dir,
-                            site_id=spec.call_site.site_id,
-                            template_hash=template_hash,
                             call_site=spec.call_site,
                         )
                         fn = _compile_source(source)
-                        entry = CacheEntry(
-                            site_id=spec.call_site.site_id,
-                            template_hash=template_hash,
+                        return CacheEntry(
                             generated_source=source,
                             compiled_fn=fn,
                             expected_type=spec.expected_type,
                         )
-                        self.cache.put(entry)
-                        return entry
 
             progress.record_failure(
                 last_result.error_message if last_result else "Unknown error",

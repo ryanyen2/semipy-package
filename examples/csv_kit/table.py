@@ -1,0 +1,307 @@
+"""SemiTable: tabular API that looks deterministic. Malleability only where needed.
+
+User writes code like spec: select("date", "price"), sort(by="price", order="desc"),
+where(price__gt=50). Semi is used only inside a few operations that cannot be
+fully determined from column names and values: e.g. "which columns are numeric?",
+"which rows are outliers?", "sort by recency", "merge by matching meaning".
+"""
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, Literal, Optional, Union
+
+import pandas as pd
+
+from semipy import semiformal, semi
+
+
+def _rows_from_df(df: pd.DataFrame) -> list[dict[str, Any]]:
+    return df.to_dict("records")
+
+
+def _df_from_rows(rows: list[dict[str, Any]], columns: Optional[list[str]] = None) -> pd.DataFrame:
+    if not rows:
+        return pd.DataFrame(columns=columns or [])
+    return pd.DataFrame(rows, columns=columns or list(rows[0].keys()))
+
+
+# ---------------------------------------------------------------------------
+# Semi only where implementation cannot be prebuilt
+# ---------------------------------------------------------------------------
+
+@semiformal("column names matching semantic category")
+def _columns_like(columns: list[str], category: str) -> list[str]:
+    """Resolve a category (e.g. 'numeric', 'date') to column names. Used only for select(like=...)."""
+    return semi(f"column names from {columns} that match: {category}", expected_type=list)
+
+
+@semiformal("filter rows by semantic condition")
+def _filter_semantic(rows: list[dict[str, Any]], spec: str) -> list[dict[str, Any]]:
+    """Keep rows that satisfy a semantic spec (e.g. outliers, duplicates). Used only for where_semantic()."""
+    if not rows or not spec.strip():
+        return rows
+    sample = rows[: min(20, len(rows))]
+    return [row for row in rows if semi.matches(row, spec, sample=sample)]
+
+
+@semiformal("sort key for semantic order")
+def _sort_key_semantic(row: dict[str, Any], meaning: str) -> Any:
+    """Compute sort key when order is semantic (e.g. recency, importance), not just column value. Used only for sort_semantic()."""
+    return semi.sort_key(row, by=meaning)
+
+
+@semiformal("merge two tables by semantic row matching")
+def _merge_semantic_rows(
+    left_rows: list[dict[str, Any]],
+    right_rows: list[dict[str, Any]],
+    left_cols: list[str],
+    right_cols: list[str],
+    how: str,
+) -> list[dict[str, Any]]:
+    """Match rows from left and right by meaning (how). Returns list of merged row dicts."""
+    return semi.merge_tables(left_rows, right_rows, left_columns=left_cols, right_columns=right_cols, how=how)
+
+
+@semiformal("apply extra parameters to table operation result")
+def _apply_extra(rows: list[dict[str, Any]], columns: list[str], operation: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+    """Post-process operation result with extra parameters (e.g. top=N, rename={...})."""
+    return semi(f"apply {params} to result of {operation} on table with columns {columns}", expected_type=list)
+
+
+@semiformal("compute one new column value per row from a semantic spec")
+def _compute_column(rows: list[dict[str, Any]], columns: list[str], spec: str) -> list[Any]:
+    """Return a list of values, one per row, from interpreting spec over rows with given columns."""
+    return semi(f"for each row compute a single value: {spec}. columns: {columns}. return a list of values, one per row, same length as rows.", expected_type=list)
+
+
+_FORMAL_ORDER_TOKENS = frozenset({"asc", "desc", "ascending", "descending"})
+
+
+# ---------------------------------------------------------------------------
+# Formal predicate: parse where(price__gt=50, region="North")
+# ---------------------------------------------------------------------------
+
+def _apply_where_formal(df: pd.DataFrame, **kwargs: Any) -> pd.DataFrame:
+    if not kwargs:
+        return df
+    mask = pd.Series(True, index=df.index)
+    for key, value in kwargs.items():
+        if "__" in key:
+            col, op = key.rsplit("__", 1)
+            if col not in df.columns:
+                continue
+            s = df[col]
+            if op == "gt":
+                mask &= s > value
+            elif op == "gte":
+                mask &= s >= value
+            elif op == "lt":
+                mask &= s < value
+            elif op == "le":
+                mask &= s <= value
+            elif op == "eq":
+                mask &= s == value
+            elif op == "ne":
+                mask &= s != value
+            elif op == "in":
+                mask &= s.isin(value if isinstance(value, (list, tuple)) else [value])
+            elif op == "contains":
+                mask &= s.astype(str).str.contains(str(value), case=False, na=False)
+            else:
+                continue
+        else:
+            if key in df.columns:
+                mask &= df[key] == value
+    return df[mask].copy()
+
+
+# ---------------------------------------------------------------------------
+# SemiTable: spec-style API; semi only in semantic branches
+# ---------------------------------------------------------------------------
+
+class SemiTable:
+    """
+    Tabular data: .select(), .sort(), .where(), .merge(), .show().
+    API is deterministic and spec-like. Semiformal implementation is used only
+    for select(like=...), where_semantic(), sort_semantic(), merge_semantic().
+    """
+
+    def __init__(self, data: Union[pd.DataFrame, list[dict[str, Any]]], source_path: Optional[Path] = None) -> None:
+        if isinstance(data, pd.DataFrame):
+            self._df = data.copy()
+        else:
+            self._df = _df_from_rows(data)
+        self._source_path = source_path
+
+    @property
+    def columns(self) -> list[str]:
+        return list(self._df.columns)
+
+    def _rows(self) -> list[dict[str, Any]]:
+        return _rows_from_df(self._df)
+
+    def select(self, *columns: str, like: Optional[str] = None, **extra: Any) -> SemiTable:
+        """
+        Select columns. Exact column names are used when present; otherwise semantic match via like.
+        If like is set (e.g. like="numeric"), resolve column set by meaning.
+        """
+        if like is not None:
+            cols = _columns_like(self.columns, like)
+            cols = [c for c in cols if c in self._df.columns]
+        else:
+            cols = []
+            for name in columns:
+                if name in self._df.columns:
+                    cols.append(name)
+                else:
+                    resolved = _columns_like(self.columns, name)
+                    if resolved:
+                        cols.append(resolved[0])
+        if not cols:
+            out = SemiTable(pd.DataFrame(), source_path=self._source_path)
+        else:
+            out = SemiTable(self._df[cols].copy(), source_path=self._source_path)
+        if extra:
+            rows = out._rows()
+            rows = _apply_extra(rows, out.columns, "select", extra)
+            out = SemiTable(_df_from_rows(rows, out.columns), source_path=self._source_path)
+        return out
+
+    def sort(self, by: str, order: Union[str, Literal["asc", "desc"]] = "asc", **extra: Any) -> SemiTable:
+        """
+        Sort by column. If order is asc/desc/ascending/descending use formal sort; else semantic (order as meaning).
+        """
+        order_norm = str(order).strip().lower()
+        if order_norm in _FORMAL_ORDER_TOKENS:
+            if by not in self._df.columns:
+                out = SemiTable(self._df.copy(), source_path=self._source_path)
+            else:
+                ascending = order_norm in ("asc", "ascending")
+                out = SemiTable(self._df.sort_values(by=by, ascending=ascending).copy(), source_path=self._source_path)
+        else:
+            rows = self._rows()
+            if not rows or not order_norm:
+                out = SemiTable(self._df.copy(), source_path=self._source_path)
+            else:
+                keyed = [(_sort_key_semantic(row, str(order)), row) for row in rows]
+                keyed.sort(key=lambda p: p[0])
+                sorted_rows = [row for _, row in keyed]
+                out = SemiTable(_df_from_rows(sorted_rows, self.columns), source_path=self._source_path)
+        if extra:
+            rows = out._rows()
+            rows = _apply_extra(rows, out.columns, "sort", extra)
+            out = SemiTable(_df_from_rows(rows, out.columns), source_path=self._source_path)
+        return out
+
+    def sort_semantic(self, meaning: str) -> SemiTable:
+        """Thin wrapper: sort by semantic order (delegates to sort(..., order=meaning))."""
+        by = self.columns[0] if self.columns else ""
+        return self.sort(by=by, order=meaning)
+
+    def where(self, *conditions: Union[str, Any], **kwargs: Any) -> SemiTable:
+        """
+        Filter: formal kwargs (col__op or column name) applied first, then positional string conditions semantically.
+        """
+        formal_kwargs = {k: v for k, v in kwargs.items() if "__" in k or k in self._df.columns}
+        extra = {k: v for k, v in kwargs.items() if k not in formal_kwargs}
+        out = _apply_where_formal(self._df, **formal_kwargs)
+        out = SemiTable(out, source_path=self._source_path)
+        for spec in conditions:
+            if isinstance(spec, str) and spec.strip():
+                rows = out._rows()
+                rows = _filter_semantic(rows, spec)
+                out = SemiTable(_df_from_rows(rows, out.columns), source_path=self._source_path)
+        if extra:
+            rows = out._rows()
+            rows = _apply_extra(rows, out.columns, "where", extra)
+            out = SemiTable(_df_from_rows(rows, out.columns), source_path=self._source_path)
+        return out
+
+    def where_semantic(self, spec: str) -> SemiTable:
+        """Thin wrapper: filter by semantic spec (delegates to where(spec))."""
+        return self.where(spec)
+
+    def merge(self, other: SemiTable, on: Optional[Union[str, list[str]]] = None, how: Optional[str] = None, **extra: Any) -> SemiTable:
+        """
+        Join: if on is provided use formal merge; if how is provided (no on) use semantic row matching.
+        """
+        if on is not None:
+            on_list = [on] if isinstance(on, str) else list(on)
+            common = [c for c in on_list if c in self._df.columns and c in other._df.columns]
+            if not common:
+                out = SemiTable(self._df.copy(), source_path=self._source_path)
+            else:
+                merged = self._df.merge(other._df, on=common, how="inner", suffixes=("", "_right"))
+                merged = merged[[c for c in merged.columns if not c.endswith("_right")]]
+                out = SemiTable(merged, source_path=self._source_path)
+        elif how is not None:
+            left_rows = self._rows()
+            right_rows = other._rows()
+            if not left_rows or not right_rows:
+                out = SemiTable(self._df.copy(), source_path=self._source_path)
+            else:
+                try:
+                    result_rows = _merge_semantic_rows(left_rows, right_rows, self.columns, other.columns, how)
+                    out = SemiTable(_df_from_rows(result_rows), source_path=self._source_path)
+                except Exception:
+                    out = SemiTable(self._df.copy(), source_path=self._source_path)
+        else:
+            out = SemiTable(self._df.copy(), source_path=self._source_path)
+        if extra:
+            rows = out._rows()
+            rows = _apply_extra(rows, out.columns, "merge", extra)
+            out = SemiTable(_df_from_rows(rows, out.columns), source_path=self._source_path)
+        return out
+
+    def merge_semantic(self, other: SemiTable, how: str) -> SemiTable:
+        """Thin wrapper: merge by semantic row matching (delegates to merge(other, how=how))."""
+        return self.merge(other, how=how)
+
+    def show(self, n: int = 10) -> str:
+        """Return a string view of the first n rows. Deterministic."""
+        rows = self._rows()
+        cols = self.columns
+        if not cols:
+            return "(empty table)"
+        head = rows[:n]
+        if not head:
+            return "(no rows)"
+        lines = [" | ".join(cols)]
+        lines.append("-" * 50)
+        for row in head:
+            line = " | ".join(str(row.get(c, "")) for c in cols)
+            lines.append(line)
+        if len(rows) > n:
+            lines.append(f"... ({len(rows) - n} more rows)")
+        return "\n".join(lines)
+
+    def to_dataframe(self) -> pd.DataFrame:
+        return self._df.copy()
+
+    def assign_semantic(self, **column_specs: str) -> SemiTable:
+        """
+        Add new columns from semantic specs. Each key is the new column name;
+        each value is a string spec (e.g. "1 when market cap above 1000 else 0").
+        Semi interprets the spec over table rows and returns one value per row.
+        """
+        if not column_specs:
+            return SemiTable(self._df.copy(), source_path=self._source_path)
+        rows = self._rows()
+        cols = self.columns
+        out_df = self._df.copy()
+        for col_name, spec in column_specs.items():
+            if not isinstance(spec, str) or not spec.strip():
+                continue
+            values = _compute_column(rows, cols, spec)
+            if isinstance(values, list) and len(values) == len(out_df):
+                out_df[col_name] = values
+        return SemiTable(out_df, source_path=self._source_path)
+
+
+def open_table(path: Union[str, Path]) -> SemiTable:
+    """Load a CSV file into a SemiTable."""
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(str(p))
+    df = pd.read_csv(p)
+    return SemiTable(df, source_path=p)
