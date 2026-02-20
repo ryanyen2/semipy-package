@@ -13,7 +13,7 @@ from semipy.config import get_config
 
 
 def _model_string(model: str) -> str:
-    """Return LiteLLM-style model string for DSPy (e.g. openai/gpt-4o-mini)."""
+    """Return LiteLLM-style model string for DSPy (e.g. openai/gpt-5-mini)."""
     if "/" in model:
         return model
     return f"openai/{model}"
@@ -22,9 +22,10 @@ def _model_string(model: str) -> str:
 class SemiGenerator:
     """DSPy-based generator for producing Python functions from semantic prompts."""
 
-    def __init__(self, model: Optional[str] = None, api_key: Optional[str] = None):
+    def __init__(self, model: Optional[str] = None, reasoning_effort: Optional[str] = None, api_key: Optional[str] = None):
         config = get_config()
         self.model = model or config.model
+        self.reasoning_effort = reasoning_effort or config.reasoning_effort
         self._api_key = api_key or config.api_key
         self._predict = None
 
@@ -43,7 +44,7 @@ class SemiGenerator:
             )
         os.environ["OPENAI_API_KEY"] = self._api_key
         lm = dspy.LM(_model_string(self.model))
-        dspy.configure(lm=lm)
+        dspy.configure(lm=lm, reasoning_effort=self.reasoning_effort)
 
         class CodeGenSignature(dspy.Signature):
             """Generate a single Python function that implements the request. Output only the function in a ```python code block, no explanations."""
