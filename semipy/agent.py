@@ -184,12 +184,18 @@ class SemiAgent:
         attempt: int,
     ) -> str:
         base = self._build_named_user_prompt(spec) if spec.method_name else self._build_user_prompt(spec)
-        return (
-            base
-            + "\n\nPrevious attempt failed validation:\n"
-            + result.error_message
-            + "\n\nFix the function and output a corrected version in a ```python block."
-        )
+        parts = [
+            base,
+            "\n\nPrevious attempt failed validation:",
+            result.error_message,
+            "\n\nFix the function and output a corrected version in a ```python block.",
+        ]
+        if last_source.strip():
+            parts.insert(
+                -1,
+                "\n\nRejected code (fix the issues above):\n```python\n" + last_source.strip() + "\n```",
+            )
+        return "".join(parts)
 
     def generate(self, spec: GenerationSpec) -> CacheEntry:
         total_attempts = self.max_retries + 1

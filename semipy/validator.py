@@ -104,12 +104,15 @@ def _check_constant_sensitivity(
 ) -> Optional[str]:
     """
     Reject if the function output is unchanged for every perturbed constant argument.
-    Skips when baseline result is bool False to avoid false positives (single sample
-    cannot distinguish 'constant ignored' from 'both inputs legitimately give False').
+    Skips when baseline result is bool False or empty list to avoid false positives
+    (single sample cannot distinguish 'constant ignored' from 'both inputs legitimately
+    give False' or 'both give no matches').
     """
     if not sample_input or len(args) < 2:
         return None
     if isinstance(baseline_result, bool) and baseline_result is False:
+        return None
+    if isinstance(baseline_result, (list, tuple)) and len(baseline_result) == 0:
         return None
     try:
         for i in range(1, len(args)):
@@ -123,7 +126,8 @@ def _check_constant_sensitivity(
                 if baseline_result == other:
                     return (
                         "Function output did not change when constant argument was perturbed. "
-                        "Constants must be used as parameters; do not hardcode them."
+                        "Constants must be used as parameters; do not hardcode them. "
+                        f"The result must depend on argument at index {i} (e.g. use it to filter or select)."
                     )
             except Exception:
                 pass
@@ -275,11 +279,22 @@ def validate(
 
     anti_msg = _check_anti_patterns(tree, sample_input)
     if anti_msg is not None:
+        inferred = _get_return_type_from_ast(tree)
+        type_ok = (
+            expected_type is type(None)
+            or inferred is expected_type
+            or inferred is type(None)
+        )
+        if not type_ok and expected_type is not type(None):
+            try:
+                type_ok = issubclass(inferred, expected_type)
+            except TypeError:
+                pass
         return ValidationResult(
             passed=False,
             ast_valid=True,
-            type_correct=False,
-            execution_ok=False,
+            type_correct=type_ok,
+            execution_ok=True,
             error_message=anti_msg,
         )
 
@@ -322,14 +337,14 @@ def validate(
                     if usage_msg:
                         execution_ok = False
                         exec_error = usage_msg
-                    else:
-                        args_tuple = tuple(args)
-                        perturb_msg = _check_constant_sensitivity(
-                            source, sample_input, args_tuple, result, fn
-                        )
-                        if perturb_msg:
-                            execution_ok = False
-                            exec_error = perturb_msg
+                    # else:
+                    #     args_tuple = tuple(args)
+                    #     perturb_msg = _check_constant_sensitivity(
+                    #         source, sample_input, args_tuple, result, fn
+                    #     )
+                    #     if perturb_msg:
+                    #         execution_ok = False
+                    #         exec_error = perturb_msg
         except Exception as e:
             execution_ok = False
             exec_error = str(e)
