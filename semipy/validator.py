@@ -80,6 +80,55 @@ def _extract_function_source(raw: str) -> str:
     return raw
 
 
+def _is_numeric_literal(node: ast.expr) -> bool:
+    if isinstance(node, ast.Constant):
+        return isinstance(node.value, (int, float))
+    if isinstance(node, ast.UnaryOp) and isinstance(node.operand, ast.Constant):
+        return isinstance(node.operand.value, (int, float))
+    return False
+
+
+def _check_anti_patterns(tree: ast.AST) -> Optional[str]:
+    """
+    AST-based checks for generated code anti-patterns. Returns an error message
+    if the code should be rejected (so the LLM can retry with guidance); None if ok.
+    """
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if not isinstance(target, ast.Name):
+                    continue
+                if isinstance(node.value, ast.List) and node.value.elts:
+                    elts = node.value.elts
+                    if len(elts) > 5 and all(
+                        isinstance(e, ast.Constant) and isinstance(e.value, str) and len(str(e.value)) < 50
+                        for e in elts
+                    ):
+                        return (
+                            f"Assignment to {target.id!r}: avoid large lists of short string literals (keyword lists). "
+                            "Use the actual data context (sample rows, value distributions) to implement logic instead."
+                        )
+                if isinstance(node.value, ast.Dict) and node.value.keys:
+                    keys = node.value.keys
+                    values = node.value.values
+                    if len(keys) >= 4 and all(isinstance(k, ast.Constant) and isinstance(k.value, str) for k in keys):
+                        if all(_is_numeric_literal(v) for v in values):
+                            return (
+                                f"Assignment to {target.id!r}: avoid hardcoded lookup dicts with many string keys. "
+                                "Use the data context to derive or parameterize values instead."
+                            )
+                if isinstance(node.value, (ast.List, ast.Tuple)) and getattr(node.value, "elts", None):
+                    elts = node.value.elts
+                    if len(elts) > 8 and all(
+                        isinstance(e, (ast.Tuple, ast.List)) and len(getattr(e, "elts", [])) == 2 for e in elts
+                    ):
+                        return (
+                            f"Assignment to {target.id!r}: avoid long operator/pattern tuple chains. "
+                            "Implement logic from the prompt and data context instead of pattern tables."
+                        )
+    return None
+
+
 def _get_return_type_from_ast(tree: ast.AST) -> type:
     """Infer return type from the single function def in the source."""
     _name_to_type = {
@@ -147,6 +196,16 @@ def validate(
             type_correct=False,
             execution_ok=False,
             error_message="No function definition found",
+        )
+
+    anti_msg = _check_anti_patterns(tree)
+    if anti_msg is not None:
+        return ValidationResult(
+            passed=False,
+            ast_valid=True,
+            type_correct=False,
+            execution_ok=False,
+            error_message=anti_msg,
         )
 
     ast_valid = True

@@ -48,42 +48,50 @@ def plot_map(
 def plot_timeseries(
     ds: WeatherDataset,
     variable: str,
+    **extra: Any,
 ) -> Any:
-    """Plot variable vs time. date_column inferred via semi when None."""
-    
+    """Plot variable vs time. Date column inferred via semi from table columns."""
     tbl = ds.table()
-    date_columns = [col for col in tbl.columns if semi(f"field as datetime from {tbl.columns.tolist()}") in col.lower()]
-    date_column = date_columns[0] if date_columns else tbl.columns[0]
+    date_column = semi.pick_date_column(tbl.columns.tolist())
+    if not date_column or date_column not in tbl.columns:
+        date_column = tbl.columns[0] if len(tbl.columns) else None
+    if date_column is None:
+        plt.figure()
+        return plt.gcf()
 
     plt.figure()
     plt.plot(tbl[date_column], tbl[variable])
     plt.xlabel(date_column)
     plt.gca().xaxis.set_major_locator(plt.MaxNLocator(integer=True))
-    plt.gca().xaxis.set_major_formatter(plt.FormatStrFormatter(semi(f"format major ticks for {date_column} based on the data")))
     plt.ylabel(variable)
-    plt.gca().tick_params(semi(f"tick params for {date_column} based on the data"))
+    if extra:
+        semi.apply_plot_extra(plt.gca(), extra, date_column=date_column, variable=variable)
     return plt.gcf()
 
+
 def map_fetched_weather_to_row(fetched_weather: dict[str, Any], table: pd.DataFrame) -> dict[str, Any]:
-    # 1. find the date column
-    # 2. map the fetched weather to the table columns
-    
-    # 3. return the new row
-    date_column = semi.pick_date_column(table.columns.tolist())
-    new_row = {date_column: fetched_weather.get("time"), **fetched_weather}
-    return new_row
+    """Map fetched weather dict to one row aligned with table columns; date column and mapping via semi."""
+    columns = table.columns.tolist()
+    date_column = semi.pick_date_column(columns)
+    if not date_column or date_column not in columns:
+        date_column = columns[0] if columns else None
+    row = semi.map_fetched_weather_to_row(fetched_weather, columns)
+    if not isinstance(row, dict):
+        row = {}
+    return {c: row.get(c, pd.NA) for c in columns}
+
 
 @semiformal("fetch latest weather and append one row to the table")
-def latest_append(user_data: WeatherDataset, city: str, **kwargs: Any) -> WeatherDataset:
-    """Fetch latest weather for city and append one row. Semi maps fetched data to table columns."""
+def latest_append(user_data: WeatherDataset, city: str, **extra: Any) -> WeatherDataset:
+    """Fetch latest weather for city and append one row. Extra params (e.g. forecast_days) passed to semi."""
     if not user_data.is_table():
         raise ValueError("latest_append requires a table dataset")
 
-    latest = semi.fetch_weather(city)
+    latest = semi.fetch_weather(city, **extra)
     if isinstance(latest, dict) and latest.get("error"):
         raise ValueError(latest["error"])
     table = user_data.table()
-    row = semi.map_fetched_weather_to_row(latest, table.columns.tolist())
+    row = map_fetched_weather_to_row(latest, table)
     if not isinstance(row, dict):
         row = {}
     row = {c: row.get(c, pd.NA) for c in table.columns}
@@ -93,15 +101,15 @@ def latest_append(user_data: WeatherDataset, city: str, **kwargs: Any) -> Weathe
 
 
 @semiformal("preprocess a column: coerce type, parse dates, handle missing")
-def preprocess_column(ds: WeatherDataset, column: str, **kwargs: Any) -> WeatherDataset:
-    """Preprocess a column using semi; type and semantics inferred from data."""
+def preprocess_column(ds: WeatherDataset, column: str, **extra: Any) -> WeatherDataset:
+    """Preprocess a column using semi; type and semantics inferred from data. Extra params for semi post-process."""
     if not ds.is_table():
         raise ValueError("preprocess_column requires a table dataset")
     tbl = ds.table()
     if column not in tbl.columns:
         raise ValueError(f"Column {column!r} not in dataset")
     series = tbl[column]
-    modified = semi.preprocess_series(series, column)
+    modified = semi.preprocess_series(series, column, **extra)
     if modified is None or not hasattr(modified, "__len__"):
         return ds
     if len(modified) != len(tbl):

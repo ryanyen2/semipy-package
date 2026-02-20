@@ -30,6 +30,7 @@ from semipy.types import (
     SemiTool,
     ValidationResult,
 )
+from semipy.profiler import profile_value
 from semipy.validator import validate, _extract_function_source
 
 
@@ -66,39 +67,8 @@ class SemiAgent:
         self.tools: List[SemiTool] = list(tools) if tools is not None else []
 
     def _describe_value(self, name: str, value: Any) -> str:
-        """Data-agnostic introspection via duck typing; truncates to limit prompt size."""
-        lines: list[str] = [f"{name}: type={type(value).__name__}"]
-        try:
-            if hasattr(value, "columns") and hasattr(value, "dtypes"):
-                lines.append(f"  columns: {list(value.columns)}")
-                try:
-                    dtypes = getattr(value.dtypes, "to_dict", lambda: dict(value.dtypes))()
-                    lines.append(f"  dtypes: {dtypes}")
-                except Exception:
-                    pass
-            elif hasattr(value, "columns"):
-                lines.append(f"  columns: {list(value.columns)}")
-            if hasattr(value, "shape"):
-                lines.append(f"  shape: {value.shape}")
-            if hasattr(value, "keys") and callable(value.keys):
-                keys = list(value.keys())[:20]
-                lines.append(f"  keys (sample): {keys}")
-            if hasattr(value, "__len__") and not hasattr(value, "shape"):
-                try:
-                    lines.append(f"  len: {len(value)}")
-                except Exception:
-                    pass
-            if hasattr(value, "__iter__") and not hasattr(value, "columns") and not hasattr(value, "keys"):
-                try:
-                    sample = list(value)[:10]
-                    lines.append(f"  sample: {sample}")
-                except Exception:
-                    pass
-        except Exception:
-            lines.append("  (introspection skipped)")
-        raw = "\n".join(lines)
-        max_len = 800
-        return raw if len(raw) <= max_len else raw[: max_len - 3] + "..."
+        """Data-agnostic introspection via duck typing; delegates to profiler."""
+        return profile_value(name, value)
 
     def _describe_context(self, spec: GenerationSpec) -> str:
         """Aggregate data context: variable_values descriptions, type_hints, trimmed source."""

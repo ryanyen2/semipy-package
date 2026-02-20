@@ -84,7 +84,7 @@ Rules:
 - Parameters: the user prompt may reference "the value" or "this row" or similar; those become the first parameter(s). Other fixed context (sample data, condition strings) are described in the prompt; bake them into the function or add parameters as needed.
 - Return type: match exactly what the user needs (bool for conditions, str for text, int/float for numbers, or the described type). Return that type only.
 - Handle edge cases: None, missing keys, empty data, type mismatches. Prefer safe defaults over raising.
-- Use the provided data context to understand actual data shapes, column names, dtypes, and value ranges. Write concrete logic that works with the actual data rather than generic keyword-matching heuristics.
+- You will receive sample rows and value distributions in the data context. Use these actual values to write concrete logic. Never generate keyword-matching lists, hardcoded lookup tables, or natural-language condition parsers. Never fabricate data values; the data context provides the actual values to use. If the prompt specifies a condition, implement that specific condition using actual column names and value ranges from the data context.
 - When a usage context is provided (e.g. "passed as argument to X"), return the type that X expects.
 - When generalizing, preserve the approach but parameterize specific values. Do not replace data-aware logic with keyword matching.
 - Do not use emoji or decorative output.
