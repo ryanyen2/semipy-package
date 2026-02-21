@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import sys
 from pathlib import Path
 from typing import Any, Optional
 
@@ -21,6 +22,7 @@ from semipy.console_io import (
     print_pipeline_log,
     _call_site_file_url,
     _file_link_url,
+    _relative_link_path,
 )
 from semipy.dag import (
     Slot,
@@ -113,6 +115,49 @@ def _extract_source_file_imports(filename: str) -> list[str]:
         return lines
     except Exception:
         return []
+
+
+def _get_entry_script_path() -> Optional[str]:
+    """Path of the script the user ran (e.g. examples/use_csv_kit.py), resolved, or None."""
+    if not sys.argv or not sys.argv[0] or sys.argv[0].startswith("-"):
+        return None
+    try:
+        return str(Path(sys.argv[0]).resolve())
+    except Exception:
+        return None
+
+
+def _get_entry_script_path_and_line(call_site: SemiCallSite) -> Optional[tuple[str, int]]:
+    """(path, lineno) of the user script frame (caller of the package file), or None. Walks stack to find first frame outside semipy and outside call_site.filename."""
+    call_filename = _normalize_filename(call_site.filename)
+    try:
+        semipy_dir = Path(__file__).resolve().parent
+    except Exception:
+        semipy_dir = None
+    frame = inspect.currentframe()
+    try:
+        f = frame
+        while f is not None:
+            f = f.f_back
+            if f is None:
+                break
+            fn = f.f_code.co_filename or ""
+            if not fn or fn == "<unknown>":
+                continue
+            try:
+                fnorm = _normalize_filename(fn)
+                frame_path = Path(fn).resolve()
+                if semipy_dir is not None and semipy_dir in frame_path.parents:
+                    continue
+                if fnorm == call_filename:
+                    continue
+            except Exception:
+                continue
+            return (str(frame_path), f.f_lineno or 0)
+    finally:
+        del frame
+    path = _get_entry_script_path()
+    return (path, 0) if path else None
 
 
 def _identify_call_site(depth: int = 2) -> SemiCallSite:
@@ -313,13 +358,16 @@ def _semi_inline(
                     path_str = str(dispatch_path)
                     code_line_range = get_dispatch_function_line_range(dispatch_path, fn_name)
                     if config.verbose:
+                        _entry = _get_entry_script_path_and_line(call_site)
                         print_dag_reuse(
                             call_site,
                             resolution.commit_id,
                             path_str,
-                            _call_site_file_url(call_site.filename, call_site.lineno),
+                            _relative_link_path(call_site.filename, call_site.lineno),
                             _file_link_url(path_str),
                             code_line_range=code_line_range if code_line_range != (0, 0) else None,
+                            entry_script_path=_entry[0] if _entry else None,
+                            entry_script_lineno=_entry[1] if _entry else None,
                         )
                     _kwargs = {k: v for k, v in kwargs.items() if k != "usage_hint"}
                     return _call_generated_fn(
@@ -389,24 +437,30 @@ def _semi_inline(
             path_str = str(_dispatch_path)
             code_line_range = fn_line_map.get(fn_name, (0, 0))
             if config.verbose:
+                _entry = _get_entry_script_path_and_line(call_site)
+                _ep, _el = (_entry[0], _entry[1]) if _entry else (None, None)
                 if resolution.decision == Decision.ADAPT and resolution.parent_commit_ids:
                     print_dag_adapt(
                         call_site,
                         commit.commit_id,
                         resolution.parent_commit_ids[0],
                         path_str,
-                        _call_site_file_url(call_site.filename, call_site.lineno),
+                        _relative_link_path(call_site.filename, call_site.lineno),
                         _file_link_url(path_str),
                         code_line_range=code_line_range if code_line_range != (0, 0) else None,
+                        entry_script_path=_ep,
+                        entry_script_lineno=_el,
                     )
                 else:
                     print_dag_generate(
                         call_site,
                         commit.commit_id,
                         path_str,
-                        _call_site_file_url(call_site.filename, call_site.lineno),
+                        _relative_link_path(call_site.filename, call_site.lineno),
                         _file_link_url(path_str),
                         code_line_range=code_line_range if code_line_range != (0, 0) else None,
+                        entry_script_path=_ep,
+                        entry_script_lineno=_el,
                     )
             _kwargs = {k: v for k, v in kwargs.items() if k != "usage_hint"}
             return _call_generated_fn(
@@ -484,13 +538,16 @@ def _semi_named(name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any
                 path_str = str(dispatch_path)
                 code_line_range = get_dispatch_function_line_range(dispatch_path, fn_name)
                 if config.verbose:
+                    _entry = _get_entry_script_path_and_line(call_site)
                     print_dag_reuse(
                         call_site,
                         resolution.commit_id,
                         path_str,
-                        _call_site_file_url(call_site.filename, call_site.lineno),
+                        _relative_link_path(call_site.filename, call_site.lineno),
                         _file_link_url(path_str),
                         code_line_range=code_line_range if code_line_range != (0, 0) else None,
+                        entry_script_path=_entry[0] if _entry else None,
+                        entry_script_lineno=_entry[1] if _entry else None,
                     )
                 prompt_preview = f"semi.{name}(...)"
                 _kwargs = {k: v for k, v in kwargs.items() if k != "usage_hint"}
@@ -567,24 +624,30 @@ def _semi_named(name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any
         path_str = str(_dispatch_path)
         code_line_range = fn_line_map.get(fn_name, (0, 0))
         if config.verbose:
+            _entry = _get_entry_script_path_and_line(call_site)
+            _ep, _el = (_entry[0], _entry[1]) if _entry else (None, None)
             if resolution.decision == Decision.ADAPT and resolution.parent_commit_ids:
                 print_dag_adapt(
                     call_site,
                     commit.commit_id,
                     resolution.parent_commit_ids[0],
                     path_str,
-                    _call_site_file_url(call_site.filename, call_site.lineno),
+                    _relative_link_path(call_site.filename, call_site.lineno),
                     _file_link_url(path_str),
                     code_line_range=code_line_range if code_line_range != (0, 0) else None,
+                    entry_script_path=_ep,
+                    entry_script_lineno=_el,
                 )
             else:
                 print_dag_generate(
                     call_site,
                     commit.commit_id,
                     path_str,
-                    _call_site_file_url(call_site.filename, call_site.lineno),
+                    _relative_link_path(call_site.filename, call_site.lineno),
                     _file_link_url(path_str),
                     code_line_range=code_line_range if code_line_range != (0, 0) else None,
+                    entry_script_path=_ep,
+                    entry_script_lineno=_el,
                 )
         _kwargs = {k: v for k, v in kwargs.items() if k != "usage_hint"}
         return _call_generated_fn(
@@ -648,13 +711,16 @@ def _semi_fallback(
                 path_str = str(dispatch_path)
                 code_line_range = get_dispatch_function_line_range(dispatch_path, fn_name)
                 if config.verbose:
+                    _entry = _get_entry_script_path_and_line(call_site)
                     print_dag_reuse(
                         call_site,
                         resolution.commit_id,
                         path_str,
-                        _call_site_file_url(call_site.filename, call_site.lineno),
+                        _relative_link_path(call_site.filename, call_site.lineno),
                         _file_link_url(path_str),
                         code_line_range=code_line_range if code_line_range != (0, 0) else None,
+                        entry_script_path=_entry[0] if _entry else None,
+                        entry_script_lineno=_entry[1] if _entry else None,
                     )
                 _kwargs = {k: v for k, v in kwargs.items() if k != "usage_hint"}
                 return _call_generated_fn(
@@ -695,13 +761,16 @@ def _semi_fallback(
     code_line_range = fn_line_map.get(fn_name, (0, 0))
     config = get_config()
     if config.verbose:
+        _entry = _get_entry_script_path_and_line(call_site)
         print_dag_generate(
             call_site,
             commit.commit_id,
             path_str,
-            _call_site_file_url(call_site.filename, call_site.lineno),
+            _relative_link_path(call_site.filename, call_site.lineno),
             _file_link_url(path_str),
             code_line_range=code_line_range if code_line_range != (0, 0) else None,
+            entry_script_path=_entry[0] if _entry else None,
+            entry_script_lineno=_entry[1] if _entry else None,
         )
     _kwargs = {k: v for k, v in kwargs.items() if k != "usage_hint"}
     return _call_generated_fn(fn, call_site, path_str, code_line_range, prompt, *(prompt,), usage_hint="", **_kwargs)

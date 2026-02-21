@@ -58,15 +58,22 @@ def _format_location(filename: str, lineno: int, func_qualname: str) -> str:
 
 
 def _call_site_file_url(filename: str, lineno: int) -> str:
-    """file:// URL for opening at line (IDE-friendly)."""
+    """file:// URL for opening at line (IDE-friendly). Uses resolved path for link target."""
     if not filename:
         return ""
-    p = Path(filename).resolve()
+    # p = Path(filename).resolve()
+    # use relative path instead of resolved path
+    p = Path(filename).relative_to(Path.cwd())
     try:
         uri = p.as_uri()
         return f"{uri}:{lineno}" if lineno else uri
     except Exception:
         return ""
+
+
+def _relative_path_for_display(path: str, line: Optional[int] = None, end_line: Optional[int] = None) -> str:
+    """Path relative to cwd for log display (e.g. examples/use_csv_kit.py or examples/csv_kit/table.py:69)."""
+    return _relative_display_path(path, line, end_line, max_len=72)
 
 
 def _format_cache_path(cache_dir: Optional[Path], entry: CacheEntry) -> str:
@@ -126,17 +133,15 @@ def _file_link_url(path: str) -> str:
         return ""
 
 
-# Dedupe: same (source, generation, path) only printed once per process.
-_semipy_log_printed: set[tuple[str, str, str]] = set()
+# Dedupe: same (call_file, source, generation, path) only printed once per process.
+_semipy_log_printed: set[tuple[str, str, str, str]] = set()
 
 
 def _format_call_source(call_site: SemiCallSite) -> str:
-    """Human-readable call site: file:line (function)."""
-    return _format_location(
-        call_site.filename,
-        call_site.lineno,
-        call_site.func_qualname or "",
-    )
+    """Human-readable call site: relative path and line (function)."""
+    loc = _relative_display_path(call_site.filename, call_site.lineno, max_len=72)
+    fn = call_site.func_qualname or "?"
+    return f"{loc} ({fn})"
 
 
 def _format_call_site_short(call_site: SemiCallSite) -> str:
@@ -162,7 +167,7 @@ def print_pipeline_log(
 
 
 def _path_with_line_range(path: str, line_range: tuple[int, int]) -> str:
-    """Return path:start-end for IDE link when line_range is non-zero."""
+    """Return path:start-end for IDE link when line_range is non-zero (absolute file:// URI)."""
     if not path or line_range == (0, 0):
         return path
     s, e = line_range
@@ -171,6 +176,24 @@ def _path_with_line_range(path: str, line_range: tuple[int, int]) -> str:
     try:
         uri = Path(path).resolve().as_uri()
         return f"{uri}:{s}-{e}" if e > s else f"{uri}:{s}"
+    except Exception:
+        return path
+
+
+def _relative_path_with_line_range(path: str, line_range: tuple[int, int]) -> str:
+    """Return relative path:start-end for command-click link (e.g. .semiformal/runtime/table.semi.py:42-97)."""
+    if not path or line_range == (0, 0):
+        return path
+    s, e = line_range
+    if s <= 0:
+        return _relative_display_path(path, max_len=72)
+    try:
+        p = Path(path).resolve()
+        try:
+            rel = str(p.relative_to(Path.cwd()))
+        except ValueError:
+            rel = p.name
+        return f"{rel}:{s}-{e}" if e > s else f"{rel}:{s}"
     except Exception:
         return path
 
@@ -197,52 +220,93 @@ def _print_semipy_line_once(
     source_link: Optional[str] = None,
     path_link: Optional[str] = None,
     code_line_range: Optional[tuple[int, int]] = None,
+    call_file: Optional[str] = None,
+    call_file_link: Optional[str] = None,
 ) -> None:
-    """Print [semipy] Call from {source}. {generation}. Code at {path}. Uses relative path; splits to two lines if over width."""
-    key = (source, generation, code_path, str(code_line_range) if code_line_range else "")
+    """Print [semipy] call file, package file, generation, transpiled file. All paths shown relative to cwd."""
+    key = (call_file or "", source, generation, code_path, str(code_line_range) if code_line_range else "")
     if key in _semipy_log_printed:
         return
     _semipy_log_printed.add(key)
     console = get_console()
-    source_part = f"[link={source_link}]{source}[/link]" if source_link else source
-    suffix = ""
+    # Call file (user script)
+    call_part = ""
+    if call_file:
+        call_part = f"[link={call_file_link}]{call_file}[/link]" if call_file_link else call_file
+        call_part = f"Call from {call_part}. "
+    # Package file (where semi() is called)
+    package_part = f"[link={source_link}]{source}[/link]" if source_link else source
+    # Transpiled file (use relative path for link so command-click navigates)
+    code_part = ""
     if code_path.strip():
-        link = path_link or _file_link_url(code_path)
         if code_line_range and code_line_range != (0, 0):
             s, e = code_line_range
-            path_display = _relative_display_path(code_path, s, e, max_len=48)
-            link = _path_with_line_range(code_path, code_line_range)
+            path_display = _relative_display_path(code_path, s, e, max_len=56)
+            link = _relative_path_with_line_range(code_path, code_line_range)
         else:
-            path_display = _relative_display_path(code_path, max_len=48)
-        path_part = f"[link={link}]{path_display}[/link]" if link else path_display
-        suffix = f" Code at {path_part}."
-    line1 = f"[dim][semipy][/] Call from {source_part}. [{style}]{generation}[/]"
-    plain_len = len(f"[semipy] Call from {source}. {generation}") + (len(suffix) if suffix else 0)
+            path_display = _relative_display_path(code_path, max_len=56)
+            try:
+                p = Path(code_path).resolve()
+                link = str(p.relative_to(Path.cwd()))
+            except ValueError:
+                link = p.name
+            except Exception:
+                link = path_display
+        code_part = f"[link={link}]{path_display}[/link]" if link else path_display
+    line1 = f"[dim][semipy][/] {call_part}Package: {package_part}. [{style}]{generation}[/]"
+    if code_part:
+        line1 += f" Code at {code_part}."
+    plain_len = len(f"[semipy] {call_part}Package: {source}. {generation}") + (len(f" Code at {code_part}.") if code_part else 0)
     try:
         width = console.width if getattr(console, "width", None) else _LOG_MAX_WIDTH
     except Exception:
         width = _LOG_MAX_WIDTH
-    if plain_len > width and suffix:
-        console.print(line1 + ".")
-        console.print(f"  [dim]Code at[/] {path_part}.")
+    if plain_len > width and code_part:
+        console.print(f"[dim][semipy][/] {call_part}Package: {package_part}. [{style}]{generation}[/].")
+        console.print(f"  [dim]Code at[/] {code_part}.")
     else:
-        console.print(line1 + suffix, no_wrap=True)
+        console.print(line1, no_wrap=True)
 
 
 def print_cache_hit_from_semi(
     spec: GenerationSpec,
     entry: CacheEntry,
     cache_dir: Optional[Path] = None,
+    entry_script_path: Optional[str] = None,
+    entry_script_lineno: Optional[int] = None,
 ) -> None:
-    """One line: Call from {source}. Reused cached implementation. Code at {path}."""
+    """One line: call file, package file, reused, code path. Paths relative to cwd."""
     cs = spec.call_site
-    source = _format_call_source(cs)
+    source = _relative_display_path(cs.filename, cs.lineno, max_len=72)
+    if cs.func_qualname:
+        source = f"{source} ({cs.func_qualname})"
     path = _format_cache_path(cache_dir, entry)
+    call_file = None
+    call_file_link = None
+    if entry_script_path:
+        call_file = _relative_path_for_display(entry_script_path, entry_script_lineno) if (entry_script_lineno is not None and entry_script_lineno > 0) else _relative_path_for_display(entry_script_path)
+        call_file_link = _relative_link_path(entry_script_path, entry_script_lineno if (entry_script_lineno is not None and entry_script_lineno > 0) else None)
     _print_semipy_line_once(
-        source, "Reused cached implementation.", path, "green",
+        source, "Reused cached implementation.", path or "", "green",
         source_link=_call_site_file_url(cs.filename, cs.lineno),
         path_link=_file_link_url(path),
+        call_file=call_file,
+        call_file_link=call_file_link,
     )
+
+
+def _relative_link_path(path: str, lineno: Optional[int] = None) -> str:
+    """Relative path (and optional line) for command-click link."""
+    try:
+        p = Path(path).resolve()
+        rel = str(p.relative_to(Path.cwd()))
+    except ValueError:
+        rel = p.name
+    except Exception:
+        return path
+    if lineno is not None and lineno > 0:
+        return f"{rel}:{lineno}"
+    return rel
 
 
 def print_dag_reuse(
@@ -252,11 +316,22 @@ def print_dag_reuse(
     source_link: Optional[str] = None,
     path_link: Optional[str] = None,
     code_line_range: Optional[tuple[int, int]] = None,
+    entry_script_path: Optional[str] = None,
+    entry_script_lineno: Optional[int] = None,
 ) -> None:
-    """Log REUSE: call source, reused implementation, code path (optional line range)."""
-    source = _relative_display_path(call_site.filename, call_site.lineno)
+    """Log REUSE: call file, package file, reused implementation, transpiled path (optional line range). All paths relative."""
+    source = _relative_display_path(call_site.filename, call_site.lineno, max_len=72)
     generation = f"Reused existing implementation (commit {commit_id[:8]})"
-    _print_semipy_line_once(source, generation, code_path, "green", source_link, path_link, code_line_range)
+    call_file = None
+    call_file_link = None
+    if entry_script_path:
+        call_file = _relative_path_for_display(entry_script_path, entry_script_lineno) if (entry_script_lineno is not None and entry_script_lineno > 0) else _relative_path_for_display(entry_script_path)
+        call_file_link = _relative_link_path(entry_script_path, entry_script_lineno if (entry_script_lineno is not None and entry_script_lineno > 0) else None)
+    _print_semipy_line_once(
+        source, generation, code_path, "green", source_link, path_link, code_line_range,
+        call_file=call_file,
+        call_file_link=call_file_link,
+    )
 
 
 def print_dag_adapt(
@@ -267,11 +342,22 @@ def print_dag_adapt(
     source_link: Optional[str] = None,
     path_link: Optional[str] = None,
     code_line_range: Optional[tuple[int, int]] = None,
+    entry_script_path: Optional[str] = None,
+    entry_script_lineno: Optional[int] = None,
 ) -> None:
-    """Log ADAPT: call source, adapted from parent, code path (optional line range)."""
-    source = _relative_display_path(call_site.filename, call_site.lineno)
+    """Log ADAPT: call file, package file, adapted from parent, transpiled path. All paths relative."""
+    source = _relative_display_path(call_site.filename, call_site.lineno, max_len=72)
     generation = f"Adapted from previous (commit {parent_commit_id[:8]} -> {commit_id[:8]})"
-    _print_semipy_line_once(source, generation, code_path, "cyan", source_link, path_link, code_line_range)
+    call_file = None
+    call_file_link = None
+    if entry_script_path:
+        call_file = _relative_path_for_display(entry_script_path, entry_script_lineno) if (entry_script_lineno is not None and entry_script_lineno > 0) else _relative_path_for_display(entry_script_path)
+        call_file_link = _relative_link_path(entry_script_path, entry_script_lineno if (entry_script_lineno is not None and entry_script_lineno > 0) else None)
+    _print_semipy_line_once(
+        source, generation, code_path, "cyan", source_link, path_link, code_line_range,
+        call_file=call_file,
+        call_file_link=call_file_link,
+    )
 
 
 def print_dag_generate(
@@ -281,11 +367,22 @@ def print_dag_generate(
     source_link: Optional[str] = None,
     path_link: Optional[str] = None,
     code_line_range: Optional[tuple[int, int]] = None,
+    entry_script_path: Optional[str] = None,
+    entry_script_lineno: Optional[int] = None,
 ) -> None:
-    """Log GENERATE: call source, new implementation, code path (optional line range)."""
-    source = _relative_display_path(call_site.filename, call_site.lineno)
+    """Log GENERATE: call file, package file, new implementation, transpiled path. All paths relative."""
+    source = _relative_display_path(call_site.filename, call_site.lineno, max_len=72)
     generation = f"New implementation (commit {commit_id[:8]})"
-    _print_semipy_line_once(source, generation, code_path, "yellow", source_link, path_link, code_line_range)
+    call_file = None
+    call_file_link = None
+    if entry_script_path:
+        call_file = _relative_path_for_display(entry_script_path, entry_script_lineno) if (entry_script_lineno is not None and entry_script_lineno > 0) else _relative_path_for_display(entry_script_path)
+        call_file_link = _relative_link_path(entry_script_path, entry_script_lineno if (entry_script_lineno is not None and entry_script_lineno > 0) else None)
+    _print_semipy_line_once(
+        source, generation, code_path, "yellow", source_link, path_link, code_line_range,
+        call_file=call_file,
+        call_file_link=call_file_link,
+    )
 
 
 def print_slot_history(slot: Any, max_entries: int = 20) -> None:
