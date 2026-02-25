@@ -99,6 +99,7 @@ Exports from `semipy/__init__.py`: `semiformal`, `semi`, `SemiConfig`, `configur
 - LLM model references: use OpenRouter model ids (e.g. anthropic/claude-sonnet-4-6); see config.validator_model for fast validation model.
 - Use Context7 MCP for library/API documentation when needed.
 - Prefer existing dependencies; introduce new ones only with user awareness.
+- **Type checking**: Generated function return values are validated with `isinstance`; when pydantic is available, `TypeAdapter(expected_type)` is used to produce clearer validation errors. The `expression` library (dbrattli/expression) is a dependency for potential future typed pipelines; currently type flow is enforced via expected_type and the validator.
 
 ## Rules
 

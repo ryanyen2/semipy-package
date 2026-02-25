@@ -176,12 +176,34 @@ def _validate_in_context(source: str, spec: GenerationSpec) -> ValidationResult:
     )
 
 
+def _validate_result_type_pydantic(result: Any, expected_type: type) -> Optional[str]:
+    """
+    Validate result against expected_type using pydantic TypeAdapter when available.
+    Returns an error message if validation fails, None if it passes or pydantic is unavailable.
+    """
+    if expected_type is type(None):
+        return None
+    try:
+        from pydantic import TypeAdapter
+        from pydantic import ValidationError as PydanticValidationError
+    except ImportError:
+        return None
+    try:
+        adapter = TypeAdapter(expected_type)
+        adapter.validate_python(result)
+        return None
+    except PydanticValidationError as e:
+        return str(e)
+    except Exception:
+        return None
+
+
 def _validate_basic_execution(
     expected_type: type,
     sample_input: Optional[dict[str, Any]],
     fn: Any,
 ) -> ValidationResult:
-    """Run generated function with sample_input and check return type. No heuristic rules."""
+    """Run generated function with sample_input and check return type. Uses pydantic when available for strict type validation."""
     if sample_input is None:
         return ValidationResult(
             passed=True,
@@ -194,14 +216,6 @@ def _validate_basic_execution(
         args = sample_input.get("args", ())
         kwargs = sample_input.get("kwargs", {})
         result = fn(*args, **kwargs)
-        if expected_type is not type(None) and not isinstance(result, expected_type):
-            return ValidationResult(
-                passed=False,
-                ast_valid=True,
-                type_correct=False,
-                execution_ok=True,
-                error_message=f"Returned {type(result).__name__}, expected {expected_type.__name__}",
-            )
         if expected_type is type(None) and result is None:
             return ValidationResult(
                 passed=False,
@@ -209,6 +223,20 @@ def _validate_basic_execution(
                 type_correct=True,
                 execution_ok=True,
                 error_message=_UNKNOWN_RETURN_NONE_MSG,
+            )
+        if expected_type is not type(None) and not isinstance(result, expected_type):
+            pydantic_err = _validate_result_type_pydantic(result, expected_type)
+            msg = (
+                f"Return value did not match expected type {expected_type.__name__}: {pydantic_err}"
+                if pydantic_err
+                else f"Returned {type(result).__name__}, expected {expected_type.__name__}"
+            )
+            return ValidationResult(
+                passed=False,
+                ast_valid=True,
+                type_correct=False,
+                execution_ok=True,
+                error_message=msg,
             )
         return ValidationResult(
             passed=True,

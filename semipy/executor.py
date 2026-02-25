@@ -10,7 +10,7 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 
 @dataclass
@@ -22,6 +22,19 @@ class ExecutionResult:
     stderr: str = ""
     result_repr: Optional[str] = None
     error: Optional[str] = None
+
+
+def _parse_gist_result_stdout(stdout: str) -> tuple[str, Optional[str]]:
+    """Extract __GIST_RESULT__ line from stdout; return (stdout_before_marker, result_repr)."""
+    marker = "__GIST_RESULT__"
+    if marker not in stdout:
+        return stdout, None
+    left, _, right = stdout.partition(marker)
+    stdout_clean = left.strip()
+    line = right.strip().split("\n")[0].strip() if right.strip() else ""
+    if line.startswith("Error:"):
+        return stdout_clean, None
+    return stdout_clean, line if line else None
 
 
 def _patch_blocking_calls(code: str) -> str:
@@ -111,7 +124,13 @@ print({repr(marker)}, repr(__out), flush=True)
 
 
 class GistExecutor:
-    """Execute gist source in E2B sandbox or subprocess fallback."""
+    """Execute gist source in E2B sandbox or subprocess fallback.
+
+    When using E2B, one sandbox is reused for the whole agent run (all tool calls).
+    Closing it after each gist run was causing 'Event loop is closed' on the next
+    call. close_async() must be called when the agent run is done (e.g. from
+    generate_async finally block).
+    """
 
     def __init__(
         self,
@@ -122,6 +141,17 @@ class GistExecutor:
         self.use_e2b = use_e2b and bool(e2b_api_key)
         self.timeout = timeout
         self._e2b_api_key = e2b_api_key
+        self._e2b_sandbox: Any = None
+
+    async def close_async(self) -> None:
+        """Kill the E2B sandbox if one was created. Call when the agent run is done."""
+        if self._e2b_sandbox is None:
+            return
+        try:
+            await self._e2b_sandbox.kill()
+        except Exception:
+            pass
+        self._e2b_sandbox = None
 
     async def execute_async(self, gist_source: str, cwd: Optional[str] = None) -> ExecutionResult:
         """Execute gist asynchronously. Uses E2B if configured, else subprocess in executor."""
@@ -154,8 +184,9 @@ class GistExecutor:
         self,
         gist_source: str,
         cwd: Optional[str] = None,
+        _retrying: bool = False,
     ) -> ExecutionResult:
-        """Execute via E2B AsyncSandbox if available."""
+        """Execute via E2B AsyncSandbox. Reuses one sandbox per executor; on 'Event loop is closed' retries with a fresh sandbox."""
         try:
             from e2b_code_interpreter import AsyncSandbox
         except ImportError:
@@ -163,26 +194,56 @@ class GistExecutor:
 
         gist_source = _patch_blocking_calls(gist_source)
         try:
-            async with AsyncSandbox(api_key=self._e2b_api_key) as sandbox:
-                exec_result = await sandbox.run_code(gist_source, timeout=self.timeout)
-                stdout = exec_result.logs.stdout or ""
-                stderr = exec_result.logs.stderr or ""
-                success = not exec_result.error
-                result_repr = None
-                if exec_result.result and hasattr(exec_result.result, "value"):
-                    result_repr = repr(exec_result.result.value)
+            if self._e2b_sandbox is None:
+                self._e2b_sandbox = await AsyncSandbox.create(api_key=self._e2b_api_key)
+            exec_result = await self._e2b_sandbox.run_code(gist_source, timeout=self.timeout)
+            logs = getattr(exec_result, "logs", None)
+            stdout_parts = getattr(logs, "stdout", None) if logs else None
+            stderr_parts = getattr(logs, "stderr", None) if logs else None
+            if stdout_parts is None and hasattr(exec_result, "text"):
+                stdout_parts = [getattr(exec_result, "text", "")] or []
+            if stdout_parts is None:
+                stdout_parts = []
+            if stderr_parts is None:
+                stderr_parts = []
+            stdout = "\n".join(stdout_parts) if isinstance(stdout_parts, list) else (stdout_parts or "")
+            stderr = "\n".join(stderr_parts) if isinstance(stderr_parts, list) else (stderr_parts or "")
+            stdout, result_repr = _parse_gist_result_stdout(stdout)
+            if result_repr is None:
+                res = getattr(exec_result, "result", None)
+                if res is not None and hasattr(res, "value"):
+                    result_repr = repr(res.value)
+            err = getattr(exec_result, "error", None)
+            if err is not None:
+                err_name = getattr(err, "name", "Error")
+                err_value = getattr(err, "value", str(err))
+                err_tb = getattr(err, "traceback", None)
+                error_msg = f"{err_name}: {err_value}"
+                if err_tb:
+                    error_msg += "\n" + (err_tb if isinstance(err_tb, str) else "\n".join(err_tb))
                 return ExecutionResult(
-                    success=success,
+                    success=False,
                     stdout=stdout,
                     stderr=stderr,
                     result_repr=result_repr,
-                    error=exec_result.error if exec_result.error else None,
+                    error=error_msg[:2000],
                 )
+            return ExecutionResult(
+                success=True,
+                stdout=stdout,
+                stderr=stderr,
+                result_repr=result_repr,
+                error=None,
+            )
         except Exception as e:
+            err_msg = str(e)
+            if not _retrying and "Event loop is closed" in err_msg:
+                self._e2b_sandbox = None
+                return await self._execute_e2b(gist_source, cwd=cwd, _retrying=True)
             return ExecutionResult(
                 success=False,
                 stdout="",
                 stderr="",
                 result_repr=None,
-                error=str(e),
+                error=err_msg,
             )

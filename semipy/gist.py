@@ -25,6 +25,13 @@ def _get_names_used(node: ast.AST) -> set[str]:
     return names
 
 
+def _future_imports_first(imports: list[str]) -> list[str]:
+    """Put any __future__ import lines first so they appear at the top of the gist."""
+    future = [s for s in imports if "__future__" in s]
+    rest = [s for s in imports if "__future__" not in s]
+    return future + rest
+
+
 def _get_code_snippet(source: str, node: ast.AST) -> str:
     """Return the source slice for a node if we have full source."""
     try:
@@ -71,8 +78,11 @@ class Gist:
 
 class GistBuilder:
     """
-    Builds a runnable gist from a GenerationSpec: user source + generated function
-    + test invocation. Falls back to None when user source is unavailable or AST trace fails.
+    Builds a runnable gist for sandbox validation: only the generated function,
+    any imports present in the generated snippet, and a test invocation with
+    sample data. Does not include user-file imports (e.g. semipy) or upstream
+    context, so the gist runs in a minimal environment (e.g. E2B) without
+    requiring the semiformal package.
     """
 
     def __init__(self, spec: GenerationSpec) -> None:
@@ -80,36 +90,19 @@ class GistBuilder:
 
     def build(self, generated_function_source: str) -> Optional[Gist]:
         """
-        Assemble a minimal standalone script: imports, upstream definitions (from
-        use-def trace), generated function, and test invocation. Returns None if
-        user source or context is missing or AST analysis fails.
+        Assemble a minimal standalone script to test the generated function with
+        real data flow: only imports from the generated snippet, the generated
+        function, and test invocation (sample_input / variable_values from spec).
+        Returns None if the generated source cannot be parsed or has no function.
         """
-        user_source = getattr(self.spec, "user_source_code", None) or ""
-        enclosing_source = getattr(self.spec, "enclosing_function_source", None)
-        context = self.spec.context
-        call_site = self.spec.call_site
-        first_lineno = getattr(context, "first_lineno", 1) if context else 1
-
-        if not user_source.strip():
-            return None
-        if not enclosing_source and not context:
+        raw = _extract_function_source(generated_function_source)
+        if not raw.strip():
             return None
 
-        try:
-            file_tree = ast.parse(user_source)
-        except SyntaxError:
-            return None
-
-        imports: list[str] = []
-        for node in ast.iter_child_nodes(file_tree):
-            if isinstance(node, (ast.Import, ast.ImportFrom)):
-                seg = _get_code_snippet(user_source, node)
-                if seg:
-                    imports.append(seg)
-
-        fn_source = _extract_function_source(generated_function_source)
+        import_lines, fn_source = _extract_imports_and_function_from_generated(raw)
         if not fn_source.strip():
             return None
+
         try:
             fn_tree = ast.parse(fn_source)
         except SyntaxError:
@@ -119,42 +112,11 @@ class GistBuilder:
             return None
         gen_fn_name = funcs[0].name
 
-        statement_source = _extract_enclosing_statement(
-            enclosing_source or "",
-            call_site.lineno,
-            first_lineno,
-        )
-        if not statement_source:
-            upstream_deps: list[str] = []
-        else:
-            try:
-                stmt_node = ast.parse(statement_source)
-                names_used = set()
-                for n in ast.walk(stmt_node):
-                    if isinstance(n, ast.Name) and isinstance(getattr(n, "ctx", None), ast.Load):
-                        names_used.add(n.id)
-                    if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name):
-                        names_used.add(n.value.id)
-            except SyntaxError:
-                names_used = set()
-
-            upstream_deps = _collect_upstream_snippets(
-                user_source,
-                enclosing_source or "",
-                call_site.lineno,
-                first_lineno,
-                names_used,
-            )
-
         test_invocation = _build_test_invocation(self.spec, gen_fn_name)
-        lines = []
-        if imports:
-            lines.extend(imports)
+        lines: list[str] = []
+        if import_lines:
+            lines.extend(import_lines)
             lines.append("")
-        for snip in upstream_deps:
-            if snip.strip():
-                lines.append(snip)
-                lines.append("")
         lines.append(fn_source)
         lines.append("")
         lines.append(test_invocation)
@@ -163,7 +125,7 @@ class GistBuilder:
             source="\n".join(lines),
             fn_name=gen_fn_name,
             test_invocation=test_invocation,
-            upstream_deps=upstream_deps,
+            upstream_deps=[],
             mocked_externals=[],
         )
 
@@ -184,6 +146,68 @@ def _extract_function_source(raw: str) -> str:
     return raw
 
 
+def _strip_future_imports(source: str) -> str:
+    """Remove any line that is a __future__ import (so it is not duplicated in gist)."""
+    out: list[str] = []
+    for line in source.splitlines():
+        s = line.strip()
+        if s.startswith("from __future__"):
+            continue
+        out.append(line)
+    return "\n".join(out).strip()
+
+
+def _normalize_generated_function_source(fn_source: str) -> str:
+    """
+    Use only the first top-level function definition from the generated source.
+    The full function is preserved (signature, return type annotation, body). We only
+    drop leading module-level imports and __future__ lines so the gist never has
+    __future__ or duplicate imports in the middle (which cause SyntaxError).
+    """
+    fn_source = _strip_future_imports(fn_source)
+    if not fn_source.strip():
+        return fn_source
+    try:
+        tree = ast.parse(fn_source)
+    except SyntaxError:
+        return fn_source
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef):
+            seg = _get_code_snippet(fn_source, node)
+            if seg and seg.strip():
+                return seg.strip()
+            break
+    return fn_source
+
+
+def _extract_imports_and_function_from_generated(raw_source: str) -> tuple[list[str], str]:
+    """
+    From raw generated snippet, return (leading_import_lines, function_source).
+    Leading imports are Import/ImportFrom before the first FunctionDef; the rest
+    is the first function definition. Used so the gist only includes imports
+    that the generated code needs (no user-file imports like semipy).
+    """
+    if not raw_source.strip():
+        return [], ""
+    try:
+        tree = ast.parse(raw_source)
+    except SyntaxError:
+        return [], ""
+    import_lines: list[str] = []
+    function_source = ""
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            seg = _get_code_snippet(raw_source, node)
+            if seg:
+                import_lines.append(seg)
+        elif isinstance(node, ast.FunctionDef):
+            seg = _get_code_snippet(raw_source, node)
+            if seg and seg.strip():
+                function_source = seg.strip()
+            break
+    return _future_imports_first(import_lines), function_source
+
+
 def _collect_upstream_snippets(
     file_source: str,
     func_source: str,
@@ -193,27 +217,23 @@ def _collect_upstream_snippets(
 ) -> list[str]:
     """
     Collect source snippets that define the names used in the enclosing statement.
-    Returns a list of code snippets in dependency order (module-level imports/assignments
-    first, then function-level statements before the semi() line).
+    Only module-level assignments are included (imports are handled separately in build()).
+    Function-body statements are not pasted into the gist (they are invalid at module level).
     """
     snippets: list[str] = []
     try:
         file_tree = ast.parse(file_source)
-        func_tree = ast.parse(func_source) if func_source.strip() else None
     except SyntaxError:
         return []
 
     defined_in_module: set[str] = set()
     for node in ast.iter_child_nodes(file_tree):
         if isinstance(node, (ast.Import, ast.ImportFrom)):
-            seg = _get_code_snippet(file_source, node)
-            if seg:
-                snippets.append(seg)
             for alias in (node.names if hasattr(node, "names") else []):
                 name = getattr(alias, "asname", None) or getattr(alias, "name", None)
                 if name:
                     defined_in_module.add(name)
-        if isinstance(node, ast.Assign):
+        elif isinstance(node, ast.Assign):
             for t in node.targets:
                 if isinstance(t, ast.Name):
                     defined_in_module.add(t.id)
@@ -223,19 +243,6 @@ def _collect_upstream_snippets(
                 for t in node.targets
             ):
                 snippets.append(seg)
-
-    if not func_tree or not func_tree.body or not isinstance(func_tree.body[0], ast.FunctionDef):
-        return snippets
-
-    func = func_tree.body[0]
-    rel_line = semi_lineno - first_lineno + 1
-    for stmt in func.body:
-        end = getattr(stmt, "end_lineno", stmt.lineno)
-        if end and end >= rel_line:
-            break
-        seg = _get_code_snippet(func_source, stmt)
-        if seg and seg.strip():
-            snippets.append(seg)
 
     return snippets
 

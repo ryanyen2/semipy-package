@@ -328,21 +328,27 @@ class SemiAgent:
         reasoning_blocks: list = []
         final_output: Optional[str] = None
 
-        async for event in agent.run_stream_events(prompt, deps=deps):
-            current_part_index, current_part_type = _handle_stream_event(
-                event,
-                part_buffers,
-                current_part_index,
-                current_part_type,
-                reasoning_blocks,
-                self.verbose,
-            )
-            if hasattr(event, "result") and hasattr(event.result, "output"):
-                final_output = getattr(event.result.output, "content", None) or str(event.result.output)
+        try:
+            async for event in agent.run_stream_events(prompt, deps=deps):
+                current_part_index, current_part_type = _handle_stream_event(
+                    event,
+                    part_buffers,
+                    current_part_index,
+                    current_part_type,
+                    reasoning_blocks,
+                    self.verbose,
+                )
+                if hasattr(event, "result") and hasattr(event.result, "output"):
+                    final_output = getattr(event.result.output, "content", None) or str(event.result.output)
+        finally:
+            executor = getattr(deps, "executor", None)
+            if executor is not None and hasattr(executor, "close_async"):
+                await executor.close_async()
 
         source = getattr(deps, "generated_source", None) or ""
         if not source.strip() and final_output:
             source = _extract_function_source(final_output)
+            print(f"Generated source:\n {source}")
         if not source.strip():
             raise SemiGenerationError("Agent did not produce a Python function (no code block or build_and_run_gist source).")
 

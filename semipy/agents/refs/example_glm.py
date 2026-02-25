@@ -918,7 +918,7 @@ Rule: the plot should show the trend over the year.
     )
     if len(sys.argv) > 1:
         spec = " ".join(sys.argv[1:])
-    result = asyncio.run(run_program_of_thought(spec, max_rounds=8, use_validator_llm=True))
+    result = asyncio.run(run_program_of_thought(spec, max_rounds=5, use_validator_llm=True))
     print("\n=== Reasoning steps (core output) ===")
     for step in result["reasoning_steps"]:
         print(f"[Round {step['round']}]\n{step['reasoning']}\n")

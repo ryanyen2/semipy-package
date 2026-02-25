@@ -16,8 +16,10 @@ class SemiConfig:
     openrouter_api_key: Optional[str] = field(default_factory=lambda: os.getenv("OPENROUTER_API_KEY"))
     openrouter_model: str = "anthropic/claude-sonnet-4-6"
     validator_model: str = "anthropic/claude-haiku-4-5-20251001"
+    openai_api_key: Optional[str] = field(default_factory=lambda: os.getenv("OPENAI_API_KEY"))
+    openai_model: str = "gpt-5.2"
     e2b_api_key: Optional[str] = field(default_factory=lambda: os.getenv("E2B_API_KEY"))
-    use_e2b: bool = False
+    use_e2b: bool = True
     gist_timeout: int = 30
     cache_dir: Path = field(default_factory=lambda: Path(".semiformal"))
     max_retries: int = 3
@@ -35,6 +37,8 @@ class SemiConfig:
         openrouter_api_key: Optional[str] = None,
         openrouter_model: Optional[str] = None,
         validator_model: Optional[str] = None,
+        openai_api_key: Optional[str] = None,
+        openai_model: Optional[str] = None,
         e2b_api_key: Optional[str] = None,
         use_e2b: Optional[bool] = None,
         gist_timeout: Optional[int] = None,
@@ -56,6 +60,10 @@ class SemiConfig:
             self.openrouter_model = openrouter_model
         if validator_model is not None:
             self.validator_model = validator_model
+        if openai_api_key is not None:
+            self.openai_api_key = openai_api_key
+        if openai_model is not None:
+            self.openai_model = openai_model
         if e2b_api_key is not None:
             self.e2b_api_key = e2b_api_key
         if use_e2b is not None:
