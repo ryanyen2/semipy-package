@@ -1,0 +1,434 @@
+% ---------------------------------------------------------------------------
+% Formal Algorithm Descriptions for the Semiformal Code Synthesis Framework
+% ---------------------------------------------------------------------------
+%
+% Required packages (add to your main document preamble):
+%   \usepackage{algorithm}
+%   \usepackage{algpseudocode}
+%   \usepackage{amsmath}
+%   \usepackage{amssymb}
+%   \usepackage{amsfonts}
+%
+% This file is designed for \input{algorithm.tex} in your paper.
+% ---------------------------------------------------------------------------
+
+
+% ===========================
+% SECTION: PROBLEM FORMULATION
+% ===========================
+
+\subsection{Problem Formulation}
+\label{sec:problem-formulation}
+
+Let $\mathcal{X}$ denote the space of natural-language specifications (f-strings
+with embedded expressions), $\mathcal{P}$ the space of Python programs (single
+function definitions), $\mathcal{T}$ the space of types, and $\mathcal{V}$ the
+space of runtime values.  A \emph{semiformal invocation}
+$\texttt{semi}(x)$, where $x \in \mathcal{X}$, synthesizes a function
+$P \in \mathcal{P}$ that implements the semantics described by~$x$, then
+executes $P$ on the runtime arguments.
+
+Formally, given a specification $x$ with constant bindings
+$\mathbf{c} = (c_1, \dots, c_k)$, loop-variant variables
+$\mathbf{v} = (v_1, \dots, v_n)$, expected return type $\tau \in \mathcal{T}$,
+and data context~$\mathcal{D}$ (profiled summaries of input values), the goal
+is to find:
+\begin{equation}
+\label{eq:objective}
+P^{*} = \arg\min_{P \in \mathcal{P}} \; -\!\log\, \mathcal{M}(P \mid x, \mathbf{c}, \tau, \mathcal{D})
+\quad \text{subject to} \quad
+\mathcal{V}(P, \tau, \mathbf{x}_s) = \textsc{True},
+\end{equation}
+where $\mathcal{M}$ is the language model and $\mathcal{V}$ is a multi-stage
+validation predicate (defined below).  Because direct optimization of
+Equation~\eqref{eq:objective} is intractable, we approximate it via
+\emph{iterative refinement} with structured feedback:
+\begin{align}
+P_0 &= \mathcal{M}(x,\, \mathbf{c},\, \tau,\, \mathcal{D}), \label{eq:init}\\
+P_{i+1} &= \mathcal{M}\!\bigl(x,\, \mathbf{c},\, \tau,\, \mathcal{D},\, P_i,\, F_i\bigr),
+\quad F_i = \mathcal{V}(P_i,\, \tau,\, \mathbf{x}_s), \label{eq:refine}
+\end{align}
+where $F_i$ is the validation feedback (error messages, tracebacks, type
+mismatches) from the $i$-th attempt.  The loop terminates when
+$\mathcal{V}(P_i, \tau, \mathbf{x}_s) = \textsc{True}$ or $i$ exceeds a
+maximum retry budget~$k$.
+
+To avoid redundant synthesis across invocations, a
+\emph{version-controlled DAG cache} stores prior implementations keyed by
+structural fingerprints, enabling $O(1)$ reuse when the same (or structurally
+equivalent) specification is encountered again.
+
+% ===========================
+% SUBSECTION: FORMAL DEFINITIONS
+% ===========================
+
+\subsection{Formal Definitions}
+\label{sec:definitions}
+
+\paragraph{Call Site.}
+A call site $s = (f, \ell, q)$ consists of the source filename~$f$, line
+number~$\ell$, and qualified function name~$q$.  Its identity is
+$\mathrm{id}(s) = H(f \,\|\, \ell \,\|\, q)$, where $H$ is a truncated
+SHA-256 hash and $\|$ denotes concatenation.
+
+\paragraph{Template Decomposition.}
+Each specification string is an f-string decomposed via AST analysis into a
+template $t = \bigl((p_1, e_1),\, (p_2, e_2),\, \dots,\, (p_m, e_m)\bigr)$,
+where $p_i$ are literal string fragments and $e_i$ are variable
+expressions.  Variables are classified as:
+\begin{itemize}
+    \item \emph{Loop-variant} $\mathbf{v} = \{v_1, \dots, v_n\}$: values that
+          change across invocations at the same call site; these become
+          function parameters of the synthesized~$P$.
+    \item \emph{Constants} $\mathbf{c} = \{c_1, \dots, c_k\}$: values fixed
+          for a given invocation context; these are incorporated into the cache
+          key.
+\end{itemize}
+
+\paragraph{Structural Fingerprint.}
+The structural fingerprint is $\phi(t) = H\!\bigl(\mathrm{shape}(t)\bigr)$
+where $\mathrm{shape}(t) = \bigl[(k_1, n_1), \dots, (k_m, n_m)\bigr]$ with
+$k_i \in \{\texttt{lit}, \texttt{var}\}$ and $n_i$ the variable name when
+$k_i = \texttt{var}$.  Two templates with the same fingerprint~$\phi$ share
+structural shape but may differ in literal text or constant bindings.
+
+\paragraph{Usage Identifier.}
+A usage identifier uniquely identifies a specific invocation:
+$u = H\!\bigl(\mathrm{id}(s) \,\|\, H(t, \mathbf{c}) \,\|\, \tau\bigr)$.
+
+\paragraph{Operation Signature.}
+An operation signature identifies the combination of template structure and
+constant values: $\sigma = H\!\bigl(\phi(t) \,\|\, H(\mathbf{c})\bigr)$.
+Two invocations with the same $\sigma$ require identical implementations.
+
+\paragraph{Merkle DAG.}
+Generated implementations are stored as \emph{commits} in a content-addressed
+Merkle DAG:
+\begin{equation}
+\gamma = \bigl(\mathrm{id},\; \mathrm{parents},\; P,\; \phi,\; \sigma,\; \mathbf{c},\; x,\; d,\; u\bigr),
+\qquad
+\mathrm{id}(\gamma) = H\!\bigl(\mathrm{parents} \,\|\, H(P)\bigr),
+\end{equation}
+where $d \in \{\textsc{Reuse}, \textsc{Adapt}, \textsc{Generate}\}$ records
+the resolution decision (defined below) and $\mathrm{parents}$ links to
+ancestor commits.
+
+\paragraph{Slot and Portal.}
+A \emph{slot} $S = (\mathrm{slot\_id},\; \Gamma,\; \mathcal{B},\; \mathrm{refs})$
+groups all commits for one call site, where
+$\Gamma = \{\gamma_1, \gamma_2, \dots\}$ is the set of commits,
+$\mathcal{B} = \{B_1, B_2, \dots\}$ is the set of branches (each
+$B_j = (\mathrm{name}, \mathrm{head})$ pointing to a commit), and
+$\mathrm{refs}: u \to \gamma.\mathrm{id}$ maps usage identifiers to commits.
+A \emph{portal} $\Pi = (\mathrm{session},\; f_{\mathrm{src}},\;
+m,\; \{S_i\})$ is the per-session container holding all slots.
+
+\paragraph{Dispatch Module.}
+For each portal, a dispatch module
+\texttt{.semiformal/runtime/\{m\}.semi.py} is generated containing one
+compiled function per active commit (the head of the default branch or the
+most recently referenced commit) and a lookup table
+$\textsc{Dispatch}: u \to \mathrm{fname}$ mapping each registered usage
+identifier to its function name.  Multiple usage identifiers in the same slot
+may map to the same function.
+
+\paragraph{Dependency Graph.}
+A dependency graph
+$G = (E,\; \mathcal{S},\; \mathrm{fwd},\; \mathrm{bwd})$ tracks cross-slot
+data dependencies, where $E$ is a set of directed edges
+$(r_{\mathrm{up}}, r_{\mathrm{down}})$ between slot references, $\mathcal{S}$
+maps each slot reference to its reactive status (current commit, staleness
+flag, downstream requirements), and $\mathrm{fwd}/\mathrm{bwd}$ are forward
+and backward adjacency indices.
+
+\paragraph{Data Flow Provenance.}
+Each value $y$ produced by a semiformal call carries a provenance record
+$\mathrm{flow}(y) = (r,\; \gamma.\mathrm{id},\; \mathrm{chain})$
+identifying the producing slot reference~$r$, the commit that generated it,
+and the upstream dependency chain.  This enables automatic dependency
+registration when $y$ is consumed by a downstream semiformal call.
+
+\paragraph{Validation Predicate.}
+The multi-stage validation predicate is defined as:
+\begin{equation}
+\label{eq:validation}
+\mathcal{V}(P, \tau, \mathbf{x}_s) =
+  \underbrace{\textsc{SynOk}(P)}_{\text{Stage 1}}
+  \;\wedge\;
+  \underbrace{\textsc{ExecOk}(P, \mathbf{x}_s)}_{\text{Stage 2}}
+  \;\wedge\;
+  \underbrace{\textsc{TypeOk}\!\bigl(P(\mathbf{x}_s), \tau\bigr)}_{\text{Stage 3}},
+\end{equation}
+where:
+\begin{align}
+\textsc{SynOk}(P) &\;\triangleq\; \texttt{ast.parse}(P) \neq \bot
+  \;\wedge\;
+  \bigl|\{f \in \mathrm{AST}(P) : f \text{ is } \texttt{FunctionDef}\}\bigr| \geq 1, \\
+\textsc{ExecOk}(P, \mathbf{x}_s) &\;\triangleq\;
+  \texttt{compile}(P);\; f(\mathbf{x}_s) \text{ terminates without exception}, \\
+\textsc{TypeOk}(v, \tau) &\;\triangleq\;
+  \texttt{isinstance}(v, \tau)
+  \;\vee\;
+  \textsc{TypeAdapter}(\tau).\texttt{validate}(v) \text{ succeeds}.
+\end{align}
+
+When context information is available (the enclosing function source and
+caller's local variables), $\textsc{ExecOk}$ is strengthened to
+\emph{context-aware validation}: the generated function is injected into the
+caller's namespace and the enclosing statement is re-executed, verifying
+compatibility with the surrounding program.
+
+
+% ===========================
+% ALGORITHM 1: SYNTHESIZE
+% ===========================
+
+\begin{algorithm}[t]
+\caption{\textsc{Synthesize}: Tool-Augmented Code Synthesis with Iterative Refinement}
+\label{alg:synthesize}
+\begin{algorithmic}[1]
+
+\Require Specification $\mathcal{S} = (x,\, \tau,\, \mathbf{c},\, \mathbf{v},\, \mathcal{D},\, P_{\mathrm{parent}})$;
+  maximum retries~$k$; language model~$\mathcal{M}$;
+  tool set $\mathcal{T} = \{\textsc{Profile},\, \textsc{ReadCtx},\, \textsc{Gist},\, \textsc{ValOut}\}$
+\Ensure Valid program $P^{*}$ such that $\mathcal{V}(P^{*}, \tau, \mathbf{x}_s) = \textsc{True}$
+
+\State $P_{\mathrm{prev}} \gets \bot$;\quad $F_{\mathrm{prev}} \gets \bot$
+
+\For{$i = 0$ \textbf{to} $k$}
+
+  \Statex \hspace{\algorithmicindent}\Comment{Prompt construction with feedback}
+  \If{$i = 0$}
+    \State $\pi \gets \textsc{BuildPrompt}(x,\, \tau,\, \mathbf{c},\, \mathcal{D},\, P_{\mathrm{parent}})$
+  \Else
+    \State $\pi \gets \pi \oplus \textsc{Feedback}(P_{\mathrm{prev}},\, F_{\mathrm{prev}})$
+      \Comment{Append rejected code + error}
+  \EndIf
+
+  \Statex \hspace{\algorithmicindent}\Comment{Agentic generation with chain-of-thought reasoning}
+  \State $\mathcal{R} \gets \emptyset$
+    \Comment{Reasoning trace}
+  \State $P_i \gets \bot$
+
+  \For{\textbf{each} event $\in \mathcal{M}.\textsc{Stream}(\pi,\, \mathcal{T})$}
+    \If{event $\in$ \textsc{ThinkingPart}}
+      \State $\mathcal{R} \gets \mathcal{R} \cup \{\text{event.content}\}$
+        \Comment{Collect CoT reasoning steps}
+    \ElsIf{event $=$ \textsc{ToolCall}(\textsc{Profile})}
+      \State $\mathcal{D} \gets \mathcal{D} \cup \textsc{ProfileData}(\mathbf{v},\, \mathbf{c})$
+        \Comment{Enrich data context}
+    \ElsIf{event $=$ \textsc{ToolCall}(\textsc{ReadCtx})}
+      \State $\mathcal{D} \gets \mathcal{D} \cup \textsc{ReadUpstream}(P_{\mathrm{parent}})$
+        \Comment{Read parent implementations}
+    \ElsIf{event $=$ \textsc{ToolCall}(\textsc{Gist}, P')$}
+      \State $G \gets \textsc{Assemble}\!\bigl(\mathrm{imports}(P') \,\|\, P' \,\|\, \textsc{TestCall}(\mathbf{x}_s)\bigr)$
+        \Comment{Build minimal gist program}
+      \State $(\mathrm{out},\, \mathrm{err}) \gets \textsc{ExecSandbox}(G)$
+        \Comment{Execute in E2B sandbox or subprocess}
+      \State $P_i \gets P'$
+    \ElsIf{event $=$ \textsc{ToolCall}(\textsc{ValOut}, r)$}
+      \State $\textsc{CheckType}(r,\, \tau)$
+        \Comment{Agent-side type verification}
+    \ElsIf{event $\in$ \textsc{FinalResult}}
+      \State $P_i \gets \textsc{ExtractSource}(\text{event})$
+    \EndIf
+  \EndFor
+
+  \Statex \hspace{\algorithmicindent}\Comment{Stage 1: Syntactic validation}
+  \State $\mathrm{tree} \gets \texttt{ast.parse}(P_i)$
+  \If{$\mathrm{tree} = \bot$ \textbf{or} $\lnot\,\textsc{HasFuncDef}(\mathrm{tree})$}
+    \State $F_{\mathrm{prev}} \gets$ syntax error;\enspace
+           $P_{\mathrm{prev}} \gets P_i$;\enspace \textbf{continue}
+  \EndIf
+
+  \Statex \hspace{\algorithmicindent}\Comment{Stage 2: Execution validation}
+  \State $f \gets \textsc{Compile}(P_i)$
+  \If{$\mathcal{S}.\mathrm{context} \neq \bot$ \textbf{and} $\mathcal{S}.\mathrm{locals} \neq \bot$}
+    \State $\mathrm{stmt} \gets \textsc{ExtractStmt}(\mathcal{S}.\mathrm{context},\, \mathcal{S}.\mathrm{call\_site})$
+    \State $\mathrm{ns} \gets \mathcal{S}.\mathrm{imports} \cup \mathcal{S}.\mathrm{locals} \cup \{\texttt{semi} \mapsto f\}$
+    \If{$\texttt{exec}(\mathrm{stmt},\, \mathrm{ns})$ raises exception}
+      \State $F_{\mathrm{prev}} \gets$ traceback;\enspace
+             $P_{\mathrm{prev}} \gets P_i$;\enspace \textbf{continue}
+    \EndIf
+  \ElsIf{$\mathbf{x}_s \neq \bot$}
+    \State $\mathrm{result} \gets f(\mathbf{x}_s)$
+  \EndIf
+
+  \Statex \hspace{\algorithmicindent}\Comment{Stage 3: Type validation}
+  \If{$\mathrm{result}$ is defined \textbf{and}
+      $\lnot\,\texttt{isinstance}(\mathrm{result},\, \tau)$}
+    \If{$\textsc{TypeAdapter}(\tau).\texttt{validate}(\mathrm{result})$ fails}
+      \State $F_{\mathrm{prev}} \gets \textsc{TypeError}(\mathrm{result}, \tau)$;\enspace
+             $P_{\mathrm{prev}} \gets P_i$;\enspace \textbf{continue}
+    \EndIf
+  \EndIf
+
+  \Statex \hspace{\algorithmicindent}\Comment{Validation passed}
+  \State \Return $\textsc{CacheEntry}(P_i,\, f,\, \tau,\, \mathcal{R})$
+\EndFor
+
+\State \textbf{raise} $\textsc{SynthesisError}(F_{\mathrm{prev}})$
+  \Comment{Exhausted retry budget}
+\end{algorithmic}
+\end{algorithm}
+
+
+% ===========================
+% ALGORITHM 2: RESOLVE-AND-DISPATCH
+% ===========================
+
+\begin{algorithm}[t]
+\caption{\textsc{Resolve-and-Dispatch}: DAG-Based Version Control with Reactive Invalidation}
+\label{alg:resolve}
+\begin{algorithmic}[1]
+
+\Require Prompt $x$, loop-variant variables $\mathbf{v}$, constants $\mathbf{c}$,
+  expected type $\tau$, portal $\Pi$, dependency graph $G$
+\Ensure Value $y = P(\mathbf{v})$ from a version-controlled implementation
+
+\Statex \Comment{\textbf{Phase 1: Identification}}
+\State $s \gets \textsc{CallSite}(\mathrm{file},\, \mathrm{line},\, \mathrm{qualname})$
+\State $t \gets \textsc{Decompose}(x)$
+  \Comment{AST-based f-string decomposition}
+\State $\phi \gets H\!\bigl(\mathrm{shape}(t)\bigr)$
+  \Comment{Structural fingerprint}
+\State $u \gets H\!\bigl(\mathrm{id}(s) \,\|\, H(t, \mathbf{c}) \,\|\, \tau\bigr)$
+  \Comment{Usage identifier}
+\State $\sigma \gets H\!\bigl(\phi \,\|\, H(\mathbf{c})\bigr)$
+  \Comment{Operation signature}
+
+\Statex \Comment{\textbf{Phase 2: Reactive staleness check}}
+\State $r \gets \textsc{SlotRef}(\Pi.\mathrm{session},\, \mathrm{id}(s))$
+\For{\textbf{each} $v \in \mathbf{v}$}
+  \Comment{Register upstream data dependencies}
+  \If{$\textsc{HasFlow}(v)$}
+    \State $\textsc{AddDep}\!\bigl(G,\; \mathrm{flow}(v).\mathrm{slot} \to r\bigr)$
+      \Comment{Directed edge with cycle detection}
+  \EndIf
+\EndFor
+\State $\mathrm{force} \gets \textsc{IsStale}(G, r)$
+  \Comment{True if any upstream slot regenerated}
+
+\Statex \Comment{\textbf{Phase 3: Cascading resolution}}
+\State $S \gets \Pi.\mathrm{slots}[\mathrm{id}(s)]$
+\If{$S = \bot$}
+  \Comment{No prior implementations for this call site}
+  \State $d \gets \textsc{Generate}$;\quad $\gamma_p \gets \bot$
+\ElsIf{$\lnot\,\mathrm{force}$ \textbf{and} $u \in S.\mathrm{refs}$}
+  \Comment{Exact usage match}
+  \State $d \gets \textsc{Reuse}$;\quad $\gamma \gets S.\Gamma[S.\mathrm{refs}[u]]$
+\ElsIf{$\lnot\,\mathrm{force}$ \textbf{and}
+       $\exists\, \gamma' \!\in S.\Gamma : \gamma'.\sigma = \sigma$}
+  \Comment{Same operation signature}
+  \State $d \gets \textsc{Reuse}$;\quad $\gamma \gets \gamma'$
+\ElsIf{$\textsc{FindBranch}(S, \phi) \neq \bot$}
+  \Comment{Structural match on branch head}
+  \State $(b,\, \gamma_p) \gets \textsc{FindBranch}(S, \phi)$;\quad
+         $d \gets \textsc{Adapt}$
+\Else
+  \State $d \gets \textsc{Generate}$;\quad $\gamma_p \gets \bot$
+\EndIf
+
+\Statex \Comment{\textbf{Phase 4: Dispatch or synthesize}}
+\If{$d = \textsc{Reuse}$}
+  \State $\mathrm{fname} \gets S.\mathrm{base} \,\texttt{\_}\, \gamma.\mathrm{id}[{:}8]$
+  \If{$u \notin S.\mathrm{refs}$}
+    \Comment{Register new ref for this usage}
+    \State $S.\mathrm{refs}[u] \gets \gamma.\mathrm{id}$
+    \State $\textsc{WriteDispatch}(\Pi)$
+      \Comment{Regenerate \texttt{.semi.py}}
+  \EndIf
+  \State $P \gets \textsc{LoadDispatch}(\Pi.m,\, \mathrm{fname})$
+    \Comment{Execute dispatch module, extract function}
+  \State $y \gets P(\mathbf{v})$
+\Else
+  \Comment{$d \in \{\textsc{Adapt}, \textsc{Generate}\}$}
+  \State $\mathcal{S} \gets \textsc{BuildSpec}(x, s, t, \mathbf{c}, \mathbf{v}, \tau, d, \gamma_p)$
+  \State $\mathrm{entry} \gets \textsc{Synthesize}(\mathcal{S})$
+    \Comment{Algorithm~\ref{alg:synthesize}}
+
+  \Statex \hspace{\algorithmicindent}\Comment{\textbf{Phase 5: Commit to Merkle DAG}}
+  \State $\gamma_{\mathrm{new}} \gets \textsc{CreateCommit}\!\bigl(
+    \mathrm{parents}(\gamma_p),\;
+    \mathrm{entry}.P,\;
+    \phi,\, \sigma,\, \mathbf{c},\, x,\, d,\, u
+    \bigr)$
+  \Statex \hfill $\mathrm{id}(\gamma_{\mathrm{new}}) = H\!\bigl(\mathrm{parents} \,\|\, H(\mathrm{entry}.P)\bigr)$
+  \State $S.\Gamma[\gamma_{\mathrm{new}}.\mathrm{id}] \gets \gamma_{\mathrm{new}}$
+  \State $S.\mathcal{B}[b].\mathrm{head} \gets \gamma_{\mathrm{new}}.\mathrm{id}$
+  \State $S.\mathrm{refs}[u] \gets \gamma_{\mathrm{new}}.\mathrm{id}$
+    \Comment{Map usage $\to$ commit}
+
+  \Statex \hspace{\algorithmicindent}\Comment{\textbf{Phase 6: Persist and propagate}}
+  \State $\textsc{SavePortal}(\Pi)$
+    \Comment{\texttt{.semiformal/\{session\}.portal.json}}
+  \State $\textsc{WriteDispatch}(\Pi)$
+    \Comment{\texttt{.semiformal/runtime/\{m\}.semi.py}}
+  \State $\textsc{MarkStale}(G,\, r)$
+    \Comment{Transitively mark all downstream slots as stale}
+  \State $\textsc{ClearStale}(G,\, r)$;\quad
+         $\textsc{SaveGraph}(G)$
+  \State $P \gets \textsc{LoadDispatch}(\Pi.m,\, \mathrm{fname})$
+  \State $y \gets P(\mathbf{v})$
+\EndIf
+
+\Statex \Comment{\textbf{Attach provenance for downstream consumers}}
+\State $\textsc{AttachFlow}(y,\, r,\, \gamma.\mathrm{id})$
+  \Comment{$y.\texttt{\_semi\_flow} \gets (r, \gamma.\mathrm{id}, \mathrm{chain})$}
+\State $\textsc{UpdateCommit}(G,\, r,\, \gamma.\mathrm{id})$
+\State \Return $y$
+
+\end{algorithmic}
+\end{algorithm}
+
+
+% ===========================
+% SUBSECTION: PROPERTIES
+% ===========================
+
+\subsection{Properties}
+\label{sec:properties}
+
+\paragraph{Termination.}
+Algorithm~\ref{alg:synthesize} terminates in at most $k{+}1$ iterations of the
+outer loop.  Each iteration invokes the language model once (via streaming) and
+performs constant-time validation.  The total synthesis cost is bounded by
+$(k{+}1)$ LLM calls plus at most $(k{+}1)$ sandbox executions.
+
+\paragraph{Cache Soundness.}
+Let $\gamma = S.\Gamma[S.\mathrm{refs}[u]]$ be the commit loaded for usage~$u$.
+By construction (Algorithm~\ref{alg:synthesize}, line~47),
+$\mathcal{V}(\gamma.P, \tau, \mathbf{x}_s) = \textsc{True}$ held at commit
+time.  The dispatch module is regenerated on every DAG mutation
+(Algorithm~\ref{alg:resolve}, lines~30, 41), ensuring the loaded function
+corresponds to the active commit.
+
+\paragraph{Resolution Complexity.}
+Phase~3 of Algorithm~\ref{alg:resolve} performs a cascading lookup:
+ref lookup is $O(1)$ (hash map); operation signature and fingerprint matching
+are $O(|\Gamma|)$ over the slot's commits; branch search is $O(|\mathcal{B}|)$.
+In practice, $|\Gamma|$ and $|\mathcal{B}|$ are small (typically $< 10$),
+making resolution effectively constant-time.
+
+\paragraph{Reactive Consistency.}
+When a slot~$r$ generates a new commit, $\textsc{MarkStale}$ (line~43)
+transitively marks all downstream slots reachable via $G.\mathrm{fwd}$ as
+stale.  On the next access to a stale slot, $\mathrm{force} = \textsc{True}$
+(line~12) bypasses the cache and triggers re-synthesis, ensuring downstream
+implementations remain consistent with their data sources.  Cycle detection in
+$\textsc{AddDep}$ (line~9) prevents infinite propagation.
+
+\paragraph{Gist Isolation.}
+The gist program $G$ (Algorithm~\ref{alg:synthesize}, line~20) is a
+self-contained script comprising only the generated function's imports, the
+function definition, and a test invocation with sample data.  It excludes all
+framework code, enabling clean execution in an isolated sandbox (E2B or
+subprocess).  The result is extracted via a sentinel marker in~\texttt{stdout}.
+
+\paragraph{Multi-Usage Dispatch.}
+Multiple usage identifiers $u_1, u_2, \dots$ may map to the same commit
+$\gamma$ within a slot (via $S.\mathrm{refs}$), enabling a single generated
+function to serve structurally equivalent invocations with different constant
+bindings.  The dispatch module encodes this as a lookup table
+$\textsc{Dispatch}[u_i] = \mathrm{fname}$, and only the active commit per
+slot is materialized as executable code.
