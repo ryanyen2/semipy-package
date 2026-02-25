@@ -322,3 +322,73 @@ def validate(
     effective_type = spec.expected_type if spec is not None else expected_type
     effective_sample = spec.sample_input if spec is not None else sample_input
     return _validate_basic_execution(effective_type, effective_sample, fn)
+
+
+def validate_with_gist(
+    source: str,
+    spec: GenerationSpec,
+    gist_builder: Any,
+    executor: Any,
+) -> ValidationResult:
+    """
+    Validate generated function by building a gist and running it in the sandbox.
+    Returns ValidationResult with gist_executed, gist_stdout, gist_stderr set.
+    Falls back to standard validate() if gist building fails.
+    """
+    source = _extract_function_source(source)
+    if not source.strip():
+        return ValidationResult(
+            passed=False,
+            ast_valid=False,
+            type_correct=False,
+            execution_ok=False,
+            error_message="No Python code found in response",
+        )
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as e:
+        return ValidationResult(
+            passed=False,
+            ast_valid=False,
+            type_correct=False,
+            execution_ok=False,
+            error_message=f"Syntax error: {e}",
+        )
+    funcs = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]
+    if not funcs:
+        return ValidationResult(
+            passed=False,
+            ast_valid=False,
+            type_correct=False,
+            execution_ok=False,
+            error_message="No function definition found",
+        )
+    gist = gist_builder.build(source)
+    if gist is None:
+        return validate(source, spec.expected_type, spec.sample_input, True, getattr(spec, "usage_hint", ""), spec)
+    result = executor.execute_sync(gist.source)
+    from semipy.compiler import _compile_source
+    try:
+        fn = _compile_source(source)
+    except Exception as e:
+        return ValidationResult(
+            passed=False,
+            ast_valid=True,
+            type_correct=False,
+            execution_ok=False,
+            error_message=str(e),
+            gist_executed=result.success,
+            gist_stdout=result.stdout,
+            gist_stderr=result.stderr,
+        )
+    exec_result = _validate_basic_execution(spec.expected_type, spec.sample_input, fn)
+    return ValidationResult(
+        passed=exec_result.passed,
+        ast_valid=exec_result.ast_valid,
+        type_correct=exec_result.type_correct,
+        execution_ok=exec_result.execution_ok,
+        error_message=exec_result.error_message,
+        gist_executed=result.success,
+        gist_stdout=result.stdout,
+        gist_stderr=result.stderr,
+    )

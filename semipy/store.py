@@ -147,8 +147,24 @@ def function_name_for_commit(slot: Slot, commit: Commit) -> str:
     return f"{base}_{short}"
 
 
+def _get_active_commit(slot: Slot) -> Optional[Commit]:
+    """Return the active commit for the slot: head of default_branch, or most recent ref'd commit."""
+    default = slot.default_branch
+    branch = slot.branches.get(default)
+    if branch is not None:
+        commit = slot.commits.get(branch.head)
+        if commit is not None:
+            return commit
+    if slot.refs:
+        commit_ids = set(slot.refs.values())
+        candidates = [slot.commits[cid] for cid in commit_ids if slot.commits.get(cid)]
+        if candidates:
+            return max(candidates, key=lambda c: c.timestamp)
+    return None
+
+
 def write_dispatch_module(cache_dir: Path, portal: Portal) -> tuple[Path, dict[str, tuple[int, int]]]:
-    """Write dispatch module with only functions referenced by refs. Returns (path, fn_line_map)."""
+    """Write dispatch module with one implementation per slot (active commit). All usage_ids in the slot map to that function. Returns (path, fn_line_map)."""
     path = _dispatch_module_path(cache_dir, portal.module_name)
     _dispatch_dir(cache_dir).mkdir(parents=True, exist_ok=True)
 
@@ -163,25 +179,20 @@ def write_dispatch_module(cache_dir: Path, portal: Portal) -> tuple[Path, dict[s
     fn_line_map: dict[str, tuple[int, int]] = {}
 
     for slot in portal.slots.values():
-        refd_commit_ids = set(slot.refs.values())
-        for commit_id in refd_commit_ids:
-            commit = slot.commits.get(commit_id)
-            if commit is None:
-                continue
-            fn_name = function_name_for_commit(slot, commit)
-            lines.append(f"# slot: {slot.function_name_base} | commit: {commit_id[:8]} | {commit.decision}")
-            start_line = len(lines) + 1
-            fn_source = _source_with_function_name(commit.generated_source, fn_name)
-            fn_lines = fn_source.splitlines()
-            lines.extend(fn_lines)
-            lines.append("")
-            end_line = len(lines)
-            fn_line_map[fn_name] = (start_line, end_line)
-        for usage_id, commit_id in slot.refs.items():
-            commit = slot.commits.get(commit_id)
-            if commit is not None:
-                fn_name = function_name_for_commit(slot, commit)
-                dispatch_entries.append(f"DISPATCH[{repr(usage_id)}] = {repr(fn_name)}")
+        active = _get_active_commit(slot)
+        if active is None:
+            continue
+        fn_name = function_name_for_commit(slot, active)
+        lines.append(f"# slot: {slot.function_name_base} | commit: {active.commit_id[:8]} | {active.decision}")
+        start_line = len(lines) + 1
+        fn_source = _source_with_function_name(active.generated_source, fn_name)
+        fn_lines = fn_source.splitlines()
+        lines.extend(fn_lines)
+        lines.append("")
+        end_line = len(lines)
+        fn_line_map[fn_name] = (start_line, end_line)
+        for usage_id in slot.refs:
+            dispatch_entries.append(f"DISPATCH[{repr(usage_id)}] = {repr(fn_name)}")
 
     if dispatch_entries:
         lines.append("")

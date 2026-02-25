@@ -485,6 +485,13 @@ def _semi_inline(
                     for flow in (extract_flow(val),)
                     if flow is not None
                 ]
+            user_source_code = None
+            if call_site.filename and call_site.filename != "<unknown>":
+                try:
+                    user_source_code = Path(call_site.filename).read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    pass
+            enclosing_function_source = context.source_code if context else None
             spec = GenerationSpec(
                 prompt=prompt,
                 call_site=call_site,
@@ -504,6 +511,8 @@ def _semi_inline(
                 source_file_imports=_extract_source_file_imports(call_site.filename),
                 upstream_lineage=upstream_lineage_tuples,
                 downstream_requirements=get_downstream_requirements(dep_graph, current_slot_ref) if (getattr(config, "reactive", True) and dep_graph is not None) else None,
+                user_source_code=user_source_code,
+                enclosing_function_source=enclosing_function_source,
             )
             entry = SemiAgent().generate(spec)
             constants_snapshot = freeze_constants(constant_values)
@@ -751,6 +760,13 @@ def _semi_named(name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any
                 for flow in (extract_flow(val),)
                 if flow is not None
             ]
+        user_source_code = None
+        if call_site.filename and call_site.filename != "<unknown>":
+            try:
+                user_source_code = Path(call_site.filename).read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+        enclosing_function_source = context.source_code if context else None
         spec = GenerationSpec(
             prompt=prompt,
             call_site=call_site,
@@ -771,6 +787,8 @@ def _semi_named(name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any
             source_file_imports=_extract_source_file_imports(call_site.filename),
             upstream_lineage=upstream_lineage_tuples,
             downstream_requirements=get_downstream_requirements(dep_graph, current_slot_ref) if (getattr(config, "reactive", True) and dep_graph is not None) else None,
+            user_source_code=user_source_code,
+            enclosing_function_source=enclosing_function_source,
         )
         entry = SemiAgent().generate(spec)
         constants_snapshot = freeze_constants(constant_values)

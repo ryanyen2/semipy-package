@@ -404,6 +404,52 @@ def print_reactive_mismatch(slot_id: str, requirement: Any, actual: Any) -> None
     console.print(f"[yellow]Reactive:[/] slot [cyan]{slot_id[:8]}[/] output does not satisfy downstream requirement: required {requirement}, actual {actual}")
 
 
+def print_reasoning_block(content: str) -> None:
+    """Print a reasoning/thinking block in a Rich Panel."""
+    if not content.strip():
+        return
+    console = get_console()
+    console.print(Panel(content.strip(), title="Reasoning", border_style="dim"))
+
+
+def print_response_block(content: str) -> None:
+    """Print a response text block in a Rich Panel."""
+    if not content.strip():
+        return
+    console = get_console()
+    console.print(Panel(content.strip(), title="Response", border_style="blue"))
+
+
+def print_tool_call(tool_name: str, args_preview: str = "") -> None:
+    """One-line log for a tool call."""
+    console = get_console()
+    console.print(f"[dim][Tools][/] [cyan]{tool_name}[/] called {args_preview}")
+
+
+def print_tool_result(tool_name: str, result_preview: str, success: bool = True) -> None:
+    """One-line log for a tool result."""
+    console = get_console()
+    style = "green" if success else "red"
+    console.print(f"[dim][Tools][/] [cyan]{tool_name}[/] => [{style}]{result_preview}[/]")
+
+
+def print_gist_execution(success: bool, stdout: str, stderr: str) -> None:
+    """Display gist execution result (stdout/stderr)."""
+    console = get_console()
+    if success:
+        if stdout.strip():
+            console.print(Panel(stdout.strip(), title="Gist stdout", border_style="dim"))
+    else:
+        if stderr.strip():
+            console.print(Panel(stderr.strip(), title="Gist stderr", border_style="red"))
+
+
+def print_decision_explanation(decision: Any, explanation: str) -> None:
+    """Log resolution decision and short explanation."""
+    console = get_console()
+    console.print(f"[dim][semipy][/] Decision: [cyan]{decision}[/] {explanation}")
+
+
 def print_slot_history(slot: Any, max_entries: int = 20) -> None:
     """Print git-log-style history for a slot (commit id, message, branch)."""
     from semipy.dag import Commit, Slot

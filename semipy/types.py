@@ -109,8 +109,9 @@ class CacheEntry:
     generated_source: str
     compiled_fn: Optional[Callable[..., Any]] = None
     expected_type: type = type(None)
-    # Display path for console (e.g. session entry module path)
     cache_display_path: Optional[str] = None
+    reasoning_summary: Optional[str] = None
+    tool_calls_made: Optional[list[str]] = None
 
 
 @dataclass
@@ -182,6 +183,8 @@ class GenerationSpec:
     source_file_imports: Optional[list[str]] = None  # module-level import statements
     upstream_lineage: Optional[list[tuple[str, str]]] = None  # list of (session_id, slot_id) from upstream data
     downstream_requirements: Optional[dict[str, Any]] = None  # requirements from downstream (e.g. required_columns)
+    user_source_code: Optional[str] = None  # full source of user's file (for gist building)
+    enclosing_function_source: Optional[str] = None  # source of the @semiformal function
 
 
 @dataclass
@@ -193,12 +196,23 @@ class ValidationResult:
     type_correct: bool
     execution_ok: bool
     error_message: str = ""
+    gist_executed: bool = False
+    gist_stdout: str = ""
+    gist_stderr: str = ""
 
 
 class SemiGenerationError(Exception):
     """Raised when the agent cannot produce a valid function after retries."""
 
-    pass
+    def __init__(
+        self,
+        message: str,
+        last_source: Optional[str] = None,
+        last_result: Optional[ValidationResult] = None,
+    ):
+        super().__init__(message)
+        self.last_source = last_source
+        self.last_result = last_result
 
 
 def _interpret_semi_call_cause(cause: BaseException) -> tuple[str, str]:

@@ -13,24 +13,31 @@ load_dotenv()
 class SemiConfig:
     """Global configuration for semi() and the generation agent."""
 
-    model: str = "gpt-5-mini"
-    api_key: Optional[str] = field(default_factory=lambda: os.getenv("OPENAI_API_KEY"))
+    openrouter_api_key: Optional[str] = field(default_factory=lambda: os.getenv("OPENROUTER_API_KEY"))
+    openrouter_model: str = "anthropic/claude-sonnet-4-6"
+    validator_model: str = "anthropic/claude-haiku-4-5-20251001"
+    e2b_api_key: Optional[str] = field(default_factory=lambda: os.getenv("E2B_API_KEY"))
+    use_e2b: bool = False
+    gist_timeout: int = 30
     cache_dir: Path = field(default_factory=lambda: Path(".semiformal"))
     max_retries: int = 3
     enable_execution_test: bool = True
     verbose: bool = True
-    stream: bool = False
+    stream: bool = True
     confirm_on_failure: bool = False
     confirm_on_external_tools: bool = False
     confirm_callback: Optional[Callable[[str], str]] = None
-    reasoning_effort: Optional[str] = 'minimal'
     reactive: bool = True
     analyze_scripts: bool = True
 
     def configure(
         self,
-        model: Optional[str] = None,
-        api_key: Optional[str] = None,
+        openrouter_api_key: Optional[str] = None,
+        openrouter_model: Optional[str] = None,
+        validator_model: Optional[str] = None,
+        e2b_api_key: Optional[str] = None,
+        use_e2b: Optional[bool] = None,
+        gist_timeout: Optional[int] = None,
         cache_dir: Optional[Path] = None,
         max_retries: Optional[int] = None,
         enable_execution_test: Optional[bool] = None,
@@ -39,15 +46,22 @@ class SemiConfig:
         confirm_on_failure: Optional[bool] = None,
         confirm_on_external_tools: Optional[bool] = None,
         confirm_callback: Optional[Callable[[str], str]] = None,
-        reasoning_effort: Optional[str] = None,
         reactive: Optional[bool] = None,
         analyze_scripts: Optional[bool] = None,
     ) -> None:
         """Update config attributes from the given keyword arguments (only non-None values)."""
-        if model is not None:
-            self.model = model
-        if api_key is not None:
-            self.api_key = api_key
+        if openrouter_api_key is not None:
+            self.openrouter_api_key = openrouter_api_key
+        if openrouter_model is not None:
+            self.openrouter_model = openrouter_model
+        if validator_model is not None:
+            self.validator_model = validator_model
+        if e2b_api_key is not None:
+            self.e2b_api_key = e2b_api_key
+        if use_e2b is not None:
+            self.use_e2b = use_e2b
+        if gist_timeout is not None:
+            self.gist_timeout = gist_timeout
         if cache_dir is not None:
             self.cache_dir = Path(cache_dir)
         if max_retries is not None:
@@ -64,8 +78,6 @@ class SemiConfig:
             self.confirm_on_external_tools = confirm_on_external_tools
         if confirm_callback is not None:
             self.confirm_callback = confirm_callback
-        if reasoning_effort is not None:
-            self.reasoning_effort = reasoning_effort
         if reactive is not None:
             self.reactive = reactive
         if analyze_scripts is not None:

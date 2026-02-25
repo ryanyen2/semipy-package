@@ -53,7 +53,7 @@ def plot_timeseries(
     """Plot variable vs time. Date column inferred via semi from table columns."""
     tbl = ds.table()
     date_column = semi(f"date column from {tbl.columns}", expected_type=str)
-    if not date_column or date_column not in tbl.columns:
+    if semi("not columns"):
         date_column = tbl.columns[0] if len(tbl.columns) else None
     if date_column is None:
         plt.figure()

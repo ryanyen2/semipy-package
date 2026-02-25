@@ -1,11 +1,12 @@
 """
 Agentic generate-validate-retry loop for semi() function generation.
 
-Builds user and system prompts from GenerationSpec, calls the generator,
-validates (AST, type, execution), and retries with validation feedback on failure.
+Uses pydantic_ai Agent (OpenRouter + tools). Builds user prompt from GenerationSpec,
+runs agent with streaming, validates (AST, type, execution), retries with feedback on failure.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, Callable, List, Optional
 
@@ -16,12 +17,18 @@ from semipy.console_io import (
     generation_progress,
     get_console,
     print_pipeline_log,
+    print_reasoning_block,
+    print_response_block,
+    print_tool_call,
+    print_tool_result,
     source_preview,
     decision_description,
     validation_error_panel,
 )
-from semipy.generator import SemiGenerator, SYSTEM_PROMPT
-from semipy.tools import inject_tools_into_system_prompt, parse_tool_refs
+from semipy.generator import get_semi_agent
+from semipy.gist import GistBuilder
+from semipy.executor import GistExecutor
+from semipy.models import SemiAgentDeps
 from semipy.types import (
     CacheEntry,
     Decision,
@@ -34,12 +41,86 @@ from semipy.profiler import profile_value
 from semipy.validator import validate, _extract_function_source
 
 
+def _handle_stream_event(
+    event: Any,
+    part_buffers: dict,
+    current_part_index: Optional[int],
+    current_part_type: Optional[str],
+    reasoning_blocks: list,
+    verbose: bool,
+) -> tuple[Optional[int], Optional[str]]:
+    """Dispatch stream event to console; return updated (current_part_index, current_part_type)."""
+    from pydantic_ai import (
+        PartDeltaEvent,
+        PartStartEvent,
+        TextPartDelta,
+        ThinkingPartDelta,
+    )
+    from pydantic_ai import FinalResultEvent, FunctionToolCallEvent, FunctionToolResultEvent
+
+    idx = current_part_index
+    ptype = current_part_type
+
+    if isinstance(event, PartStartEvent):
+        if idx is not None and part_buffers.get(idx):
+            content = part_buffers[idx].strip()
+            if content and verbose:
+                if ptype == "thinking":
+                    print_reasoning_block(content)
+                    reasoning_blocks.append(content)
+                else:
+                    print_response_block(content)
+        part_buffers.clear()
+        idx = event.index
+        part_type_name = type(event.part).__name__
+        ptype = "thinking" if "Thinking" in part_type_name else "text"
+    elif isinstance(event, PartDeltaEvent):
+        delta = event.delta
+        content = ""
+        if isinstance(delta, ThinkingPartDelta):
+            content = delta.content_delta or ""
+            ptype = "thinking"
+        elif isinstance(delta, TextPartDelta):
+            content = delta.content_delta or ""
+            ptype = "text"
+        if content and idx is not None:
+            part_buffers.setdefault(idx, "")
+            part_buffers[idx] += content
+    elif isinstance(event, FinalResultEvent):
+        if idx is not None and part_buffers.get(idx) and verbose:
+            content = part_buffers[idx].strip()
+            if content:
+                if ptype == "thinking":
+                    print_reasoning_block(content)
+                    reasoning_blocks.append(content)
+                else:
+                    print_response_block(content)
+        part_buffers.clear()
+        idx = None
+        ptype = None
+    elif isinstance(event, FunctionToolCallEvent):
+        tool_name = getattr(event.part, "tool_name", "?")
+        args = getattr(event.part, "args", {})
+        args_preview = str(args)[:120] + ("..." if len(str(args)) > 120 else "")
+        if verbose:
+            print_tool_call(tool_name, args_preview)
+    elif isinstance(event, FunctionToolResultEvent):
+        result = event.result
+        content_preview = str(getattr(result, "content", ""))[:200]
+        if len(str(getattr(result, "content", ""))) > 200:
+            content_preview += "..."
+        tool_name = getattr(result, "tool_name", "?")
+        if verbose:
+            print_tool_result(tool_name, content_preview, success=True)
+
+    return (idx, ptype)
+
+
 class SemiAgent:
-    """Generates a Python function from a semantic prompt, with validation and retries."""
+    """Generates a Python function from a semantic prompt via pydantic_ai Agent (OpenRouter + tools)."""
 
     def __init__(
         self,
-        generator: Optional[SemiGenerator] = None,
         max_retries: Optional[int] = None,
         enable_execution_test: Optional[bool] = None,
         verbose: Optional[bool] = None,
@@ -49,7 +130,6 @@ class SemiAgent:
         tools: Optional[List[SemiTool]] = None,
     ):
         config = get_config()
-        self.generator = generator or SemiGenerator()
         self.max_retries = max_retries if max_retries is not None else config.max_retries
         self.enable_execution_test = (
             enable_execution_test if enable_execution_test is not None else config.enable_execution_test
@@ -67,11 +147,9 @@ class SemiAgent:
         self.tools: List[SemiTool] = list(tools) if tools is not None else []
 
     def _describe_value(self, name: str, value: Any) -> str:
-        """Data-agnostic introspection via duck typing; delegates to profiler."""
         return profile_value(name, value)
 
     def _describe_context(self, spec: GenerationSpec) -> str:
-        """Aggregate data context: variable_values descriptions, type_hints, trimmed source."""
         parts: list[str] = []
         if spec.variable_values:
             for n, v in spec.variable_values.items():
@@ -148,7 +226,6 @@ class SemiAgent:
         return "\n".join(parts)
 
     def _build_named_user_prompt(self, spec: GenerationSpec) -> str:
-        """Prompt for semi.name(...): function name is the specification; describe args by position/type/sample."""
         parts = [
             spec.prompt,
             "",
@@ -221,10 +298,85 @@ class SemiAgent:
             )
         return "".join(parts)
 
-    def generate(self, spec: GenerationSpec) -> CacheEntry:
-        total_attempts = self.max_retries + 1
+    async def generate_async(
+        self,
+        spec: GenerationSpec,
+        user_prompt_override: Optional[str] = None,
+    ) -> CacheEntry:
+        """Run pydantic_ai agent with streaming; validate and return CacheEntry."""
+        config = get_config()
+        executor = GistExecutor(
+            use_e2b=config.use_e2b,
+            timeout=config.gist_timeout,
+            e2b_api_key=config.e2b_api_key,
+        )
+        deps = SemiAgentDeps(
+            spec=spec,
+            gist_builder=GistBuilder(spec),
+            executor=executor,
+        )
+        prompt = (
+            user_prompt_override
+            if user_prompt_override is not None
+            else (self._build_named_user_prompt(spec) if spec.method_name else self._build_user_prompt(spec))
+        )
+        agent = get_semi_agent()
 
+        part_buffers: dict = {}
+        current_part_index: Optional[int] = None
+        current_part_type: Optional[str] = None
+        reasoning_blocks: list = []
+        final_output: Optional[str] = None
+
+        async for event in agent.run_stream_events(prompt, deps=deps):
+            current_part_index, current_part_type = _handle_stream_event(
+                event,
+                part_buffers,
+                current_part_index,
+                current_part_type,
+                reasoning_blocks,
+                self.verbose,
+            )
+            if hasattr(event, "result") and hasattr(event.result, "output"):
+                final_output = getattr(event.result.output, "content", None) or str(event.result.output)
+
+        source = getattr(deps, "generated_source", None) or ""
+        if not source.strip() and final_output:
+            source = _extract_function_source(final_output)
+        if not source.strip():
+            raise SemiGenerationError("Agent did not produce a Python function (no code block or build_and_run_gist source).")
+
+        result = validate(
+            source,
+            expected_type=spec.expected_type,
+            sample_input=spec.sample_input,
+            enable_execution=self.enable_execution_test,
+            usage_hint=getattr(spec, "usage_hint", ""),
+            spec=spec,
+        )
+        if not result.passed:
+            raise SemiGenerationError(
+                result.error_message or "Validation failed.",
+                last_source=source,
+                last_result=result,
+            )
+
+        fn = _compile_source(source)
+        reasoning_summary = "\n\n".join(reasoning_blocks[:3]) if reasoning_blocks else None
+        tool_calls = getattr(deps, "tool_calls_log", None)
+        return CacheEntry(
+            generated_source=source,
+            compiled_fn=fn,
+            expected_type=spec.expected_type,
+            reasoning_summary=reasoning_summary,
+            tool_calls_made=tool_calls,
+        )
+
+    def generate(self, spec: GenerationSpec) -> CacheEntry:
+        """Synchronous wrapper: run generate_async in a new event loop."""
+        total_attempts = self.max_retries + 1
         decision = spec.decision if spec.decision is not None else Decision.GENERATE
+
         with generation_progress(self.verbose) as progress:
             progress.set_call_site(spec.call_site)
             progress.log_step("Generate")
@@ -243,17 +395,6 @@ class SemiAgent:
                         "User declined to continue without external tools (require_external_tools=True, confirm_on_external_tools=True)."
                     )
 
-            if spec.method_name:
-                prompt = self._build_named_user_prompt(spec)
-                system_prompt = SYSTEM_PROMPT
-                tool_refs = []
-            else:
-                prompt = self._build_user_prompt(spec)
-                system_prompt = inject_tools_into_system_prompt(SYSTEM_PROMPT, prompt)
-                tool_refs = parse_tool_refs(prompt)
-            if tool_refs and self.verbose:
-                tool_names = ", ".join(sorted({name for name, _ in tool_refs}))
-                progress.update(f"Tools detected: {tool_names}. Calling LLM...")
             last_source = ""
             last_result: Optional[ValidationResult] = None
 
@@ -263,110 +404,26 @@ class SemiAgent:
                     print_pipeline_log(spec.call_site, "generate", f"Retry {attempt + 1}/{total_attempts}: fixing validation error")
                     progress.set_stage("generate")
                     progress.update(f"Retrying (attempt {attempt + 1}/{total_attempts}): fixing validation error...")
-                elif not tool_refs:
-                    print_pipeline_log(spec.call_site, "generate", f"Calling LLM (attempt {attempt + 1}/{total_attempts})")
-                    progress.set_stage("generate")
-                    progress.update(f"Calling LLM (attempt {attempt + 1}/{total_attempts})...")
+                    prompt_override = self._build_retry_prompt(spec, last_source, last_result, attempt)
                 else:
-                    print_pipeline_log(spec.call_site, "generate", f"Calling LLM with tools (attempt {attempt + 1}/{total_attempts})")
+                    print_pipeline_log(spec.call_site, "generate", f"Calling agent (attempt {attempt + 1}/{total_attempts})")
                     progress.set_stage("generate")
-                    progress.update(f"Calling LLM with tools (attempt {attempt + 1}/{total_attempts})...")
+                    progress.update(f"Calling agent (attempt {attempt + 1}/{total_attempts})...")
+                    prompt_override = None
 
-                on_chunk = None
-                if self.stream and self.verbose:
-                    console = get_console()
-                    on_chunk = lambda chunk, c=console: c.print(chunk, end="")
-                raw = self.generator.generate(
-                    system_prompt,
-                    prompt,
-                    stream=self.stream,
-                    on_chunk=on_chunk,
-                )
-                if self.stream and self.verbose:
-                    get_console().print()
+                try:
+                    entry = asyncio.run(self.generate_async(spec, user_prompt_override=prompt_override))
+                except SemiGenerationError as e:
+                    last_source = getattr(e, "last_source", "") or ""
+                    last_result = getattr(e, "last_result", None)
+                    if attempt + 1 >= total_attempts:
+                        progress.record_failure(str(e), validation_result=last_result, source=last_source, call_site=spec.call_site)
+                        raise
+                    continue
 
-                progress.update("Parsing generated code...")
-                source = _extract_function_source(raw)
-                print_pipeline_log(spec.call_site, "validate", "Validating (AST, type, execution)")
-                progress.set_stage("validate")
-                progress.log_step("Validating (AST, type, execution)")
-                progress.update("Validating (AST, type, execution)...")
-                result = validate(
-                    source,
-                    expected_type=spec.expected_type,
-                    sample_input=spec.sample_input,
-                    enable_execution=self.enable_execution_test,
-                    usage_hint=getattr(spec, "usage_hint", ""),
-                    spec=spec,
-                )
-
-                if result.passed:
-                    print_pipeline_log(spec.call_site, "validate", "Valid (AST, type, execution)")
-                    progress.log_step("Valid")
-                    progress.record_success(
-                        attempt + 1,
-                        call_site=spec.call_site,
-                    )
-                    fn = _compile_source(source)
-                    return CacheEntry(
-                        generated_source=source,
-                        compiled_fn=fn,
-                        expected_type=spec.expected_type,
-                    )
-
-                for tool in self.tools:
-                    try:
-                        tool(spec, source, result)
-                    except Exception:
-                        pass
-
-                last_source = source
-                last_result = result
-                prompt = self._build_retry_prompt(spec, source, result, attempt)
-                system_prompt = SYSTEM_PROMPT if spec.method_name else inject_tools_into_system_prompt(SYSTEM_PROMPT, prompt)
-
-            if self.confirm_on_failure and last_result is not None:
-                config = get_config()
-                error_summary = last_result.error_message or "Unknown error"
-                if confirm(
-                    f"Generation failed after {total_attempts} attempts. Last error: {error_summary}\nRetry with one more attempt?",
-                    default_no=True,
-                    confirm_callback=config.confirm_callback,
-                ):
-                    progress.log_step("Retry (user confirmed)")
-                    progress.update("Retry (user confirmed)...")
-                    raw = self.generator.generate(
-                        system_prompt,
-                        prompt,
-                        stream=self.stream,
-                        on_chunk=(
-                            (lambda c=get_console(): lambda chunk: c.print(chunk, end=""))()
-                            if self.stream and self.verbose
-                            else None
-                        ),
-                    )
-                    if self.stream and self.verbose:
-                        get_console().print()
-                    source = _extract_function_source(raw)
-                    result = validate(
-                        source,
-                        expected_type=spec.expected_type,
-                        sample_input=spec.sample_input,
-                        enable_execution=self.enable_execution_test,
-                        usage_hint=getattr(spec, "usage_hint", ""),
-                        spec=spec,
-                    )
-                    if result.passed:
-                        progress.record_success(
-                            total_attempts + 1,
-                            call_site=spec.call_site,
-                        )
-                        fn = _compile_source(source)
-                        return CacheEntry(
-                            generated_source=source,
-                            compiled_fn=fn,
-                            expected_type=spec.expected_type,
-                        )
+                progress.log_step("Valid")
+                progress.record_success(attempt + 1, call_site=spec.call_site)
+                return entry
 
             progress.record_failure(
                 last_result.error_message if last_result else "Unknown error",
@@ -375,6 +432,6 @@ class SemiAgent:
                 call_site=spec.call_site,
             )
         raise SemiGenerationError(
-            f"Failed to generate valid function after {self.max_retries + 1} attempts. "
+            f"Failed to generate valid function after {total_attempts} attempts. "
             + (last_result.error_message if last_result else "Unknown error.")
         )
