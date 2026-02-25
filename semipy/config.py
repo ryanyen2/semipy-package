@@ -24,6 +24,8 @@ class SemiConfig:
     confirm_on_external_tools: bool = False
     confirm_callback: Optional[Callable[[str], str]] = None
     reasoning_effort: Optional[str] = 'minimal'
+    reactive: bool = True
+    analyze_scripts: bool = True
 
     def configure(
         self,
@@ -38,6 +40,8 @@ class SemiConfig:
         confirm_on_external_tools: Optional[bool] = None,
         confirm_callback: Optional[Callable[[str], str]] = None,
         reasoning_effort: Optional[str] = None,
+        reactive: Optional[bool] = None,
+        analyze_scripts: Optional[bool] = None,
     ) -> None:
         """Update config attributes from the given keyword arguments (only non-None values)."""
         if model is not None:
@@ -62,6 +66,10 @@ class SemiConfig:
             self.confirm_callback = confirm_callback
         if reasoning_effort is not None:
             self.reasoning_effort = reasoning_effort
+        if reactive is not None:
+            self.reactive = reactive
+        if analyze_scripts is not None:
+            self.analyze_scripts = analyze_scripts
 
 
 _config: Optional[SemiConfig] = None

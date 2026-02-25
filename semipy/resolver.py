@@ -33,13 +33,15 @@ def resolve(
     usage: Usage,
     template_fingerprint: str,
     constants: dict[str, Any],
+    force_regenerate: bool = False,
 ) -> ResolutionResult:
     """
     Resolve a usage against the portal DAG.
 
     Returns REUSE with commit_id when a matching implementation exists;
     returns ADAPT or GENERATE with parent_commit_ids and lineage when a new
-    or adapted implementation is needed.
+    or adapted implementation is needed. When force_regenerate is True,
+    skip REUSE checks and return ADAPT or GENERATE.
     """
     slot_id = usage.call_site.site_id
     usage_id = usage.usage_id()
@@ -51,6 +53,31 @@ def resolve(
         return ResolutionResult(
             decision=Decision.GENERATE,
             slot=None,
+            branch_name=None,
+            parent_commit_ids=[],
+            parent_sources=[],
+            lineage_summary=None,
+            commit_id=None,
+        )
+
+    if force_regenerate:
+        branch_match = find_branch_by_fingerprint(slot, template_fingerprint)
+        if branch_match is not None:
+            branch_name, head_commit = branch_match
+            parent_sources = [head_commit.generated_source]
+            lineage = _lineage_summary(slot, head_commit.commit_id)
+            return ResolutionResult(
+                decision=Decision.ADAPT,
+                slot=slot,
+                branch_name=branch_name,
+                parent_commit_ids=[head_commit.commit_id],
+                parent_sources=parent_sources,
+                lineage_summary=lineage,
+                commit_id=None,
+            )
+        return ResolutionResult(
+            decision=Decision.GENERATE,
+            slot=slot,
             branch_name=None,
             parent_commit_ids=[],
             parent_sources=[],

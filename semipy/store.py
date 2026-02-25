@@ -69,6 +69,7 @@ def _slot_to_dict(s: Slot) -> dict[str, Any]:
         "branches": {n: {"name": b.name, "head": b.head} for n, b in s.branches.items()},
         "refs": dict(s.refs),
         "default_branch": s.default_branch,
+        "upstream_slot_refs": list(s.upstream_slot_refs),
     }
 
 
@@ -86,6 +87,7 @@ def _slot_from_dict(d: dict[str, Any]) -> Slot:
         branches=branches,
         refs=dict(d.get("refs", {})),
         default_branch=d.get("default_branch", "main"),
+        upstream_slot_refs=[tuple(p) for p in d.get("upstream_slot_refs", [])],
     )
 
 

@@ -27,7 +27,7 @@ def main() -> None:
     high_burden = tbl.where(Confirmed__gte=50_000).where(
         "country or region in WHO Europe or Americas"
     )
-    ts_cols = high_burden.select("date and numeric case counts")
+    ts_cols = high_burden.select("date")
     geo_cols = high_burden.select(like="geography or location")
 
     report_cols = list(ts_cols.columns) + [c for c in geo_cols.columns if c not in ts_cols.columns]

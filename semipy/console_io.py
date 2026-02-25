@@ -385,6 +385,25 @@ def print_dag_generate(
     )
 
 
+def print_reactive_stale(call_site: SemiCallSite, slot_id: str, reason: str) -> None:
+    """Log when a stale slot is detected and will be regenerated."""
+    console = get_console()
+    loc = _format_location(call_site.filename, call_site.lineno, call_site.func_qualname)
+    console.print(f"[yellow]Reactive:[/] slot [cyan]{slot_id[:8]}[/] at {loc} is stale ({reason}); regenerating.")
+
+
+def print_reactive_cascade(upstream_slot_id: str, affected_count: int) -> None:
+    """Log cascade invalidation: upstream change marked N downstream slots stale."""
+    console = get_console()
+    console.print(f"[yellow]Reactive:[/] upstream [cyan]{upstream_slot_id[:8]}[/] changed; [cyan]{affected_count}[/] downstream slot(s) marked stale.")
+
+
+def print_reactive_mismatch(slot_id: str, requirement: Any, actual: Any) -> None:
+    """Log when downstream requirement triggers upstream ADAPT (output missing required shape)."""
+    console = get_console()
+    console.print(f"[yellow]Reactive:[/] slot [cyan]{slot_id[:8]}[/] output does not satisfy downstream requirement: required {requirement}, actual {actual}")
+
+
 def print_slot_history(slot: Any, max_entries: int = 20) -> None:
     """Print git-log-style history for a slot (commit id, message, branch)."""
     from semipy.dag import Commit, Slot

@@ -13,6 +13,7 @@ from typing import Any, Literal, Optional, Union
 import pandas as pd
 
 from semipy import semiformal, semi
+from semipy.flow import _flow_from_inputs
 
 
 def _rows_from_df(df: pd.DataFrame) -> list[dict[str, Any]]:
@@ -121,12 +122,18 @@ class SemiTable:
     for select(like=...), where_semantic(), sort_semantic(), merge_semantic().
     """
 
-    def __init__(self, data: Union[pd.DataFrame, list[dict[str, Any]]], source_path: Optional[Path] = None) -> None:
+    def __init__(
+        self,
+        data: Union[pd.DataFrame, list[dict[str, Any]]],
+        source_path: Optional[Path] = None,
+        _flow: Optional[Any] = None,
+    ) -> None:
         if isinstance(data, pd.DataFrame):
             self._df = data.copy()
         else:
             self._df = _df_from_rows(data)
         self._source_path = source_path
+        self._semi_flow = _flow
 
     @property
     def columns(self) -> list[str]:
@@ -152,40 +159,42 @@ class SemiTable:
                     resolved = _columns_like(self.columns, name)
                     if resolved:
                         cols.append(resolved[0])
+        flow = getattr(self, "_semi_flow", None)
         if not cols:
-            out = SemiTable(pd.DataFrame(), source_path=self._source_path)
+            out = SemiTable(pd.DataFrame(), source_path=self._source_path, _flow=flow)
         else:
-            out = SemiTable(self._df[cols].copy(), source_path=self._source_path)
+            out = SemiTable(self._df[cols].copy(), source_path=self._source_path, _flow=flow)
         if extra:
             rows = out._rows()
             rows = _apply_extra(rows, out.columns, "select", extra)
-            out = SemiTable(_df_from_rows(rows, out.columns), source_path=self._source_path)
+            out = SemiTable(_df_from_rows(rows, out.columns), source_path=self._source_path, _flow=flow)
         return out
 
     def sort(self, by: str, order: Union[str, Literal["asc", "desc"]] = "asc", **extra: Any) -> SemiTable:
         """
         Sort by column. If order is asc/desc/ascending/descending use formal sort; else semantic (order as meaning).
         """
+        flow = getattr(self, "_semi_flow", None)
         order_norm = str(order).strip().lower()
         if order_norm in _FORMAL_ORDER_TOKENS:
             if by not in self._df.columns:
-                out = SemiTable(self._df.copy(), source_path=self._source_path)
+                out = SemiTable(self._df.copy(), source_path=self._source_path, _flow=flow)
             else:
                 ascending = order_norm in ("asc", "ascending")
-                out = SemiTable(self._df.sort_values(by=by, ascending=ascending).copy(), source_path=self._source_path)
+                out = SemiTable(self._df.sort_values(by=by, ascending=ascending).copy(), source_path=self._source_path, _flow=flow)
         else:
             rows = self._rows()
             if not rows or not order_norm:
-                out = SemiTable(self._df.copy(), source_path=self._source_path)
+                out = SemiTable(self._df.copy(), source_path=self._source_path, _flow=flow)
             else:
                 keyed = [(_sort_key_semantic(row, str(order)), row) for row in rows]
                 keyed.sort(key=lambda p: p[0])
                 sorted_rows = [row for _, row in keyed]
-                out = SemiTable(_df_from_rows(sorted_rows, self.columns), source_path=self._source_path)
+                out = SemiTable(_df_from_rows(sorted_rows, self.columns), source_path=self._source_path, _flow=flow)
         if extra:
             rows = out._rows()
             rows = _apply_extra(rows, out.columns, "sort", extra)
-            out = SemiTable(_df_from_rows(rows, out.columns), source_path=self._source_path)
+            out = SemiTable(_df_from_rows(rows, out.columns), source_path=self._source_path, _flow=flow)
         return out
 
     def sort_semantic(self, meaning: str) -> SemiTable:
@@ -197,19 +206,20 @@ class SemiTable:
         """
         Filter: formal kwargs (col__op or column name) applied first, then positional string conditions semantically.
         """
+        flow = getattr(self, "_semi_flow", None)
         formal_kwargs = {k: v for k, v in kwargs.items() if "__" in k or k in self._df.columns}
         extra = {k: v for k, v in kwargs.items() if k not in formal_kwargs}
         out = _apply_where_formal(self._df, **formal_kwargs)
-        out = SemiTable(out, source_path=self._source_path)
+        out = SemiTable(out, source_path=self._source_path, _flow=flow)
         for spec in conditions:
             if isinstance(spec, str) and spec.strip():
                 rows = out._rows()
                 rows = _filter_semantic(rows, spec)
-                out = SemiTable(_df_from_rows(rows, out.columns), source_path=self._source_path)
+                out = SemiTable(_df_from_rows(rows, out.columns), source_path=self._source_path, _flow=flow)
         if extra:
             rows = out._rows()
             rows = _apply_extra(rows, out.columns, "where", extra)
-            out = SemiTable(_df_from_rows(rows, out.columns), source_path=self._source_path)
+            out = SemiTable(_df_from_rows(rows, out.columns), source_path=self._source_path, _flow=flow)
         return out
 
     def where_semantic(self, spec: str) -> SemiTable:
@@ -220,32 +230,33 @@ class SemiTable:
         """
         Join: if on is provided use formal merge; if how is provided (no on) use semantic row matching.
         """
+        merged_flow = _flow_from_inputs(self, other)
         if on is not None:
             on_list = [on] if isinstance(on, str) else list(on)
             common = [c for c in on_list if c in self._df.columns and c in other._df.columns]
             if not common:
-                out = SemiTable(self._df.copy(), source_path=self._source_path)
+                out = SemiTable(self._df.copy(), source_path=self._source_path, _flow=merged_flow)
             else:
                 merged = self._df.merge(other._df, on=common, how="inner", suffixes=("", "_right"))
                 merged = merged[[c for c in merged.columns if not c.endswith("_right")]]
-                out = SemiTable(merged, source_path=self._source_path)
+                out = SemiTable(merged, source_path=self._source_path, _flow=merged_flow)
         elif how is not None:
             left_rows = self._rows()
             right_rows = other._rows()
             if not left_rows or not right_rows:
-                out = SemiTable(self._df.copy(), source_path=self._source_path)
+                out = SemiTable(self._df.copy(), source_path=self._source_path, _flow=merged_flow)
             else:
                 try:
                     result_rows = _merge_semantic_rows(left_rows, right_rows, self.columns, other.columns, how)
-                    out = SemiTable(_df_from_rows(result_rows), source_path=self._source_path)
+                    out = SemiTable(_df_from_rows(result_rows), source_path=self._source_path, _flow=merged_flow)
                 except Exception:
-                    out = SemiTable(self._df.copy(), source_path=self._source_path)
+                    out = SemiTable(self._df.copy(), source_path=self._source_path, _flow=merged_flow)
         else:
-            out = SemiTable(self._df.copy(), source_path=self._source_path)
+            out = SemiTable(self._df.copy(), source_path=self._source_path, _flow=merged_flow)
         if extra:
             rows = out._rows()
             rows = _apply_extra(rows, out.columns, "merge", extra)
-            out = SemiTable(_df_from_rows(rows, out.columns), source_path=self._source_path)
+            out = SemiTable(_df_from_rows(rows, out.columns), source_path=self._source_path, _flow=merged_flow)
         return out
 
     def merge_semantic(self, other: SemiTable, how: str) -> SemiTable:
@@ -279,8 +290,9 @@ class SemiTable:
         each value is a string spec (e.g. "1 when market cap above 1000 else 0").
         Semi interprets the spec over table rows and returns one value per row.
         """
+        flow = getattr(self, "_semi_flow", None)
         if not column_specs:
-            return SemiTable(self._df.copy(), source_path=self._source_path)
+            return SemiTable(self._df.copy(), source_path=self._source_path, _flow=flow)
         rows = self._rows()
         cols = self.columns
         out_df = self._df.copy()
@@ -290,7 +302,7 @@ class SemiTable:
             values = _compute_column(rows, cols, spec)
             if isinstance(values, list) and len(values) == len(out_df):
                 out_df[col_name] = values
-        return SemiTable(out_df, source_path=self._source_path)
+        return SemiTable(out_df, source_path=self._source_path, _flow=flow)
 
 
 def open_table(path: Union[str, Path]) -> SemiTable:

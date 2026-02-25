@@ -133,6 +133,18 @@ class SemiAgent:
         if spec.constant_values:
             parts.append("- Constant context (use as parameters after the first, or bake into the function):")
             parts.append(json.dumps(spec.constant_values, default=repr, indent=2))
+        if getattr(spec, "downstream_requirements", None):
+            reqs = spec.downstream_requirements
+            if isinstance(reqs, dict) and reqs:
+                parts.append("")
+                parts.append("Downstream requirements (your output will be consumed by operations that need):")
+                for k, v in reqs.items():
+                    parts.append(f"  - {k}: {v}")
+        if getattr(spec, "upstream_lineage", None):
+            lineage = spec.upstream_lineage
+            if lineage:
+                parts.append("")
+                parts.append("Upstream dependency context: this step consumes output from prior steps in the pipeline.")
         return "\n".join(parts)
 
     def _build_named_user_prompt(self, spec: GenerationSpec) -> str:
@@ -174,6 +186,18 @@ class SemiAgent:
         if spec.constant_values:
             parts.append("- Constant context (bake into the function or add as parameters):")
             parts.append(json.dumps(spec.constant_values, default=repr, indent=2))
+        if getattr(spec, "downstream_requirements", None):
+            reqs = spec.downstream_requirements
+            if isinstance(reqs, dict) and reqs:
+                parts.append("")
+                parts.append("Downstream requirements (your output will be consumed by operations that need):")
+                for k, v in reqs.items():
+                    parts.append(f"  - {k}: {v}")
+        if getattr(spec, "upstream_lineage", None):
+            lineage = spec.upstream_lineage
+            if lineage:
+                parts.append("")
+                parts.append("Upstream dependency context: this step consumes output from prior steps in the pipeline.")
         return "\n".join(parts)
 
     def _build_retry_prompt(

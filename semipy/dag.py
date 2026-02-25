@@ -77,6 +77,7 @@ class Slot:
     branches: dict[str, Branch] = field(default_factory=dict)
     refs: dict[str, str] = field(default_factory=dict)
     default_branch: str = "main"
+    upstream_slot_refs: list[tuple[str, str]] = field(default_factory=list)  # (session_id, slot_id) upstream deps
 
 
 @dataclass

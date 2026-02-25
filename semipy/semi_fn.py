@@ -20,6 +20,9 @@ from semipy.console_io import (
     print_dag_generate,
     print_dag_reuse,
     print_pipeline_log,
+    print_reactive_cascade,
+    print_reactive_mismatch,
+    print_reactive_stale,
     _call_site_file_url,
     _file_link_url,
     _relative_link_path,
@@ -31,6 +34,18 @@ from semipy.dag import (
     freeze_constants,
 )
 from semipy.decorator import get_semiformal_context
+from semipy.flow import FLOW_ATTR, create_flow, extract_flow, profile_output
+from semipy import reactive as _reactive
+from semipy.reactive import (
+    SlotRef,
+    add_dependency,
+    clear_stale,
+    get_downstream_requirements,
+    is_stale,
+    mark_downstream_stale,
+    save_dependency_graph,
+    update_slot_commit,
+)
 from semipy.resolver import resolve
 from semipy.store import (
     function_name_for_commit,
@@ -263,6 +278,49 @@ def _ensure_slot(portal: Any, call_site: SemiCallSite, function_name_base: str) 
     return slot
 
 
+def _get_dep_graph(cache_dir: Path) -> Any:
+    """Cached dependency graph for cache_dir."""
+    return _reactive._get_dep_graph(cache_dir)
+
+
+def _register_upstream_deps(
+    graph: Any,
+    input_values: list[Any],
+    current_slot_ref: SlotRef,
+) -> None:
+    """Extract flow from input values and add edges upstream -> current."""
+    for val in input_values:
+        flow = extract_flow(val)
+        if flow is not None:
+            add_dependency(graph, flow.producing_slot, current_slot_ref)
+
+
+def _check_downstream_requirements(
+    graph: Any,
+    slot_ref: SlotRef,
+    result: Any,
+) -> Optional[dict[str, Any]]:
+    """
+    Compare result profile to downstream requirements. Return mismatch dict if any
+    requirement is not satisfied (e.g. required_columns not in profile), else None.
+    Data-agnostic: compares whatever keys are in downstream_requirements.
+    """
+    reqs = get_downstream_requirements(graph, slot_ref)
+    if not reqs:
+        return None
+    profile = profile_output(result)
+    mismatch: dict[str, Any] = {}
+    required_cols = reqs.get("required_columns")
+    if required_cols is not None:
+        profile_cols = profile.get("columns") or profile.get("keys") or []
+        norm = lambda s: s.strip().lower() if isinstance(s, str) else str(s).strip().lower()
+        profile_set = {norm(c) for c in profile_cols}
+        missing = [c for c in required_cols if norm(c) not in profile_set]
+        if missing:
+            mismatch["missing_columns"] = missing
+    return mismatch if mismatch else None
+
+
 def _named_name_to_value(
     variable_names: list[str],
     args: tuple[Any, ...],
@@ -340,7 +398,18 @@ def _semi_inline(
         fingerprint = structural_fingerprint(tree)
 
         portal = _get_portal(cache_dir, session_id, call_site.filename, module_name)
-        resolution = resolve(portal, usage, fingerprint, constant_values)
+        force_regenerate = False
+        dep_graph = None
+        current_slot_ref = SlotRef(session_id=session_id, slot_id=call_site.site_id)
+        if getattr(config, "reactive", True):
+            dep_graph = _get_dep_graph(cache_dir)
+            _register_upstream_deps(graph=dep_graph, input_values=all_values_ordered, current_slot_ref=current_slot_ref)
+            if is_stale(dep_graph, current_slot_ref):
+                force_regenerate = True
+                if config.verbose:
+                    st = dep_graph.statuses.get(current_slot_ref.key())
+                    print_reactive_stale(call_site, call_site.site_id, st.stale_reason if st else "unknown")
+        resolution = resolve(portal, usage, fingerprint, constant_values, force_regenerate=force_regenerate)
 
         need_generate = False
         if resolution.decision == Decision.REUSE and resolution.slot is not None and resolution.commit_id is not None:
@@ -370,12 +439,36 @@ def _semi_inline(
                             entry_script_lineno=_entry[1] if _entry else None,
                         )
                     _kwargs = {k: v for k, v in kwargs.items() if k != "usage_hint"}
-                    return _call_generated_fn(
+                    result = _call_generated_fn(
                         fn, call_site, path_str, code_line_range, prompt,
                         *all_values_ordered,
                         usage_hint=getattr(site_info, "usage_hint", ""),
                         **_kwargs,
                     )
+                    if getattr(config, "reactive", True) and dep_graph is not None:
+                        upstream_refs = [
+                            (flow.producing_slot.session_id, flow.producing_slot.slot_id)
+                            for val in all_values_ordered
+                            for flow in (extract_flow(val),)
+                            if flow is not None
+                        ]
+                        try:
+                            setattr(
+                                result,
+                                FLOW_ATTR,
+                                create_flow(
+                                    session_id,
+                                    call_site.site_id,
+                                    resolution.commit_id or "",
+                                    upstream_chain=[SlotRef(sid, s) for sid, s in upstream_refs],
+                                    output_profile=profile_output(result),
+                                ),
+                            )
+                        except (TypeError, AttributeError):
+                            pass
+                        update_slot_commit(dep_graph, current_slot_ref, resolution.commit_id or "")
+                        clear_stale(dep_graph, current_slot_ref)
+                    return result
                 need_generate = True
 
         if resolution.decision in (Decision.ADAPT, Decision.GENERATE) or need_generate:
@@ -384,6 +477,14 @@ def _semi_inline(
                 name_to_value,
                 site_info.loop_variant_names,
             )
+            upstream_lineage_tuples = None
+            if getattr(config, "reactive", True) and dep_graph is not None:
+                upstream_lineage_tuples = [
+                    (flow.producing_slot.session_id, flow.producing_slot.slot_id)
+                    for val in all_values_ordered
+                    for flow in (extract_flow(val),)
+                    if flow is not None
+                ]
             spec = GenerationSpec(
                 prompt=prompt,
                 call_site=call_site,
@@ -401,6 +502,8 @@ def _semi_inline(
                 usage_hint=getattr(site_info, "usage_hint", ""),
                 caller_locals=caller_locals_snapshot,
                 source_file_imports=_extract_source_file_imports(call_site.filename),
+                upstream_lineage=upstream_lineage_tuples,
+                downstream_requirements=get_downstream_requirements(dep_graph, current_slot_ref) if (getattr(config, "reactive", True) and dep_graph is not None) else None,
             )
             entry = SemiAgent().generate(spec)
             constants_snapshot = freeze_constants(constant_values)
@@ -427,6 +530,11 @@ def _semi_inline(
                 usage_id=usage.usage_id(),
             )
             add_commit_to_slot(slot, commit, branch_name, usage.usage_id())
+            if getattr(config, "reactive", True) and dep_graph is not None:
+                n_marked = mark_downstream_stale(dep_graph, current_slot_ref, "upstream implementation changed")
+                save_dependency_graph(cache_dir, dep_graph)
+                if config.verbose and n_marked > 0:
+                    print_reactive_cascade(call_site.site_id, n_marked)
             save_portal(cache_dir, portal)
             _dispatch_path, fn_line_map = write_dispatch_module(cache_dir, portal)
             _dispatch_globals_cache.pop(module_name, None)
@@ -463,12 +571,39 @@ def _semi_inline(
                         entry_script_lineno=_el,
                     )
             _kwargs = {k: v for k, v in kwargs.items() if k != "usage_hint"}
-            return _call_generated_fn(
+            result = _call_generated_fn(
                 fn, call_site, path_str, code_line_range, prompt,
                 *all_values_ordered,
                 usage_hint=getattr(site_info, "usage_hint", ""),
                 **_kwargs,
             )
+            if getattr(config, "reactive", True) and dep_graph is not None:
+                mismatch = _check_downstream_requirements(dep_graph, current_slot_ref, result)
+                if mismatch and config.verbose:
+                    print_reactive_mismatch(call_site.site_id, get_downstream_requirements(dep_graph, current_slot_ref), profile_output(result))
+                upstream_refs = [
+                    (flow.producing_slot.session_id, flow.producing_slot.slot_id)
+                    for val in all_values_ordered
+                    for flow in (extract_flow(val),)
+                    if flow is not None
+                ]
+                try:
+                    setattr(
+                        result,
+                        FLOW_ATTR,
+                        create_flow(
+                            session_id,
+                            call_site.site_id,
+                            commit.commit_id,
+                            upstream_chain=[SlotRef(sid, s) for sid, s in upstream_refs],
+                            output_profile=profile_output(result),
+                        ),
+                    )
+                except (TypeError, AttributeError):
+                    pass
+                update_slot_commit(dep_graph, current_slot_ref, commit.commit_id)
+                clear_stale(dep_graph, current_slot_ref)
+            return result
 
     return _semi_fallback(prompt, call_site, cache_dir, session_id, module_name, expected_type=expected_type, require_tools=require_tools, **kwargs)
 
@@ -520,7 +655,18 @@ def _semi_named(name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any
     tree = template_tree_from_prompt(template)
     fingerprint = structural_fingerprint(tree)
     portal = _get_portal(cache_dir, session_id, call_site.filename, module_name)
-    resolution = resolve(portal, usage, fingerprint, constant_values)
+    force_regenerate = False
+    dep_graph = None
+    current_slot_ref = SlotRef(session_id=session_id, slot_id=call_site.site_id)
+    if getattr(config, "reactive", True):
+        dep_graph = _get_dep_graph(cache_dir)
+        _register_upstream_deps(graph=dep_graph, input_values=list(args), current_slot_ref=current_slot_ref)
+        if is_stale(dep_graph, current_slot_ref):
+            force_regenerate = True
+            if config.verbose:
+                st = dep_graph.statuses.get(current_slot_ref.key())
+                print_reactive_stale(call_site, call_site.site_id, st.stale_reason if st else "unknown")
+    resolution = resolve(portal, usage, fingerprint, constant_values, force_regenerate=force_regenerate)
 
     need_generate = False
     if resolution.decision == Decision.REUSE and resolution.slot is not None and resolution.commit_id is not None:
@@ -551,12 +697,36 @@ def _semi_named(name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any
                     )
                 prompt_preview = f"semi.{name}(...)"
                 _kwargs = {k: v for k, v in kwargs.items() if k != "usage_hint"}
-                return _call_generated_fn(
+                result = _call_generated_fn(
                     fn, call_site, path_str, code_line_range, prompt_preview,
                     *args,
                     usage_hint=getattr(site_info, "usage_hint", "") if site_info is not None else "",
                     **_kwargs,
                 )
+                if getattr(config, "reactive", True) and dep_graph is not None:
+                    upstream_refs = [
+                        (flow.producing_slot.session_id, flow.producing_slot.slot_id)
+                        for val in args
+                        for flow in (extract_flow(val),)
+                        if flow is not None
+                    ]
+                    try:
+                        setattr(
+                            result,
+                            FLOW_ATTR,
+                            create_flow(
+                                session_id,
+                                call_site.site_id,
+                                resolution.commit_id or "",
+                                upstream_chain=[SlotRef(sid, s) for sid, s in upstream_refs],
+                                output_profile=profile_output(result),
+                            ),
+                        )
+                    except (TypeError, AttributeError):
+                        pass
+                    update_slot_commit(dep_graph, current_slot_ref, resolution.commit_id or "")
+                    clear_stale(dep_graph, current_slot_ref)
+                return result
             need_generate = True
 
     if resolution.decision in (Decision.ADAPT, Decision.GENERATE) or need_generate:
@@ -573,6 +743,14 @@ def _semi_named(name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any
             name_to_value,
             loop_variant_names,
         )
+        upstream_lineage_tuples = None
+        if getattr(config, "reactive", True) and dep_graph is not None:
+            upstream_lineage_tuples = [
+                (flow.producing_slot.session_id, flow.producing_slot.slot_id)
+                for val in args
+                for flow in (extract_flow(val),)
+                if flow is not None
+            ]
         spec = GenerationSpec(
             prompt=prompt,
             call_site=call_site,
@@ -591,6 +769,8 @@ def _semi_named(name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any
             usage_hint=getattr(site_info, "usage_hint", "") if site_info is not None else "",
             caller_locals=caller_locals_snapshot,
             source_file_imports=_extract_source_file_imports(call_site.filename),
+            upstream_lineage=upstream_lineage_tuples,
+            downstream_requirements=get_downstream_requirements(dep_graph, current_slot_ref) if (getattr(config, "reactive", True) and dep_graph is not None) else None,
         )
         entry = SemiAgent().generate(spec)
         constants_snapshot = freeze_constants(constant_values)
@@ -614,6 +794,11 @@ def _semi_named(name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any
             usage_id=usage.usage_id(),
         )
         add_commit_to_slot(slot, commit, branch_name, usage.usage_id())
+        if getattr(config, "reactive", True) and dep_graph is not None:
+            n_marked = mark_downstream_stale(dep_graph, current_slot_ref, "upstream implementation changed")
+            save_dependency_graph(cache_dir, dep_graph)
+            if config.verbose and n_marked > 0:
+                print_reactive_cascade(call_site.site_id, n_marked)
         save_portal(cache_dir, portal)
         _dispatch_path, fn_line_map = write_dispatch_module(cache_dir, portal)
         _dispatch_globals_cache.pop(module_name, None)
@@ -650,12 +835,36 @@ def _semi_named(name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any
                     entry_script_lineno=_el,
                 )
         _kwargs = {k: v for k, v in kwargs.items() if k != "usage_hint"}
-        return _call_generated_fn(
+        result = _call_generated_fn(
             fn, call_site, path_str, code_line_range, prompt,
             *args,
             usage_hint=getattr(site_info, "usage_hint", "") if site_info is not None else "",
             **_kwargs,
         )
+        if getattr(config, "reactive", True) and dep_graph is not None:
+            upstream_refs = [
+                (flow.producing_slot.session_id, flow.producing_slot.slot_id)
+                for val in args
+                for flow in (extract_flow(val),)
+                if flow is not None
+            ]
+            try:
+                setattr(
+                    result,
+                    FLOW_ATTR,
+                    create_flow(
+                        session_id,
+                        call_site.site_id,
+                        commit.commit_id,
+                        upstream_chain=[SlotRef(sid, s) for sid, s in upstream_refs],
+                        output_profile=profile_output(result),
+                    ),
+                )
+            except (TypeError, AttributeError):
+                pass
+            update_slot_commit(dep_graph, current_slot_ref, commit.commit_id)
+            clear_stale(dep_graph, current_slot_ref)
+        return result
 
 
 def _sample_from_values(

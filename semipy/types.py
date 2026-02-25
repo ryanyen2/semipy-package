@@ -180,6 +180,8 @@ class GenerationSpec:
     usage_hint: str = ""
     caller_locals: Optional[dict[str, Any]] = None  # snapshot of caller frame locals
     source_file_imports: Optional[list[str]] = None  # module-level import statements
+    upstream_lineage: Optional[list[tuple[str, str]]] = None  # list of (session_id, slot_id) from upstream data
+    downstream_requirements: Optional[dict[str, Any]] = None  # requirements from downstream (e.g. required_columns)
 
 
 @dataclass
