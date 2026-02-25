@@ -13,7 +13,7 @@ from typing import Any, Literal, Optional, Union
 import pandas as pd
 
 from semipy import semiformal, semi
-from semipy.flow import _flow_from_inputs
+from semipy.reactivity import _flow_from_inputs
 
 
 def _rows_from_df(df: pd.DataFrame) -> list[dict[str, Any]]:

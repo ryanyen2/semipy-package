@@ -13,9 +13,9 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
-from semipy.agent import SemiAgent
-from semipy.config import get_config
-from semipy.console_io import (
+from semipy.agents.agent import SemiAgent
+from semipy.agents.config import get_config
+from semipy.agents.console_io import (
     print_dag_adapt,
     print_dag_generate,
     print_dag_reuse,
@@ -27,16 +27,14 @@ from semipy.console_io import (
     _file_link_url,
     _relative_link_path,
 )
-from semipy.dag import (
+from semipy.history import (
     Slot,
     add_commit_to_slot,
     create_commit,
     freeze_constants,
 )
 from semipy.decorator import get_semiformal_context
-from semipy.flow import FLOW_ATTR, create_flow, extract_flow, profile_output
-from semipy import reactive as _reactive
-from semipy.reactive import (
+from semipy.reactivity import (
     SlotRef,
     add_dependency,
     clear_stale,
@@ -45,6 +43,11 @@ from semipy.reactive import (
     mark_downstream_stale,
     save_dependency_graph,
     update_slot_commit,
+    _get_dep_graph as _load_dep_graph,
+    FLOW_ATTR,
+    create_flow,
+    extract_flow,
+    profile_output,
 )
 from semipy.resolver import resolve
 from semipy.store import (
@@ -280,7 +283,7 @@ def _ensure_slot(portal: Any, call_site: SemiCallSite, function_name_base: str) 
 
 def _get_dep_graph(cache_dir: Path) -> Any:
     """Cached dependency graph for cache_dir."""
-    return _reactive._get_dep_graph(cache_dir)
+    return _load_dep_graph(cache_dir)
 
 
 def _register_upstream_deps(

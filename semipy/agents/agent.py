@@ -10,9 +10,9 @@ import asyncio
 import json
 from typing import Any, Callable, List, Optional
 
-from semipy.compiler import _compile_source
-from semipy.config import get_config
-from semipy.console_io import (
+from semipy.agents.compiler import _compile_source
+from semipy.agents.config import get_config
+from semipy.agents.console_io import (
     confirm,
     generation_progress,
     get_console,
@@ -25,9 +25,9 @@ from semipy.console_io import (
     decision_description,
     validation_error_panel,
 )
-from semipy.generator import get_semi_agent
-from semipy.gist import GistBuilder
-from semipy.executor import GistExecutor
+from semipy.agents.generator import get_semi_agent
+from semipy.agents.gist import GistBuilder
+from semipy.agents.executor import GistExecutor
 from semipy.models import SemiAgentDeps
 from semipy.types import (
     CacheEntry,
@@ -37,8 +37,8 @@ from semipy.types import (
     SemiTool,
     ValidationResult,
 )
-from semipy.profiler import profile_value
-from semipy.validator import validate, _extract_function_source
+from semipy.agents.profiler import profile_value
+from semipy.agents.validator import validate, _extract_function_source
 
 
 def _handle_stream_event(

@@ -59,7 +59,7 @@ class Commit:
     timestamp: float
     message: str
     decision: str
-    usage_id: str = ""  # usage that produced this commit; required for REUSE by op_sig/fingerprint
+    usage_id: str = ""
 
 
 @dataclass
@@ -77,7 +77,7 @@ class Slot:
     branches: dict[str, Branch] = field(default_factory=dict)
     refs: dict[str, str] = field(default_factory=dict)
     default_branch: str = "main"
-    upstream_slot_refs: list[tuple[str, str]] = field(default_factory=list)  # (session_id, slot_id) upstream deps
+    upstream_slot_refs: list[tuple[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -172,10 +172,12 @@ def find_branch_by_fingerprint(slot: Slot, template_fingerprint: str) -> tuple[s
     if not candidates:
         return None
     default = slot.default_branch
+
     def key(item: tuple[str, Commit]) -> tuple[int, float]:
         name, head = item
         prefer_default = 0 if name == default else 1
         return (prefer_default, -head.timestamp)
+
     candidates.sort(key=key)
     return candidates[0]
 

@@ -6,15 +6,15 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from semipy.flow import (
+from semipy.reactivity import (
     FLOW_ATTR,
     DataFlow,
+    SlotRef,
     create_flow,
     extract_flow,
     profile_output,
     _flow_from_inputs,
 )
-from semipy.reactive import SlotRef
 
 
 def test_create_flow() -> None:

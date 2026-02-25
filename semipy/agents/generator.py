@@ -11,7 +11,7 @@ from typing import Any, Optional
 
 from pydantic_ai import Agent, RunContext
 
-from semipy.config import get_config
+from semipy.agents.config import get_config
 from semipy.models import (
     FileContextResult,
     GistRunResult,

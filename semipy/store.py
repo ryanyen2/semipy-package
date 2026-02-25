@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from semipy.dag import Branch, Commit, Portal, Slot
+from semipy.history import Branch, Commit, Portal, Slot
 
 
 def _source_with_function_name(source: str, fn_name: str) -> str:

@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from semipy.reactive import (
+from semipy.reactivity import (
     DependencyGraph,
     SlotRef,
     add_dependency,

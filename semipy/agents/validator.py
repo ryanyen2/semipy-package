@@ -99,7 +99,7 @@ def _build_mock_semi(
 
 def _validate_in_context(source: str, spec: GenerationSpec) -> ValidationResult:
     """Compile generated function, build namespace with imports + caller_locals + mock semi, exec enclosing statement."""
-    from semipy.compiler import _compile_source
+    from semipy.agents.compiler import _compile_source
 
     try:
         fn = _compile_source(source)
@@ -395,7 +395,7 @@ def validate_with_gist(
     if gist is None:
         return validate(source, spec.expected_type, spec.sample_input, True, getattr(spec, "usage_hint", ""), spec)
     result = executor.execute_sync(gist.source)
-    from semipy.compiler import _compile_source
+    from semipy.agents.compiler import _compile_source
     try:
         fn = _compile_source(source)
     except Exception as e:

@@ -452,7 +452,7 @@ def print_decision_explanation(decision: Any, explanation: str) -> None:
 
 def print_slot_history(slot: Any, max_entries: int = 20) -> None:
     """Print git-log-style history for a slot (commit id, message, branch)."""
-    from semipy.dag import Commit, Slot
+    from semipy.history import Commit, Slot
     if not isinstance(slot, Slot):
         return
     console = get_console()

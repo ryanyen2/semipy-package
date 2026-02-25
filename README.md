@@ -65,4 +65,4 @@ Generated functions are stored under `.semiformal/runtime/` (by default) as one 
 - **Generation**: When not REUSE, a pydantic_ai Agent (OpenRouter) runs with tools: profile_data_and_flow, read_upstream_context, read_file_context, build_and_run_gist, validate_output. Reasoning and tool calls stream to the terminal. The agent produces a Python function; it is validated (AST, type, execution) and then cached.
 - **Gist validation**: Optional sandbox run (E2B or subprocess) assembles a minimal script from user context + generated function and executes it for extra confidence.
 
-For full architecture and module roles, see `CLAUDE.md` and `.claude/plans/agentic-pipeline-refactor.md`.
+**Package layout**: Core entry points and types live in `semipy/` root; agentic pipeline in `semipy/agents/`, version control (Merkle DAG) in `semipy/history/`, and reactive data flow in `semipy/reactivity/`. See `CLAUDE.md` for full architecture and module roles.

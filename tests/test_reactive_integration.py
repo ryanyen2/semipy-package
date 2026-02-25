@@ -10,8 +10,8 @@ from typing import Any
 
 import pytest
 
-from semipy.dag import Portal, Slot, add_commit_to_slot, create_commit, freeze_constants
-from semipy.reactive import (
+from semipy.history import Portal, Slot, add_commit_to_slot, create_commit, freeze_constants
+from semipy.reactivity import (
     DependencyGraph,
     SlotRef,
     add_dependency,

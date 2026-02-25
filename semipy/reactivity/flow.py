@@ -1,17 +1,14 @@
 """
-Data flow tracking: semipy observes values and tracks which slots produced them.
+Data flow tracking: which slots produced which values.
 
-Flow is inferred from code and execution; observation and subscriber logic are
-handled inside the package. No user setup. Variables are tracked automatically
-when they pass through semi(); the dependency graph and staleness are updated
-from that.
+Flow is inferred from code and execution; observation is handled inside the package.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from semipy.reactive import SlotRef
+from semipy.reactivity.reactive import SlotRef
 
 
 FLOW_ATTR = "_semi_flow"
@@ -19,10 +16,7 @@ FLOW_ATTR = "_semi_flow"
 
 @dataclass
 class DataFlow:
-    """
-    Flow record for a value produced by or derived from semiformal slots.
-    Used internally to build the dependency graph and validate downstream requirements.
-    """
+    """Flow record for a value produced by or derived from semiformal slots."""
 
     producing_slot: SlotRef
     producing_commit_id: str
@@ -69,10 +63,7 @@ def _profile_mapping(obj: Any) -> dict[str, Any]:
 
 
 def profile_output(result: Any) -> dict[str, Any]:
-    """
-    Extract observable profile from a result for downstream requirement checks.
-    Data-agnostic: uses duck typing (columns, keys, type).
-    """
+    """Extract observable profile from a result for downstream requirement checks."""
     if result is None:
         return {"type": "none"}
     if isinstance(result, dict):
@@ -112,11 +103,7 @@ def create_flow(
 
 
 def _flow_from_inputs(*values: Any) -> Optional[DataFlow]:
-    """
-    Internal: build a single flow from multiple input values (e.g. merge).
-    Used when a value is derived from several inputs that may each have flow.
-    Not part of the public API; observation is automatic from code and execution.
-    """
+    """Build a single flow from multiple input values (merge). Internal use."""
     flows = [getattr(v, FLOW_ATTR, None) for v in values]
     valid = [f for f in flows if f is not None]
     if not valid:
@@ -136,5 +123,5 @@ def _flow_from_inputs(*values: Any) -> Optional[DataFlow]:
 
 
 def extract_flow(obj: Any) -> Optional[DataFlow]:
-    """Duck-typed extraction of flow from a value. Used by semipy to track variables."""
+    """Duck-typed extraction of flow from a value."""
     return getattr(obj, FLOW_ATTR, None)

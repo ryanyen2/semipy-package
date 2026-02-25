@@ -1,11 +1,11 @@
 """
-Tool system for semi(): SEARCH, RAG, and custom tools.
+Tool system for semi(): web search, RAG, and custom tools.
 
 Prompts reference tools via literal {TOOL(...)}; in f-strings use double braces
-so the reference stays literal: {{SEARCH(query)}}. At generation time the system
+so the reference stays literal: {{web search(query)}}. At generation time the system
 injects tool docs so the LLM can generate code that calls the tools at runtime.
 
-Public API: register_tool(name, impl), parse_tool_refs(prompt). SEARCH and RAG
+Public API: register_tool(name, impl), parse_tool_refs(prompt). web search and RAG
 are built-in implementations (Firecrawl and CSV RAG); override with register_tool.
 """
 
@@ -24,9 +24,9 @@ TOOL_REF_PATTERN = re.compile(r"\{([A-Z][A-Z0-9_]*)\s*\(([^)]*)\)\}")
 def _log_tool_call(tool_name: str, args_summary: str) -> None:
     """Log tool usage when semipy is in verbose mode."""
     try:
-        from semipy.config import get_config
+        from semipy.agents.config import get_config
         if get_config().verbose:
-            from semipy.console_io import get_console
+            from semipy.agents.console_io import get_console
             get_console().print(
                 f"[dim][semipy] Tool: {tool_name}({args_summary})[/]",
                 no_wrap=True,
@@ -108,38 +108,6 @@ _TOOL_IMPLS: dict[str, Callable[..., Any]] = {
     "SEARCH": _firecrawl_search,
     "RAG": _rag_from_csv,
 }
-
-
-def SEARCH(query: str, **kwargs: Any) -> str:
-    """
-    Web search via Firecrawl. Use in prompts as {{SEARCH(query)}} (double braces in f-strings).
-    Returns concatenated title+description from web results.
-
-    Deprecated: Prefer semi.search(...) or semi(f\"search for ...\") for semiformal usage.
-    """
-    warnings.warn(
-        "SEARCH is deprecated; use semi.search(...) or semi(f\"...\") instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    impl = _TOOL_IMPLS["SEARCH"]
-    return impl(query, **kwargs)
-
-
-def RAG(query: str, k: int = 3, data_path: Optional[str] = None, **kwargs: Any) -> list[str]:
-    """
-    Retrieve relevant rows from a CSV. Use as {{RAG(query, k=5, data_path=path)}}.
-    Returns list of matching row strings.
-
-    Deprecated: Prefer semi(f\"retrieve from RAG ...\") or a named semi call for semiformal usage.
-    """
-    warnings.warn(
-        "RAG is deprecated; use semi(f\"...\") or a named semi call instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    impl = _TOOL_IMPLS["RAG"]
-    return impl(query, k=k, data_path=data_path, **kwargs)
 
 
 def register_tool(name: str, impl: Callable[..., Any]) -> None:

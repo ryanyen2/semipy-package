@@ -22,6 +22,13 @@ pytest  # use: uv sync --extra dev first
 - Optional: **E2B_API_KEY** for sandboxed gist execution (otherwise subprocess fallback).
 - Python >= 3.10. Uses `uv` for dependency and environment management.
 
+## Package layout
+
+- **Root** (`semipy/`): `types.py`, `models.py`, `decorator.py`, `template.py`, `semi_fn.py`, `resolver.py`, `store.py`. Entry point and core types; no subpackage imports for these.
+- **agents/** (`semipy/agents/`): Agentic pipeline: config, agent, generator, gist, executor, validator, profiler, tools, console_io, compiler. All LLM, tools, validation, and UX live here.
+- **history/** (`semipy/history/`): Version control (Merkle DAG): `version_control.py` with Commit, Branch, Slot, Portal; create_commit, add_commit_to_slot, walk_history, find_branch_by_fingerprint, etc.
+- **reactivity/** (`semipy/reactivity/`): Data flow and reactive invalidation: `reactive.py` (DependencyGraph, SlotRef, add_dependency, is_stale, mark_downstream_stale, persistence); `flow.py` (DataFlow, create_flow, extract_flow, profile_output).
+
 ## Architecture
 
 ### Core data flow
@@ -34,37 +41,40 @@ pytest  # use: uv sync --extra dev first
     -> resolver.resolve(portal, usage, fingerprint, constants)
       -> REUSE: load function from dispatch module, optionally add ref, return compiled function
       -> ADAPT / GENERATE: build GenerationSpec (with user_source_code, enclosing_function_source)
-        -> SemiAgent.generate(spec)
-          -> pydantic_ai Agent (OpenRouter) with tools
+        -> SemiAgent.generate(spec)  [agents.agent]
+          -> pydantic_ai Agent (OpenRouter) with tools [agents.generator]
           -> run_stream_events(prompt, deps) -> streaming (reasoning, tool calls, response)
           -> tools: profile_data_and_flow, read_upstream_context, read_file_context, build_and_run_gist, validate_output
           -> extract generated_source from deps or response
-        -> validate() -> create_commit -> save_portal -> write_dispatch_module()
+        -> validate() [agents.validator] -> create_commit [history] -> save_portal -> write_dispatch_module()
         -> load and execute new function
     -> Execute function with runtime arguments
 ```
 
 ### Module roles
 
-| Module | Role |
-|--------|------|
-| `types.py` | Core dataclasses: SemiCallSite, PromptTemplate, CacheEntry, GenerationSpec, Decision, Usage, ValidationResult, etc. |
-| `config.py` | SemiConfig (openrouter_api_key, openrouter_model, validator_model, e2b_api_key, use_e2b, gist_timeout, ...); get_config() / configure() |
-| `models.py` | Pydantic models for agent tool I/O: ProfileDataResult, GistRunResult, OutputValidationResult, SemiAgentDeps, etc. |
-| `decorator.py` | @semiformal; source inspection and context injection via contextvars |
-| `template.py` | AST-based f-string decomposition; structural fingerprint; loop-variant vs constant variables |
-| `semi_fn.py` | semi() entry point; call-site identification, portal/resolver/store flow, agent invocation; passes user_source_code and enclosing_function_source into GenerationSpec |
-| `dag.py` | Merkle DAG: Commit, Branch, Slot, Portal; create_commit, add_commit_to_slot, walk_history, find_branch_by_fingerprint |
-| `resolver.py` | resolve(portal, usage, fingerprint, constants) -> REUSE / ADAPT / GENERATE (ResolutionResult) |
-| `store.py` | load_portal, save_portal, write_dispatch_module (one impl per slot: active commit), load_function_from_dispatch |
-| `compiler.py` | _compile_source() to turn generated Python source into a callable |
-| `generator.py` | pydantic_ai Agent (OpenRouter) + tools; get_semi_agent(); SYSTEM_PROMPT |
-| `agent.py` | SemiAgent: async generate_async(spec) and sync generate(spec); prompt building; stream event handling; validate and retry with feedback |
-| `gist.py` | GistBuilder(spec).build(generated_source) -> Gist; AST-based assembly of minimal runnable script for sandbox validation |
-| `executor.py` | GistExecutor: execute_sync/execute_async (E2B or subprocess); ExecutionResult |
-| `validator.py` | validate() (AST, type, execution); validate_with_gist() for gist-based validation; _extract_function_source |
-| `console_io.py` | Rich-based console output; DAG logs; streaming (print_reasoning_block, print_response_block, print_tool_call, print_tool_result, print_gist_execution) |
-| `tools.py` | Tool refs in prompts ({TOOL(...)}); parse_tool_refs, register_tool; inject_tools_into_system_prompt (legacy) |
+| Location | Module | Role |
+|----------|--------|------|
+| root | `types.py` | Core dataclasses: SemiCallSite, PromptTemplate, CacheEntry, GenerationSpec, Decision, Usage, ValidationResult, etc. |
+| root | `models.py` | Pydantic models for agent tool I/O: ProfileDataResult, GistRunResult, OutputValidationResult, SemiAgentDeps, etc. |
+| root | `decorator.py` | @semiformal; source inspection and context injection via contextvars |
+| root | `template.py` | AST-based f-string decomposition; structural fingerprint; loop-variant vs constant variables |
+| root | `semi_fn.py` | semi() entry point; call-site identification, portal/resolver/store flow, agent invocation |
+| root | `resolver.py` | resolve(portal, usage, fingerprint, constants) -> REUSE / ADAPT / GENERATE (ResolutionResult) |
+| root | `store.py` | load_portal, save_portal, write_dispatch_module, load_function_from_dispatch |
+| agents | `config.py` | SemiConfig; get_config() / configure() |
+| agents | `compiler.py` | _compile_source() to turn generated Python source into a callable |
+| agents | `agent.py` | SemiAgent: generate(spec); prompt building; stream event handling; validate and retry with feedback |
+| agents | `generator.py` | pydantic_ai Agent (OpenRouter) + tools; get_semi_agent(); SYSTEM_PROMPT |
+| agents | `gist.py` | GistBuilder(spec).build(generated_source) -> Gist; minimal runnable script for sandbox validation |
+| agents | `executor.py` | GistExecutor: execute_sync/execute_async (E2B or subprocess); ExecutionResult |
+| agents | `validator.py` | validate() (AST, type, execution); validate_with_gist(); _extract_function_source |
+| agents | `console_io.py` | Rich-based console output; DAG logs; streaming (print_reasoning_block, print_tool_call, etc.) |
+| agents | `tools.py` | Tool refs in prompts ({TOOL(...)}); parse_tool_refs, register_tool |
+| agents | `profiler.py` | profile_value() for data profiling in agent context |
+| history | `version_control.py` | Commit, Branch, Slot, Portal; create_commit, add_commit_to_slot, walk_history, find_branch_by_fingerprint |
+| reactivity | `reactive.py` | DependencyGraph, SlotRef; add_dependency, is_stale, mark_downstream_stale; load/save_dependency_graph |
+| reactivity | `flow.py` | DataFlow, create_flow, extract_flow, profile_output; FLOW_ATTR |
 
 ### Key abstractions
 
@@ -99,10 +109,24 @@ Exports from `semipy/__init__.py`: `semiformal`, `semi`, `SemiConfig`, `configur
 - LLM model references: use OpenRouter model ids (e.g. anthropic/claude-sonnet-4-6); see config.validator_model for fast validation model.
 - Use Context7 MCP for library/API documentation when needed.
 - Prefer existing dependencies; introduce new ones only with user awareness.
-- **Type checking**: Generated function return values are validated with `isinstance`; when pydantic is available, `TypeAdapter(expected_type)` is used to produce clearer validation errors. The `expression` library (dbrattli/expression) is a dependency for potential future typed pipelines; currently type flow is enforced via expected_type and the validator.
+- **Type checking**: Generated function return values are validated with `isinstance`; when pydantic is available, `TypeAdapter(expected_type)` is used to produce clearer validation errors.
 
 ## Rules
 
 - Keep CLAUDE.md up to date with the project.
 - Use `.claude/skills/code-explorer/SKILL.md` before making changes; use `.claude/skills/code-simplifier/SKILL.md` after changes when appropriate.
 - Provide a plan and explanation for non-trivial changes; make changes that work for all use cases, not a single case.
+
+---
+
+## Todo
+
+Items below are partially done, naive, or fragile and should be revisited for generalization and edge cases.
+
+- **Resolution / DAG**: Branch selection (default_branch vs most recent) and refs/usage_id handling may not cover all multi-branch scenarios; edge cases when slot has no commits or no refs.
+- **Reactivity**: Staleness is per-slot; no fine-grained invalidation by usage_id. Downstream requirements (e.g. required_columns) are a single dict per slot and may not scale to many distinct downstream needs.
+- **Flow / profile_output**: Duck-typing for "columns" and "dataframe_like" is minimal; complex or nested structures may not profile correctly. _flow_from_inputs merge logic (picking producing_slot from first valid flow) is a heuristic.
+- **Validator**: AST and execution validation are robust; type validation depends on expected_type and optional TypeAdapter. Gist-based validation can flake on environment or timeout.
+- **Agent / generator**: Tool ordering and system prompt are fixed; prompt building from GenerationSpec could be more modular. profile_data_and_flow depends on optional refs (example_glm); no fallback behavior when refs are missing.
+- **Tools**: SEARCH/RAG and custom tools are documented in prompts; injection into system prompt is legacy-style. No formal contract for tool return types used by the agent.
+- **Console I/O**: Rich output and file-link formatting assume a certain terminal/IDE; no headless or log-only mode beyond verbose flag.

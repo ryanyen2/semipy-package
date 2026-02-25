@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from semipy.dag import (
+from semipy.history import (
     Commit,
     Slot,
     find_branch_by_fingerprint,

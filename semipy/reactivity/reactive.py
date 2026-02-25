@@ -3,8 +3,7 @@ Reactive dependency graph for cross-slot invalidation and backward validation.
 
 Tracks dependencies between semiformal slots so that when an upstream slot
 produces a new commit, downstream slots can be marked stale and regenerated
-on next access. No hardcoded patterns; logic is driven by data flow and
-requirements.
+on next access.
 """
 from __future__ import annotations
 
@@ -64,7 +63,6 @@ def _ensure_status(graph: DependencyGraph, slot_ref: SlotRef) -> SlotStatus:
 
 
 def _reachable_from(graph: DependencyGraph, start_key: str, follow_forward: bool) -> set[str]:
-    """BFS from start_key along forward edges (downstream) or backward edges (upstream)."""
     adj = graph.forward_adj if follow_forward else graph.backward_adj
     seen: set[str] = set()
     q: deque[str] = deque([start_key])
@@ -86,10 +84,7 @@ def add_dependency(
     edge_type: str = "data",
     metadata: Optional[dict[str, Any]] = None,
 ) -> bool:
-    """
-    Insert a directed edge upstream -> downstream with cycle detection.
-    Returns True if edge was added, False if it would create a cycle (edge rejected).
-    """
+    """Insert directed edge upstream -> downstream with cycle detection. Returns True if added."""
     uk, dk = upstream.key(), downstream.key()
     if uk == dk:
         return False
@@ -106,14 +101,12 @@ def add_dependency(
 
 
 def get_transitive_downstream(graph: DependencyGraph, slot_ref: SlotRef) -> set[str]:
-    """BFS forward from slot_ref; returns set of downstream slot keys (excluding slot_ref)."""
     keys = _reachable_from(graph, slot_ref.key(), follow_forward=True)
     keys.discard(slot_ref.key())
     return keys
 
 
 def get_transitive_upstream(graph: DependencyGraph, slot_ref: SlotRef) -> set[str]:
-    """BFS backward from slot_ref; returns set of upstream slot keys (excluding slot_ref)."""
     keys = _reachable_from(graph, slot_ref.key(), follow_forward=False)
     keys.discard(slot_ref.key())
     return keys
@@ -124,10 +117,6 @@ def mark_downstream_stale(
     upstream: SlotRef,
     reason: str,
 ) -> int:
-    """
-    Mark all transitive downstream slots as stale (excluding upstream).
-    Returns count of slots marked.
-    """
     keys = get_transitive_downstream(graph, upstream)
     for k in keys:
         st = graph.statuses.get(k)
@@ -155,7 +144,6 @@ def add_downstream_requirement(
     key: str,
     value: Any,
 ) -> None:
-    """Register what downstream needs from this slot (e.g. required_columns)."""
     st = _ensure_status(graph, slot_ref)
     st.downstream_requirements[key] = value
 
@@ -172,12 +160,6 @@ def update_slot_commit(graph: DependencyGraph, slot_ref: SlotRef, commit_id: str
     st.current_commit_id = commit_id
 
 
-# ---------------------------------------------------------------------------
-# Persistence
-# ---------------------------------------------------------------------------
-
-_dep_graph_cache: dict[str, DependencyGraph] = {}
-
 DEPENDENCY_GRAPH_FILENAME = "dependency_graph.json"
 
 
@@ -191,15 +173,16 @@ def _graph_to_serializable(graph: DependencyGraph) -> dict[str, Any]:
         }
         for e in graph.edges
     ]
-    statuses_data = {}
-    for k, st in graph.statuses.items():
-        statuses_data[k] = {
+    statuses_data = {
+        k: {
             "slot_ref": {"session_id": st.slot_ref.session_id, "slot_id": st.slot_ref.slot_id},
             "current_commit_id": st.current_commit_id,
             "stale": st.stale,
             "stale_reason": st.stale_reason,
             "downstream_requirements": st.downstream_requirements,
         }
+        for k, st in graph.statuses.items()
+    }
     return {
         "edges": edges_data,
         "statuses": statuses_data,
@@ -238,8 +221,10 @@ def _graph_from_serializable(data: dict[str, Any]) -> DependencyGraph:
     return graph
 
 
+_dep_graph_cache: dict[str, DependencyGraph] = {}
+
+
 def load_dependency_graph(cache_dir: Path) -> DependencyGraph:
-    """Load graph from cache_dir/.semiformal/dependency_graph.json or return empty graph."""
     path = cache_dir / DEPENDENCY_GRAPH_FILENAME
     if not path.exists():
         return DependencyGraph()
@@ -253,17 +238,14 @@ def load_dependency_graph(cache_dir: Path) -> DependencyGraph:
 
 
 def save_dependency_graph(cache_dir: Path, graph: DependencyGraph) -> None:
-    """Serialize graph to cache_dir/dependency_graph.json."""
     import json
     path = cache_dir / DEPENDENCY_GRAPH_FILENAME
     path.parent.mkdir(parents=True, exist_ok=True)
-    data = _graph_to_serializable(graph)
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+        json.dump(_graph_to_serializable(graph), f, indent=2)
 
 
 def _get_dep_graph(cache_dir: Path) -> DependencyGraph:
-    """Cached loader keyed by cache_dir to avoid repeated I/O."""
     key = str(cache_dir.resolve())
     if key not in _dep_graph_cache:
         _dep_graph_cache[key] = load_dependency_graph(cache_dir)

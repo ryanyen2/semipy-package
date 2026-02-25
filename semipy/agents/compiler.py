@@ -1,8 +1,4 @@
-"""
-Compile generated Python source into a callable.
-
-Expects source to define a single top-level function; returns that function.
-"""
+"""Compile generated Python source into a callable."""
 from __future__ import annotations
 
 from typing import Any, Callable
