@@ -21,6 +21,30 @@ _UNKNOWN_RETURN_NONE_MSG = (
 )
 
 
+def count_function_positional_params(source: str) -> int:
+    """
+    Return the number of positional parameters of the first function definition in source.
+    Used to verify that a reused commit's implementation accepts at least as many
+    positional arguments as the template has variables (cross-constant reuse).
+    """
+    extracted = _extract_function_source(source)
+    if not extracted.strip():
+        return 0
+    try:
+        tree = ast.parse(extracted)
+    except SyntaxError:
+        return 0
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef):
+            n = 0
+            for a in node.args.args:
+                if a.arg in ("*args", "**kwargs"):
+                    break
+                n += 1
+            return n
+    return 0
+
+
 def _extract_function_source(raw: str) -> str:
     """Extract Python code from markdown code block if present."""
     raw = raw.strip()

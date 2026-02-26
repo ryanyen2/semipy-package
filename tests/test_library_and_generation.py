@@ -2,32 +2,37 @@
 Tests for DreamCoder-style library learning and pattern reuse.
 
 These tests verify:
-- AST pattern mining from generated sources (no hardcoded patterns)
-- Sleep phase: collect commits, mine patterns, compress, persist library
-- Library injection: select_relevant_primitives and build_library_context
-- COMPOSE resolution path when library has matching primitives
-- How users can reuse learned patterns in their specs (documented in assertions and structure)
-- That the LLM is invoked with the correct prompt (decision + library_context) and that
-  the resolution decision (REUSE/ADAPT/COMPOSE/GENERATE) is logged and used.
+- Resolution and reuse are driven by template structure (fingerprint), not by exact wording.
+  The "signature" is the sequence of literal vs variable slots; filler words and constant
+  values do not change the fingerprint. Same structure + different constants -> REUSE.
+- No hardcoded common_pattern or common_template; pattern is context-dependent and derived
+  from the actual prompt and code (template_tree, structural_fingerprint).
+- AST pattern mining from generated sources; sleep phase; library injection; COMPOSE path.
+- Parameter-count validation: when reusing by fingerprint, the commit's function must
+  accept at least as many positional args as the template has variables.
 
-Verifying with real LLM and streaming logs:
-- Run an example with verbose=True (default). You should see:
-  - [semipy] Decision: <reuse|adapt|compose|generate> <description>
-  - [semipy] Invoking LLM | decision=<...> | library_context=N chars (or none)
-  - Reasoning/Response panels from the model; tool calls (build_and_run_gist, list_library_primitives, etc.)
-  - DAG line: "Reuse cached" / "Adapt from ..." / "Compose from library" / "New implementation"
-- When the library has a matching primitive, resolution should be COMPOSE and the prompt
-  should include "Available library primitives" and "Compose from this library primitive".
+Real-world use cases reflected here:
+- Same template, different constant values (e.g. threshold 2021 vs 2022) -> REUSE.
+- Same call site, varying user phrasing that yields the same template shape -> same fingerprint.
+- When the stored implementation has fewer parameters than the template requires, fall back to GENERATE.
 """
 from __future__ import annotations
 
 import json
-import os
 import tempfile
 from pathlib import Path
 
 import pytest
 
+from semipy.agents.validator import count_function_positional_params
+from semipy.history import (
+    Branch,
+    Portal,
+    Slot,
+    create_commit,
+    find_commit_by_fingerprint,
+    freeze_constants,
+)
 from semipy.library import (
     AbstractionLibrary,
     load_library,
@@ -37,13 +42,14 @@ from semipy.library.abstractions import ASTPattern, LibraryPrimitive
 from semipy.library.pattern_mining import (
     all_subtrees,
     anti_unify,
-    ast_hash,
     mine_patterns,
     normalize_subtree,
 )
 from semipy.library.injection import build_library_context, select_relevant_primitives
 from semipy.library.store import write_library_runtime_module
-from semipy.types import Decision, GenerationSpec, SemiCallSite, PromptTemplate, TemplatePart
+from semipy.resolver import resolve
+from semipy.template import structural_fingerprint, template_tree_from_prompt
+from semipy.types import Decision, GenerationSpec, SemiCallSite, PromptTemplate, TemplatePart, Usage
 
 
 def _make_spec(prompt: str, **kwargs: object) -> GenerationSpec:
@@ -179,6 +185,148 @@ def test_sleep_phase_persists_library(tmp_path: Path) -> None:
     assert runtime_path.exists() or (tmp_path / "runtime").exists()
 
 
+def test_structural_fingerprint_same_shape_same_fingerprint() -> None:
+    """
+    Fingerprint is determined by template shape (literal vs var slots), not by literal text
+    or constant values. Two templates with the same structure get the same fingerprint
+    regardless of how the user phrased the prompt (filler words) or what constant values are.
+    """
+    # Same shape: one literal segment, one var, one literal, one var (e.g. "X to (A, B)")
+    t1 = PromptTemplate(
+        template_parts=[
+            TemplatePart(is_literal=True, value="move the red brick to "),
+            TemplatePart(is_literal=False, value="c0"),
+            TemplatePart(is_literal=True, value=" and "),
+            TemplatePart(is_literal=False, value="c1"),
+        ],
+        variable_names=["c0", "c1"],
+        variable_expressions=[],
+    )
+    t2 = PromptTemplate(
+        template_parts=[
+            TemplatePart(is_literal=True, value="move that blue ball over "),
+            TemplatePart(is_literal=False, value="c0"),
+            TemplatePart(is_literal=True, value=" and "),
+            TemplatePart(is_literal=False, value="c1"),
+        ],
+        variable_names=["c0", "c1"],
+        variable_expressions=[],
+    )
+    tree1 = template_tree_from_prompt(t1)
+    tree2 = template_tree_from_prompt(t2)
+    fp1 = structural_fingerprint(tree1)
+    fp2 = structural_fingerprint(tree2)
+    assert fp1 == fp2, "Same template shape (literal/var sequence) must yield same fingerprint"
+
+
+def test_find_commit_by_fingerprint_cross_constant_reuse() -> None:
+    """
+    When only constant values differ (same template structure), find_commit_by_fingerprint
+    returns the existing commit so we REUSE without LLM. This enables e.g. first call
+    semi(f'filter where year > {t}') with t=2021, second with t=2022 -> second reuses.
+    """
+    call_site = SemiCallSite(filename="test.py", lineno=10, func_qualname="analyze")
+    slot_id = call_site.site_id
+    template = PromptTemplate(
+        template_parts=[
+            TemplatePart(is_literal=True, value="remove rows where year > "),
+            TemplatePart(is_literal=False, value="c0"),
+        ],
+        variable_names=["c0"],
+        variable_expressions=[],
+    )
+    usage_2021 = Usage(call_site=call_site, template=template, constant_values={"c0": 2021})
+    usage_2022 = Usage(call_site=call_site, template=template, constant_values={"c0": 2022})
+    assert usage_2021.usage_id() != usage_2022.usage_id()
+
+    fingerprint = structural_fingerprint(template_tree_from_prompt(template))
+    constants_2021 = freeze_constants(usage_2021.constant_values)
+    commit = create_commit(
+        parent_ids=(),
+        generated_source="def filter_year(df, c0):\n    return df[df['year'] > c0]\n",
+        template_fingerprint=fingerprint,
+        constants_snapshot=constants_2021,
+        prompt_snapshot="remove rows where year > 2021",
+        decision="GENERATE",
+        usage_id=usage_2021.usage_id(),
+    )
+    slot = Slot(
+        slot_id=slot_id,
+        call_site_info={"filename": "test.py", "lineno": 10, "func_qualname": "analyze"},
+        function_name_base="analyze",
+        commits={commit.commit_id: commit},
+        branches={"main": Branch(name="main", head=commit.commit_id)},
+        refs={usage_2021.usage_id(): commit.commit_id},
+    )
+    # Ask for commit with same fingerprint but different usage_id (different constant)
+    found = find_commit_by_fingerprint(slot, fingerprint, usage_2022.usage_id())
+    assert found is not None
+    assert found.commit_id == commit.commit_id
+
+
+def test_resolve_reuse_by_fingerprint_same_template_different_constants() -> None:
+    """
+    Full resolution: slot has one commit for usage U1 (e.g. threshold=2021). Resolve with
+    same template and different constant_values (U2, threshold=2022). Expect REUSE with
+    that commit so no LLM is invoked; refs will be updated for U2 in semi_fn.
+    """
+    call_site = SemiCallSite(filename="pipeline.py", lineno=5, func_qualname="run")
+    slot_id = call_site.site_id
+    template = PromptTemplate(
+        template_parts=[
+            TemplatePart(is_literal=True, value="filter rows where year > "),
+            TemplatePart(is_literal=False, value="c0"),
+        ],
+        variable_names=["c0"],
+        variable_expressions=[],
+    )
+    usage_first = Usage(call_site=call_site, template=template, constant_values={"c0": 2021})
+    usage_second = Usage(call_site=call_site, template=template, constant_values={"c0": 2022})
+    fingerprint = structural_fingerprint(template_tree_from_prompt(template))
+    constants_first = freeze_constants(usage_first.constant_values)
+    commit = create_commit(
+        parent_ids=(),
+        generated_source="def f(df, c0):\n    return df[df['year'] > c0]\n",
+        template_fingerprint=fingerprint,
+        constants_snapshot=constants_first,
+        prompt_snapshot="filter rows where year > 2021",
+        decision="GENERATE",
+        usage_id=usage_first.usage_id(),
+    )
+    slot = Slot(
+        slot_id=slot_id,
+        call_site_info={"filename": "pipeline.py", "lineno": 5, "func_qualname": "run"},
+        function_name_base="run",
+        commits={commit.commit_id: commit},
+        branches={"main": Branch(name="main", head=commit.commit_id)},
+        refs={usage_first.usage_id(): commit.commit_id},
+    )
+    portal = Portal(session_id="sess", source_file="pipeline.py", module_name="pipeline", slots={slot_id: slot})
+
+    result = resolve(
+        portal,
+        usage_second,
+        fingerprint,
+        usage_second.constant_values,
+        library=None,
+        spec_for_compose=None,
+    )
+    assert result.decision == Decision.REUSE
+    assert result.commit_id == commit.commit_id
+    assert result.slot is not None
+
+
+def test_count_function_positional_params() -> None:
+    """Reuse is only valid when the commit's function accepts at least template.variable_names args."""
+    assert count_function_positional_params("def f(): return 1") == 0
+    assert count_function_positional_params("def f(x): return x") == 1
+    assert count_function_positional_params("def f(df, c0): return df[df['y'] > c0]") == 2
+    assert count_function_positional_params("def f(a, b, *args): return a + b") == 2
+    # Only first function in source
+    multi = "def g(): pass\ndef h(a, b): return a + b"
+    assert count_function_positional_params(multi) == 0
+
+
 def test_select_relevant_primitives_driven_by_spec() -> None:
     """Selection is driven by spec prompt and primitive name/description; no fixed pattern list."""
     lib = AbstractionLibrary()
@@ -233,10 +381,6 @@ def test_build_library_context_for_agent() -> None:
 
 def test_resolver_compose_path_with_library() -> None:
     """When library has a relevant primitive and slot would otherwise GENERATE, resolver can return COMPOSE."""
-    from semipy.resolver import resolve
-    from semipy.history import Portal, Slot
-    from semipy.types import Decision, Usage
-
     call_site = SemiCallSite(filename="t.py", lineno=1, func_qualname="f")
     portal = Portal(session_id="s1", source_file="test.py", module_name="test", slots={})
     slot_id = call_site.site_id

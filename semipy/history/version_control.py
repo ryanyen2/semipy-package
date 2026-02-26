@@ -147,11 +147,22 @@ def find_commit_by_operation_signature(
 def find_commit_by_fingerprint(
     slot: Slot, template_fingerprint: str, usage_id: str
 ) -> Commit | None:
-    """Return a commit with this template_fingerprint only if it was generated for this usage_id (most recent by timestamp)."""
-    candidates = [
+    """
+    Return a commit with this template_fingerprint (most recent by timestamp).
+    Prefer exact usage_id match; otherwise allow cross-constant reuse: same template
+    structure but different constant values still map to the same implementation.
+    """
+    exact = [
         c
         for c in slot.commits.values()
         if c.template_fingerprint == template_fingerprint and (not c.usage_id or c.usage_id == usage_id)
+    ]
+    if exact:
+        return max(exact, key=lambda c: c.timestamp)
+    candidates = [
+        c
+        for c in slot.commits.values()
+        if c.template_fingerprint == template_fingerprint
     ]
     if not candidates:
         return None
