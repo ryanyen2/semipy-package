@@ -1,0 +1,195 @@
+% ---------------------------------------------------------------------------
+% Abbreviated Algorithm Descriptions: Semiformal Program Synthesis
+% ---------------------------------------------------------------------------
+%
+% Concept-first; notation and syntax introduced so concepts are graspable.
+% Describes: 1) Mixing formality; 2) Synthesis with validated output (PoT);
+% 3) Version control (Merkle DAG) and reactivity.
+%
+% Required packages: algorithm, algpseudocode, amsmath, amssymb, bbm (optional)
+% Use as \input{algorithm_abbrev.tex} in your paper.
+% ---------------------------------------------------------------------------
+
+
+% ===========================
+% NOTATION
+% ===========================
+
+\subsection{Notation and Syntax}
+\label{sec:abbrev-notation}
+
+Let $\mathcal{X}$ be the space of specifications (e.g.\ natural-language
+f-strings or DSL snippets), $\mathcal{P}$ the space of programs (single
+function definitions), and $\mathcal{T}$ the space of types.  A
+\emph{call site} $s$ is identified by source location (file, line, function);
+its identity is $\mathrm{id}(s) = H(f \| \ell \| q)$.  A specification
+$x \in \mathcal{X}$ is decomposed into a \emph{template} $t$ (literal
+fragments and variable slots).  Variables are split into \textbf{constants}
+$\mathbf{c} = (c_1,\dots,c_k)$, fixed for the invocation context, and
+\textbf{loop-variant} $\mathbf{v} = (v_1,\dots,v_n)$, which become the
+parameters of the synthesized function $P$.  The \emph{structural fingerprint}
+$\phi = H(\mathrm{shape}(t))$ hashes the template shape (positions and names of
+variables); the \emph{usage identifier} $u = H(\mathrm{id}(s) \| H(t,\mathbf{c}) \| \tau)$
+and \emph{operation signature} $\sigma = H(\phi \| H(\mathbf{c}))$ uniquely
+identify an invocation and the (structure + constants) pair.  We write
+$P(\mathbf{v})$ for the result of running the synthesized program on the
+loop-variant arguments, and $\mathbf{x}_s$ for sample inputs used during
+validation.
+
+
+% ===========================
+% 1. MIXING FORMALITY
+% ===========================
+
+\subsection{Mixing Formality}
+\label{sec:abbrev-formality}
+
+A \emph{semiformal program} interleaves fully specified code with
+underspecified expressions: natural-language conditions, extraction rules, or
+other intent not written in the host language.  \textbf{Formality is a
+spectrum}: some parts are formal (executable as-is); others are semiformal
+(specifications that must be turned into code before execution).
+
+Each underspecified call is a call site $s$ plus a specification $x$.  The
+split $\mathbf{c}$ vs.\ $\mathbf{v}$ determines what is fixed at call time
+vs.\ passed at run time; the same ideas apply whether $x$ is an f-string, a
+structured object, or a DSL snippet.  The runtime goal is to obtain
+$y = P(\mathbf{v})$ for a validated implementation $P$ of $x$ at $s$.
+
+
+% ===========================
+% 2. SYNTHESIS WITH VALIDATION (PoT)
+% ===========================
+
+\subsection{Synthesis with Validated Output}
+\label{sec:abbrev-synthesis}
+
+Synthesis produces a program $P \in \mathcal{P}$ that implements the
+specification $x$.  Following a \textbf{program-of-thought (PoT)} style, we
+only accept and cache programs that pass a multi-stage \emph{validation
+predicate} $\mathcal{V}$.  Formally we want
+$P^*$ such that $\mathcal{V}(P^*, \tau, \mathbf{x}_s) = \textsc{True}$, where
+$\tau \in \mathcal{T}$ is the expected return type and $\mathbf{x}_s$ are
+sample inputs.  We approximate this by iterative refinement: generate
+$P_i \gets \mathcal{M}(x, \mathbf{c}, \tau, \mathcal{D}, P_{i-1}, F_{i-1})$,
+evaluate $F_i = \mathcal{V}(P_i, \tau, \mathbf{x}_s)$, and repeat until pass or
+retry cap $k$.
+
+\paragraph{Validation predicate.}
+\begin{equation}
+\mathcal{V}(P, \tau, \mathbf{x}_s) =
+  \textsc{SynOk}(P) \;\wedge\;
+  \textsc{ExecOk}(P, \mathbf{x}_s) \;\wedge\;
+  \textsc{TypeOk}(P(\mathbf{x}_s), \tau),
+\end{equation}
+where \textsc{SynOk} checks that $P$ parses to at least one function
+definition; \textsc{ExecOk} that $P$ runs without exception on $\mathbf{x}_s$
+(optionally in a sandbox); and \textsc{TypeOk} that the return value
+satisfies $\tau$ (e.g.\ \texttt{isinstance} or a type adapter).  Failed
+stages produce feedback $F$ that is passed back to the model $\mathcal{M}$.
+
+\paragraph{Gist-based execution check.}
+Execution validation can be strengthened by running a \emph{gist}: a minimal
+self-contained artifact $\mathcal{G}$ containing only the generated function
+and a test invocation, executed in isolation (sandbox or subprocess).  This
+aligns with execution-fidelity criteria: the gist must run and produce the
+expected behavior.  Formally, let $\mathrm{runs}(c, \mathcal{G})$ indicate
+that command $c$ over $\mathcal{G}$ completes without crash, and
+$\mathrm{out}(c, \mathcal{G})$ the outputs; we require
+$\mathrm{runs}(c, \mathcal{G}) = 1$ and output consistency with the
+intended contract.  The agent can invoke a gist tool during generation to
+validate candidates before the final three-stage $\mathcal{V}$.
+
+\begin{algorithm}[t]
+\caption{\textsc{Synthesize} (core loop)}
+\label{alg:abbrev-synthesize}
+\begin{algorithmic}[1]
+\Require $x \in \mathcal{X}$, $\tau$, $\mathbf{c}$, data context $\mathcal{D}$; model $\mathcal{M}$; max retries $k$
+\Ensure $P^*$ with $\mathcal{V}(P^*, \tau, \mathbf{x}_s) = \textsc{True}$
+\State $P_0 \gets \mathcal{M}(x, \mathbf{c}, \tau, \mathcal{D})$; $F_0 \gets \mathcal{V}(P_0, \tau, \mathbf{x}_s)$
+\For{$i = 1$ to $k$}
+  \If{$F_{i-1} = \textsc{Pass}$}
+    \State \Return $P_{i-1}$
+  \EndIf
+  \State $P_i \gets \mathcal{M}(x, \mathbf{c}, \tau, \mathcal{D}; P_{i-1}, F_{i-1})$
+  \State $F_i \gets \mathcal{V}(P_i, \tau, \mathbf{x}_s)$
+\EndFor
+\State \textbf{raise} synthesis failed
+\end{algorithmic}
+\end{algorithm}
+
+
+% ===========================
+% 3. VERSION CONTROL AND REACTIVITY
+% ===========================
+
+\subsection{Version Control and Reactivity}
+\label{sec:abbrev-vc-reactivity}
+
+\paragraph{Merkle DAG cache.}
+Implementations are stored in a \textbf{Merkle DAG} per call site.  A
+Merkle DAG is a directed acyclic graph where each node is
+\emph{content-addressed}: its identifier (content ID) is the hash of its
+payload and the list of its children's identifiers (e.g.\
+$\mathrm{CID} = H(\mathrm{payload} \| \mathrm{children})$).  Nodes are
+immutable; any change yields a new CID and a different (sub)DAG.  We store
+each validated program $P$ as a \emph{commit} $\gamma$ with
+$\mathrm{id}(\gamma) = H(\mathrm{parents}(\gamma) \| H(P))$, so the DAG
+encodes both content and causality.  A \emph{slot} $S$ groups all commits for
+one call site (one DAG per $s$); a \emph{portal} $\Pi$ holds all slots for a
+session.  Each slot maintains $\Gamma$ (commits), branches (heads), and
+$\mathrm{refs}: u \mapsto \gamma.\mathrm{id}$ mapping usage identifiers to
+commits.
+
+\paragraph{Resolution.}
+Given $s$, $x$, $u$, $\sigma$, $\phi$, and $\Pi$, resolution chooses:
+\textbf{Reuse} if $u \in S.\mathrm{refs}$ or some commit has signature
+$\sigma$; \textbf{Adapt} if a branch exists with fingerprint $\phi$ (synthesize
+with that commit as parent); \textbf{Generate} otherwise.  Only validated $P$
+are committed; the active implementation per slot is written to a dispatch
+module and invoked by name.
+
+\paragraph{Reactivity.}
+A dependency graph $G$ records edges $r_{\mathrm{up}} \to r_{\mathrm{down}}$
+between slot references when a value from one semiformal call is consumed by
+another.  When a slot gets a new commit, all downstream slots in $G$ are
+marked \emph{stale}.  On the next access, a stale slot sets
+$\mathrm{force} = \textsc{True}$ and bypasses the cache (re-synthesize), so
+downstream code stays consistent with its data sources.  Cycles in $G$ are
+forbidden.
+
+\begin{algorithm}[t]
+\caption{\textsc{Resolve-and-Dispatch} (core)}
+\label{alg:abbrev-resolve}
+\begin{algorithmic}[1]
+\Require $x$, $u$, $\sigma$, $\phi$, portal $\Pi$, dependency graph $G$, slot ref $r$
+\Ensure $y = P(\mathbf{v})$ from a validated implementation; commit $\gamma$ in Merkle DAG
+\State Add edges $\mathrm{flow}(v) \to r$ to $G$ for inputs $v$ with provenance; set $\mathrm{force} \gets \textsc{IsStale}(G, r)$
+\State $S \gets \Pi.\mathrm{slots}[\mathrm{id}(s)]$
+\If{$S \neq \bot$, $\lnot\mathrm{force}$, and ($u \in S.\mathrm{refs}$ or $\exists \gamma \in S.\Gamma : \gamma.\sigma = \sigma$)}
+  \State $\gamma \gets$ commit for $u$ or $\sigma$; load $P$ from dispatch; $y \gets P(\mathbf{v})$
+\ElsIf{$S \neq \bot$ and branch with fingerprint $\phi$ exists}
+  \State \textbf{Adapt}: $\gamma_p \gets \textsc{Head}(S, \phi)$; $P \gets \textsc{Synthesize}(\cdots)$; $\gamma \gets \textsc{CreateCommit}(\gamma_p, P, \phi, \sigma)$; update $S$, dispatch; $\textsc{MarkStale}(G, r)$
+\Else
+  \State \textbf{Generate}: $P \gets \textsc{Synthesize}(\cdots)$; $\gamma \gets \textsc{CreateCommit}(\bot, P, \phi, \sigma)$; add $\gamma$ to $S$; write dispatch; $\textsc{MarkStale}(G, r)$
+\EndIf
+\State Attach $\mathrm{flow}(y) \gets (r, \gamma.\mathrm{id})$; \Return $y$
+\end{algorithmic}
+\end{algorithm}
+
+
+% ===========================
+% SUMMARY
+% ===========================
+
+\paragraph{Summary.}
+Semiformal programming mixes formal and underspecified parts in one program;
+notation ($s$, $x$, $\phi$, $u$, $\sigma$, $\gamma$, $S$, $\Pi$) makes the
+identification and cache structure precise.  Synthesis follows a PoT-style
+loop: the model $\mathcal{M}$ generates programs and an evaluator
+$\mathcal{V} = \textsc{SynOk} \wedge \textsc{ExecOk} \wedge \textsc{TypeOk}$
+validates them; optional gist-based execution checks ensure runnability and
+output fidelity in isolation.  Only validated code is committed to a
+content-addressed Merkle DAG per call site (commit id from parents and
+$H(P)$); resolution chooses Reuse, Adapt, or Generate.  A dependency graph and
+staleness keep downstream slots consistent when upstream commits change.
