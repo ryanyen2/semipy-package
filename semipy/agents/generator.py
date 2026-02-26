@@ -273,7 +273,7 @@ Rules:
 - Output only one function. No explanations, no markdown outside the code block.
 - Wrap the function in a ```python code block.
 - The function must be pure Python unless the request clearly suggests external interaction (e.g. fetching data). Use standard library or requests; do not rely on built-in domain-specific tools unless the prompt explicitly asks for them.
-- Parameters: the user prompt may reference "the value" or "this row"; those become the first parameter(s). Other fixed context are described in the prompt; bake them into the function or add parameters as needed.
+- Parameters: all values described in the prompt are passed as positional arguments. The function MUST accept and use all positional arguments. Do NOT hardcode any constant values from the prompt. The first argument is typically the value that changes per invocation; the rest are fixed context for this call.
 - Return type: match exactly what the user needs (bool for conditions, str for text, int/float for numbers, or the described type). Prefer a typed signature when the return type is known (e.g. def f(row, c3) -> bool:). The pipeline preserves type annotations.
 - Handle edge cases: None, missing keys, empty data. Prefer safe defaults over raising.
 - Use the data context (variable_values, sample_input) when provided; use actual column names and values from the context. Never fabricate data values.

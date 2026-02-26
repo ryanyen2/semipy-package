@@ -209,7 +209,7 @@ class SemiAgent:
             parts.append("- Sample input (the function will be called with these argument types):")
             parts.append(json.dumps(spec.sample_input, default=repr, indent=2))
         if spec.constant_values:
-            parts.append("- Constant context (use as parameters after the first, or bake into the function):")
+            parts.append("- Constant context (these are passed as positional arguments after the first; use them as function parameters):")
             parts.append(json.dumps(spec.constant_values, default=repr, indent=2))
         if getattr(spec, "downstream_requirements", None):
             reqs = spec.downstream_requirements
@@ -270,7 +270,7 @@ class SemiAgent:
             parts.append("- Sample input (the function will be called with these argument types):")
             parts.append(json.dumps(spec.sample_input, default=repr, indent=2))
         if spec.constant_values:
-            parts.append("- Constant context (bake into the function or add as parameters):")
+            parts.append("- Constant context (these are passed as positional arguments after the first; use them as function parameters):")
             parts.append(json.dumps(spec.constant_values, default=repr, indent=2))
         if getattr(spec, "downstream_requirements", None):
             reqs = spec.downstream_requirements
