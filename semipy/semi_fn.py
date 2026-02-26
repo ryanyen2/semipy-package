@@ -17,6 +17,7 @@ from semipy.agents.agent import SemiAgent
 from semipy.agents.config import get_config
 from semipy.agents.console_io import (
     print_dag_adapt,
+    print_dag_compose,
     print_dag_generate,
     print_dag_reuse,
     print_pipeline_log,
@@ -50,6 +51,8 @@ from semipy.reactivity import (
     profile_output,
 )
 from semipy.resolver import resolve
+from semipy.library import load_library
+from semipy.library.injection import build_library_context
 from semipy.store import (
     function_name_for_commit,
     get_dispatch_function_line_range,
@@ -412,7 +415,28 @@ def _semi_inline(
                 if config.verbose:
                     st = dep_graph.statuses.get(current_slot_ref.key())
                     print_reactive_stale(call_site, call_site.site_id, st.stale_reason if st else "unknown")
-        resolution = resolve(portal, usage, fingerprint, constant_values, force_regenerate=force_regenerate)
+        library = None
+        spec_for_compose = None
+        if getattr(config, "abstraction_discovery", True):
+            try:
+                library = load_library(cache_dir)
+                spec_for_compose = GenerationSpec(
+                    prompt=prompt,
+                    call_site=call_site,
+                    template=site_info.template,
+                    context=context,
+                    expected_type=effective_type,
+                    constant_values=constant_values,
+                    variable_values={n: name_to_value[n] for n in site_info.template.variable_names},
+                )
+            except Exception:
+                pass
+        resolution = resolve(
+            portal, usage, fingerprint, constant_values,
+            force_regenerate=force_regenerate,
+            library=library,
+            spec_for_compose=spec_for_compose,
+        )
 
         need_generate = False
         if resolution.decision == Decision.REUSE and resolution.slot is not None and resolution.commit_id is not None:
@@ -474,7 +498,7 @@ def _semi_inline(
                     return result
                 need_generate = True
 
-        if resolution.decision in (Decision.ADAPT, Decision.GENERATE) or need_generate:
+        if resolution.decision in (Decision.ADAPT, Decision.COMPOSE, Decision.GENERATE) or need_generate:
             sample_input = _sample_from_values(
                 site_info.template.variable_names,
                 name_to_value,
@@ -495,6 +519,20 @@ def _semi_inline(
                 except Exception:
                     pass
             enclosing_function_source = context.source_code if context else None
+            library_context_str = None
+            if library is not None:
+                try:
+                    library_context_str = build_library_context(library, GenerationSpec(
+                        prompt=prompt,
+                        call_site=call_site,
+                        template=site_info.template,
+                        context=context,
+                        expected_type=effective_type,
+                        constant_values=constant_values,
+                        variable_values={n: name_to_value[n] for n in site_info.template.variable_names},
+                    ), max_count=5)
+                except Exception:
+                    pass
             spec = GenerationSpec(
                 prompt=prompt,
                 call_site=call_site,
@@ -516,6 +554,7 @@ def _semi_inline(
                 downstream_requirements=get_downstream_requirements(dep_graph, current_slot_ref) if (getattr(config, "reactive", True) and dep_graph is not None) else None,
                 user_source_code=user_source_code,
                 enclosing_function_source=enclosing_function_source,
+                library_context=library_context_str,
             )
             entry = SemiAgent().generate(spec)
             constants_snapshot = freeze_constants(constant_values)
@@ -525,6 +564,10 @@ def _semi_inline(
                 branch_name = resolution.branch_name
                 parent_ids = tuple(resolution.parent_commit_ids)
                 decision_str = "ADAPT"
+            elif resolution.decision == Decision.COMPOSE:
+                branch_name = "main" if not slot.branches else f"b_{fingerprint[:8]}"
+                parent_ids = ()
+                decision_str = "COMPOSE"
             else:
                 if not slot.branches:
                     branch_name = "main"
@@ -564,6 +607,17 @@ def _semi_inline(
                         call_site,
                         commit.commit_id,
                         resolution.parent_commit_ids[0],
+                        path_str,
+                        _relative_link_path(call_site.filename, call_site.lineno),
+                        _file_link_url(path_str),
+                        code_line_range=code_line_range if code_line_range != (0, 0) else None,
+                        entry_script_path=_ep,
+                        entry_script_lineno=_el,
+                    )
+                elif resolution.decision == Decision.COMPOSE:
+                    print_dag_compose(
+                        call_site,
+                        commit.commit_id,
                         path_str,
                         _relative_link_path(call_site.filename, call_site.lineno),
                         _file_link_url(path_str),

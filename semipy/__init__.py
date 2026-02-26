@@ -11,6 +11,13 @@ from semipy.agents.config import SemiConfig, configure, get_config
 from semipy.types import Decision, SemiCallError, SemiGenerationError
 from semipy.agents.tools import register_tool, parse_tool_refs
 from semipy.reactivity import DependencyGraph, SlotRef, DataFlow
+from semipy.library import (
+    load_library,
+    run_sleep_phase,
+    AbstractionLibrary,
+    LibraryPrimitive,
+    ASTPattern,
+)
 from semipy.agents.gist import GistBuilder, Gist
 from semipy.agents.executor import GistExecutor, ExecutionResult
 from semipy.models import (
@@ -42,4 +49,9 @@ __all__ = [
     "ProfileDataResult",
     "GistRunResult",
     "OutputValidationResult",
+    "load_library",
+    "run_sleep_phase",
+    "AbstractionLibrary",
+    "LibraryPrimitive",
+    "ASTPattern",
 ]

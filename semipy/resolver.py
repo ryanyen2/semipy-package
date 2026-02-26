@@ -1,4 +1,4 @@
-"""Resolve usage to REUSE, ADAPT, FORK, or GENERATE using the DAG."""
+"""Resolve usage to REUSE, ADAPT, COMPOSE, FORK, or GENERATE using the DAG."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -14,7 +14,7 @@ from semipy.history import (
     compute_operation_signature,
     walk_history,
 )
-from semipy.types import Decision, Usage
+from semipy.types import Decision, GenerationSpec, Usage
 
 
 @dataclass
@@ -34,6 +34,8 @@ def resolve(
     template_fingerprint: str,
     constants: dict[str, Any],
     force_regenerate: bool = False,
+    library: Optional[Any] = None,
+    spec_for_compose: Optional[GenerationSpec] = None,
 ) -> ResolutionResult:
     """
     Resolve a usage against the portal DAG.
@@ -135,6 +137,23 @@ def resolve(
             lineage_summary=lineage,
             commit_id=None,
         )
+
+    if library is not None and spec_for_compose is not None:
+        try:
+            from semipy.library.injection import select_relevant_primitives
+            prims = select_relevant_primitives(library, spec_for_compose, max_count=1)
+            if prims:
+                return ResolutionResult(
+                    decision=Decision.COMPOSE,
+                    slot=slot,
+                    branch_name=None,
+                    parent_commit_ids=[],
+                    parent_sources=[prims[0].source],
+                    lineage_summary="compose from library",
+                    commit_id=None,
+                )
+        except Exception:
+            pass
 
     return ResolutionResult(
         decision=Decision.GENERATE,

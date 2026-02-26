@@ -113,6 +113,14 @@ def _create_agent() -> Agent[SemiAgentDeps]:
         )
 
     @agent.tool
+    async def list_library_primitives(ctx: RunContext[SemiAgentDeps]) -> str:
+        """Return the available library primitives for this request (if any). Same as the block in the user prompt."""
+        deps = ctx.deps
+        spec = getattr(deps, "spec", None)
+        ctx_block = getattr(spec, "library_context", None) if spec else None
+        return (ctx_block or "").strip() or "No library primitives for this request."
+
+    @agent.tool
     async def read_file_context(
         ctx: RunContext[SemiAgentDeps],
         file_path: str,
@@ -145,11 +153,11 @@ def _create_agent() -> Agent[SemiAgentDeps]:
         if not gist_builder or not executor:
             return GistRunResult(success=False, error="GistBuilder or Executor not in deps")
         gist = gist_builder.build(generated_function_source)
-        if get_config().verbose:
-            print("[Gist built] (sandbox test: generated function + sample invocation)")
-            print("---")
-            print(gist.source)
-            print("---")
+        # if get_config().verbose:
+        #     print("[Gist built] (sandbox test: generated function + sample invocation)")
+        #     print("---")
+        #     print(gist.source)
+        #     print("---")
         if not gist:
             return GistRunResult(
                 success=False,
@@ -272,14 +280,16 @@ Rules:
 - When a usage context is provided (e.g. "passed as argument to X"), return the type that X expects.
 - Do not use emoji or decorative output. No docstrings or comments in the code, just code.
 - When the user provides a previous implementation (adapt or inspiration), preserve its structure where possible and change only what is needed.
+- When "Available library primitives" are shown in the prompt, you may reuse or adapt them to satisfy the request.
 
 Tool usage:
 1. If the spec contains data variables or sample data, you may call profile_data_and_flow(code, working_dir?) first to get data profile and flow.
 2. If adapting from a parent, call read_upstream_context() to read parent sources.
-3. Generate the function, then call build_and_run_gist(generated_function_source) with the raw function source only: the exact "def name(...):" and body as a string. No markdown, no ```python wrapper, no surrounding text.
-4. If the gist fails (success=False), read stderr and fix the function; call build_and_run_gist again with the corrected source.
-5. When the gist succeeds, call validate_output(result_repr, expected_type_name) with the result_repr from the gist tool result (and expected_type_name from the user request, e.g. "bool", "list", "str").
-6. Output the final function in a ```python code block."""
+3. If library primitives are provided, you may call list_library_primitives() to see them again.
+4. Generate the function, then call build_and_run_gist(generated_function_source) with the raw function source only: the exact "def name(...):" and body as a string. No markdown, no ```python wrapper, no surrounding text.
+5. If the gist fails (success=False), read stderr and fix the function; call build_and_run_gist again with the corrected source.
+6. When the gist succeeds, call validate_output(result_repr, expected_type_name) with the result_repr from the gist tool result (and expected_type_name from the user request, e.g. "bool", "list", "str").
+7. Output the final function in a ```python code block."""
 
 
 _semi_agent: Optional[Agent[SemiAgentDeps]] = None

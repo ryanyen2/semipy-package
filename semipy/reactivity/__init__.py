@@ -25,6 +25,24 @@ from semipy.reactivity.flow import (
     profile_output,
     _flow_from_inputs,
 )
+from semipy.reactivity.events import EventType, ReactiveEvent
+from semipy.reactivity.observer import (
+    ObserverRegistry,
+    Subscription,
+    load_observer_registry,
+    save_observer_registry,
+    subscribe,
+    unsubscribe,
+    emit,
+    auto_subscribe,
+)
+from semipy.reactivity.propagation import (
+    topological_sort,
+    get_stale_downstream_refs,
+    rebuild_spec_from_commit,
+    propagate_eager,
+)
+from semipy.reactivity.impact import assess_impact_async
 
 __all__ = [
     "DependencyGraph",
@@ -47,4 +65,19 @@ __all__ = [
     "load_dependency_graph",
     "_get_dep_graph",
     "_flow_from_inputs",
+    "EventType",
+    "ReactiveEvent",
+    "ObserverRegistry",
+    "Subscription",
+    "load_observer_registry",
+    "save_observer_registry",
+    "subscribe",
+    "unsubscribe",
+    "emit",
+    "auto_subscribe",
+    "topological_sort",
+    "get_stale_downstream_refs",
+    "rebuild_spec_from_commit",
+    "propagate_eager",
+    "assess_impact_async",
 ]

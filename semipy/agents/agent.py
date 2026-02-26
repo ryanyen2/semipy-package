@@ -223,6 +223,15 @@ class SemiAgent:
             if lineage:
                 parts.append("")
                 parts.append("Upstream dependency context: this step consumes output from prior steps in the pipeline.")
+        if getattr(spec, "library_context", None) and spec.library_context.strip():
+            parts.append("")
+            parts.append(spec.library_context)
+        if spec.decision == Decision.COMPOSE and spec.parent_sources:
+            parts.append("")
+            parts.append("Compose from this library primitive (adapt to the current request):")
+            parts.append("```python")
+            parts.append(spec.parent_sources[0].strip())
+            parts.append("```")
         return "\n".join(parts)
 
     def _build_named_user_prompt(self, spec: GenerationSpec) -> str:
@@ -275,6 +284,15 @@ class SemiAgent:
             if lineage:
                 parts.append("")
                 parts.append("Upstream dependency context: this step consumes output from prior steps in the pipeline.")
+        if getattr(spec, "library_context", None) and spec.library_context.strip():
+            parts.append("")
+            parts.append(spec.library_context)
+        if spec.decision == Decision.COMPOSE and spec.parent_sources:
+            parts.append("")
+            parts.append("Compose from this library primitive (adapt to the current request):")
+            parts.append("```python")
+            parts.append(spec.parent_sources[0].strip())
+            parts.append("```")
         return "\n".join(parts)
 
     def _build_retry_prompt(
@@ -322,6 +340,17 @@ class SemiAgent:
         )
         agent = get_semi_agent()
 
+        if self.verbose:
+            decision = spec.decision if spec.decision is not None else Decision.GENERATE
+            get_console().print(
+                f"[dim][semipy][/] Invoking LLM | decision=[cyan]{decision.value}[/]"
+                + (
+                    f" | library_context={len(spec.library_context or '')} chars"
+                    if getattr(spec, "library_context", None) and spec.library_context
+                    else " | library_context=none"
+                )
+            )
+
         part_buffers: dict = {}
         current_part_index: Optional[int] = None
         current_part_type: Optional[str] = None
@@ -348,7 +377,7 @@ class SemiAgent:
         source = getattr(deps, "generated_source", None) or ""
         if not source.strip() and final_output:
             source = _extract_function_source(final_output)
-            print(f"Generated source:\n {source}")
+            # print(f"Generated source:\n {source}")
         if not source.strip():
             raise SemiGenerationError("Agent did not produce a Python function (no code block or build_and_run_gist source).")
 

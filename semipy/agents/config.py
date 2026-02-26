@@ -31,6 +31,15 @@ class SemiConfig:
     confirm_callback: Optional[Callable[[str], str]] = None
     reactive: bool = True
     analyze_scripts: bool = True
+    propagation_mode: str = "eager"
+    llm_impact_analysis: bool = True
+    max_eager_cascade_depth: int = 5
+    abstraction_discovery: bool = True
+    sleep_phase_trigger_count: int = 10
+    min_pattern_frequency: int = 3
+    cocoindex_enabled: bool = False
+    cocoindex_db_url: str = ""
+    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
 
     def configure(
         self,
@@ -52,6 +61,15 @@ class SemiConfig:
         confirm_callback: Optional[Callable[[str], str]] = None,
         reactive: Optional[bool] = None,
         analyze_scripts: Optional[bool] = None,
+        propagation_mode: Optional[str] = None,
+        llm_impact_analysis: Optional[bool] = None,
+        max_eager_cascade_depth: Optional[int] = None,
+        abstraction_discovery: Optional[bool] = None,
+        sleep_phase_trigger_count: Optional[int] = None,
+        min_pattern_frequency: Optional[int] = None,
+        cocoindex_enabled: Optional[bool] = None,
+        cocoindex_db_url: Optional[str] = None,
+        embedding_model: Optional[str] = None,
     ) -> None:
         """Update config attributes from the given keyword arguments (only non-None values)."""
         if openrouter_api_key is not None:
@@ -90,6 +108,24 @@ class SemiConfig:
             self.reactive = reactive
         if analyze_scripts is not None:
             self.analyze_scripts = analyze_scripts
+        if propagation_mode is not None:
+            self.propagation_mode = propagation_mode
+        if llm_impact_analysis is not None:
+            self.llm_impact_analysis = llm_impact_analysis
+        if max_eager_cascade_depth is not None:
+            self.max_eager_cascade_depth = max_eager_cascade_depth
+        if abstraction_discovery is not None:
+            self.abstraction_discovery = abstraction_discovery
+        if sleep_phase_trigger_count is not None:
+            self.sleep_phase_trigger_count = sleep_phase_trigger_count
+        if min_pattern_frequency is not None:
+            self.min_pattern_frequency = min_pattern_frequency
+        if cocoindex_enabled is not None:
+            self.cocoindex_enabled = cocoindex_enabled
+        if cocoindex_db_url is not None:
+            self.cocoindex_db_url = cocoindex_db_url
+        if embedding_model is not None:
+            self.embedding_model = embedding_model
 
 
 _config: Optional[SemiConfig] = None

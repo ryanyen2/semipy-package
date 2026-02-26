@@ -155,6 +155,7 @@ class Decision(Enum):
 
     REUSE = "reuse"
     ADAPT = "adapt"  # same structure, adapt from parent commit (e.g. new prompt/constants)
+    COMPOSE = "compose"  # compose from library primitive matching template/semantics
     FORK = "fork"
     GENERATE = "generate"
     MERGE = "merge"
@@ -185,6 +186,7 @@ class GenerationSpec:
     downstream_requirements: Optional[dict[str, Any]] = None  # requirements from downstream (e.g. required_columns)
     user_source_code: Optional[str] = None  # full source of user's file (for gist building)
     enclosing_function_source: Optional[str] = None  # source of the @semiformal function
+    library_context: Optional[str] = None  # text block of relevant library primitives for the agent
 
 
 @dataclass

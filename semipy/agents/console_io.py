@@ -40,6 +40,8 @@ def decision_description(decision: Decision) -> str:
         return "Reuse cached implementation"
     if decision == Decision.ADAPT:
         return "Adapt from previous implementation"
+    if decision == Decision.COMPOSE:
+        return "Compose from library primitive"
     if decision == Decision.FORK:
         return "New branch (structure changed)"
     if decision == Decision.GENERATE:
@@ -348,6 +350,31 @@ def print_dag_adapt(
     """Log ADAPT: call file, package file, adapted from parent, transpiled path. All paths relative."""
     source = _relative_display_path(call_site.filename, call_site.lineno, max_len=72)
     generation = f"Adapted from previous (commit {parent_commit_id[:8]} -> {commit_id[:8]})"
+    call_file = None
+    call_file_link = None
+    if entry_script_path:
+        call_file = _relative_path_for_display(entry_script_path, entry_script_lineno) if (entry_script_lineno is not None and entry_script_lineno > 0) else _relative_path_for_display(entry_script_path)
+        call_file_link = _relative_link_path(entry_script_path, entry_script_lineno if (entry_script_lineno is not None and entry_script_lineno > 0) else None)
+    _print_semipy_line_once(
+        source, generation, code_path, "cyan", source_link, path_link, code_line_range,
+        call_file=call_file,
+        call_file_link=call_file_link,
+    )
+
+
+def print_dag_compose(
+    call_site: SemiCallSite,
+    commit_id: str,
+    code_path: str,
+    source_link: Optional[str] = None,
+    path_link: Optional[str] = None,
+    code_line_range: Optional[tuple[int, int]] = None,
+    entry_script_path: Optional[str] = None,
+    entry_script_lineno: Optional[int] = None,
+) -> None:
+    """Log COMPOSE: composed from library primitive, new commit."""
+    source = _relative_display_path(call_site.filename, call_site.lineno, max_len=72)
+    generation = f"Compose from library (commit {commit_id[:8]})"
     call_file = None
     call_file_link = None
     if entry_script_path:

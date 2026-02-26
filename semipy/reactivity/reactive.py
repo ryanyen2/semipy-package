@@ -43,6 +43,7 @@ class SlotStatus:
     stale: bool = False
     stale_reason: str = ""
     downstream_requirements: dict[str, Any] = field(default_factory=dict)
+    stale_usage_ids: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -116,6 +117,7 @@ def mark_downstream_stale(
     graph: DependencyGraph,
     upstream: SlotRef,
     reason: str,
+    affected_usage_ids: Optional[set[str]] = None,
 ) -> int:
     keys = get_transitive_downstream(graph, upstream)
     for k in keys:
@@ -123,19 +125,36 @@ def mark_downstream_stale(
         if st is not None:
             st.stale = True
             st.stale_reason = reason
+            if affected_usage_ids is not None:
+                st.stale_usage_ids = st.stale_usage_ids | affected_usage_ids
     return len(keys)
 
 
-def is_stale(graph: DependencyGraph, slot_ref: SlotRef) -> bool:
+def is_stale(graph: DependencyGraph, slot_ref: SlotRef, usage_id: Optional[str] = None) -> bool:
     st = graph.statuses.get(slot_ref.key())
-    return st.stale if st is not None else False
+    if st is None:
+        return False
+    if usage_id is not None and st.stale_usage_ids:
+        return usage_id in st.stale_usage_ids
+    return st.stale
 
 
-def clear_stale(graph: DependencyGraph, slot_ref: SlotRef) -> None:
+def clear_stale(
+    graph: DependencyGraph,
+    slot_ref: SlotRef,
+    usage_id: Optional[str] = None,
+) -> None:
     st = graph.statuses.get(slot_ref.key())
     if st is not None:
-        st.stale = False
-        st.stale_reason = ""
+        if usage_id is not None and st.stale_usage_ids:
+            st.stale_usage_ids.discard(usage_id)
+            if not st.stale_usage_ids:
+                st.stale = False
+                st.stale_reason = ""
+        else:
+            st.stale = False
+            st.stale_reason = ""
+            st.stale_usage_ids.clear()
 
 
 def add_downstream_requirement(
@@ -180,6 +199,7 @@ def _graph_to_serializable(graph: DependencyGraph) -> dict[str, Any]:
             "stale": st.stale,
             "stale_reason": st.stale_reason,
             "downstream_requirements": st.downstream_requirements,
+            "stale_usage_ids": list(getattr(st, "stale_usage_ids", set()) or set()),
         }
         for k, st in graph.statuses.items()
     }
@@ -215,6 +235,7 @@ def _graph_from_serializable(data: dict[str, Any]) -> DependencyGraph:
             stale=st_data.get("stale", False),
             stale_reason=st_data.get("stale_reason", ""),
             downstream_requirements=dict(st_data.get("downstream_requirements", {})),
+            stale_usage_ids=set(st_data.get("stale_usage_ids", [])),
         )
     graph.forward_adj.update({k: set(v) for k, v in data.get("forward_adj", {}).items()})
     graph.backward_adj.update({k: set(v) for k, v in data.get("backward_adj", {}).items()})
