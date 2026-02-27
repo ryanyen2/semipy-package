@@ -1,6 +1,7 @@
 """Portal persistence and dispatch module read/write."""
 from __future__ import annotations
 
+import ast
 import json
 import re
 from pathlib import Path
@@ -12,6 +13,32 @@ from semipy.history import Branch, Commit, Portal, Slot
 def _source_with_function_name(source: str, fn_name: str) -> str:
     """Rename the first function definition in source to fn_name so dispatch lookup works."""
     return re.sub(r"\bdef\s+\w+\s*\(", f"def {fn_name}(", source.strip(), count=1)
+
+
+def _dispatch_source_only(source: str) -> str:
+    """
+    Return only the first top-level function definition (and any leading imports).
+    Drops gist footers (e.g. result = fn(...); print(result)) so the dispatch module
+    does not reference the original function name after renaming.
+    """
+    raw = source.strip()
+    if not raw:
+        return raw
+    try:
+        tree = ast.parse(raw)
+    except SyntaxError:
+        return raw
+    lines = raw.splitlines()
+    end_offset = 0
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef):
+            end_offset = getattr(node, "end_lineno", node.lineno)
+            break
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            end_offset = getattr(node, "end_lineno", node.lineno)
+    if end_offset == 0:
+        return raw
+    return "\n".join(lines[:end_offset])
 
 
 def _portal_path(cache_dir: Path, session_id: str) -> Path:
@@ -185,7 +212,8 @@ def write_dispatch_module(cache_dir: Path, portal: Portal) -> tuple[Path, dict[s
         fn_name = function_name_for_commit(slot, active)
         lines.append(f"# slot: {slot.function_name_base} | commit: {active.commit_id[:8]} | {active.decision}")
         start_line = len(lines) + 1
-        fn_source = _source_with_function_name(active.generated_source, fn_name)
+        source_only = _dispatch_source_only(active.generated_source)
+        fn_source = _source_with_function_name(source_only, fn_name)
         fn_lines = fn_source.splitlines()
         lines.extend(fn_lines)
         lines.append("")

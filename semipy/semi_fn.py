@@ -387,9 +387,14 @@ def _semi_inline(
 
     if site_info is not None and site_info.template.variable_expressions:
         frame = inspect.currentframe()
-        if frame is None or frame.f_back is None:
+        if frame is None:
             return _semi_fallback(prompt, call_site, cache_dir, session_id, module_name, expected_type=expected_type, require_tools=require_tools, **kwargs)
-        caller_frame = frame.f_back
+        # User frame is 2 steps up: _semi_inline -> SemiProxy.__call__ -> user (same as call_site depth from _identify_call_site).
+        caller_frame = frame
+        for _ in range(2):
+            caller_frame = caller_frame.f_back if caller_frame else None
+        if caller_frame is None:
+            return _semi_fallback(prompt, call_site, cache_dir, session_id, module_name, expected_type=expected_type, require_tools=require_tools, **kwargs)
         caller_locals_snapshot = dict(caller_frame.f_locals)
         try:
             values = _eval_expressions(site_info.template.variable_expressions, caller_frame)
