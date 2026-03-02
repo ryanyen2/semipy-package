@@ -993,37 +993,40 @@ def _semi_fallback(
     if resolution.decision == Decision.REUSE and resolution.slot is not None and resolution.commit_id is not None:
         commit = resolution.slot.commits.get(resolution.commit_id)
         if commit is not None:
-            if usage.usage_id() not in resolution.slot.refs:
-                resolution.slot.refs[usage.usage_id()] = resolution.commit_id
-                save_portal(cache_dir, portal)
-                write_dispatch_module(cache_dir, portal)
-                _dispatch_globals_cache.pop(module_name, None)
-            fn_name = function_name_for_commit(resolution.slot, commit)
-            fn = load_function_from_dispatch(cache_dir, module_name, fn_name, _dispatch_globals_cache)
-            if fn is not None:
-                config = get_config()
-                dispatch_path = _dispatch_module_path(cache_dir, module_name)
-                path_str = str(dispatch_path)
-                code_line_range = get_dispatch_function_line_range(dispatch_path, fn_name)
-                if config.verbose:
-                    _entry = _get_entry_script_path_and_line(call_site)
-                    print_dag_reuse(
-                        call_site,
-                        resolution.commit_id,
-                        path_str,
-                        _relative_link_path(call_site.filename, call_site.lineno),
-                        _file_link_url(path_str),
-                        code_line_range=code_line_range if code_line_range != (0, 0) else None,
-                        entry_script_path=_entry[0] if _entry else None,
-                        entry_script_lineno=_entry[1] if _entry else None,
+            required_params = 1
+            actual_params = count_function_positional_params(commit.generated_source)
+            if actual_params >= required_params:
+                if usage.usage_id() not in resolution.slot.refs:
+                    resolution.slot.refs[usage.usage_id()] = resolution.commit_id
+                    save_portal(cache_dir, portal)
+                    write_dispatch_module(cache_dir, portal)
+                    _dispatch_globals_cache.pop(module_name, None)
+                fn_name = function_name_for_commit(resolution.slot, commit)
+                fn = load_function_from_dispatch(cache_dir, module_name, fn_name, _dispatch_globals_cache)
+                if fn is not None:
+                    config = get_config()
+                    dispatch_path = _dispatch_module_path(cache_dir, module_name)
+                    path_str = str(dispatch_path)
+                    code_line_range = get_dispatch_function_line_range(dispatch_path, fn_name)
+                    if config.verbose:
+                        _entry = _get_entry_script_path_and_line(call_site)
+                        print_dag_reuse(
+                            call_site,
+                            resolution.commit_id,
+                            path_str,
+                            _relative_link_path(call_site.filename, call_site.lineno),
+                            _file_link_url(path_str),
+                            code_line_range=code_line_range if code_line_range != (0, 0) else None,
+                            entry_script_path=_entry[0] if _entry else None,
+                            entry_script_lineno=_entry[1] if _entry else None,
+                        )
+                    _kwargs = {k: v for k, v in kwargs.items() if k != "usage_hint"}
+                    return _call_generated_fn(
+                        fn, call_site, path_str, code_line_range, prompt,
+                        *(prompt,),
+                        usage_hint="",
+                        **_kwargs
                     )
-                _kwargs = {k: v for k, v in kwargs.items() if k != "usage_hint"}
-                return _call_generated_fn(
-                    fn, call_site, path_str, code_line_range, prompt,
-                    *(prompt,),
-                    usage_hint="",
-                    **_kwargs
-                )
 
     spec = GenerationSpec(
         prompt=prompt,
@@ -1031,7 +1034,7 @@ def _semi_fallback(
         template=None,
         context=None,
         expected_type=expected_type if expected_type is not None else type(None),
-        sample_input=None,
+        sample_input={"args": (prompt,), "kwargs": {}},
         constant_values=None,
         variable_values=None,
         require_external_tools=require_tools,

@@ -195,6 +195,12 @@ class SemiAgent:
                 f"- The function will be called with exactly {n} positional arguments (in order). "
                 "The first argument is the value that changes per invocation; the rest are fixed context for this call."
             )
+        elif spec.template is None and not spec.method_name:
+            parts.append(
+                "- The function will be called with exactly one positional argument: the full prompt string "
+                "(e.g. 'Year of 2020-01-22'). Implement a function that accepts this single string parameter and "
+                "returns the requested value. Do not use zero arguments."
+            )
         context_block = self._describe_context(spec)
         if context_block:
             parts.append("")
