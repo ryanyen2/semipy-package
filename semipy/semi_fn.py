@@ -50,6 +50,10 @@ from semipy.reactivity import (
     extract_flow,
     profile_output,
 )
+from semipy.agents.source_context import (
+    extract_related_source_segments,
+    get_names_used_at_line,
+)
 from semipy.agents.validator import count_function_positional_params
 from semipy.resolver import resolve
 from semipy.library import load_library
@@ -1028,6 +1032,34 @@ def _semi_fallback(
                         **_kwargs
                     )
 
+    caller_locals_snapshot: Optional[dict[str, Any]] = None
+    user_source_code: Optional[str] = None
+    related_source_segments: Optional[list[str]] = None
+    frame = inspect.currentframe()
+    for _ in range(3):
+        frame = frame.f_back if frame else None
+    if frame is not None:
+        caller_locals_snapshot = dict(frame.f_locals)
+    if call_site.filename and call_site.filename != "<unknown>":
+        try:
+            user_source_code = Path(call_site.filename).read_text(encoding="utf-8", errors="replace")
+            related_source_segments = extract_related_source_segments(
+                user_source_code, call_site.lineno
+            )
+            if frame is not None:
+                names_used = get_names_used_at_line(user_source_code, call_site.lineno)
+                for name in names_used:
+                    if name in (caller_locals_snapshot or {}):
+                        continue
+                    if name in frame.f_globals:
+                        val = frame.f_globals[name]
+                        if type(val).__name__ != "module":
+                            if caller_locals_snapshot is None:
+                                caller_locals_snapshot = {}
+                            caller_locals_snapshot[name] = val
+        except Exception:
+            pass
+
     spec = GenerationSpec(
         prompt=prompt,
         call_site=call_site,
@@ -1039,6 +1071,10 @@ def _semi_fallback(
         variable_values=None,
         require_external_tools=require_tools,
         decision=Decision.GENERATE,
+        caller_locals=caller_locals_snapshot,
+        source_file_imports=_extract_source_file_imports(call_site.filename),
+        user_source_code=user_source_code,
+        related_source_segments=related_source_segments,
     )
     entry = SemiAgent().generate(spec)
     function_name_base = _readable_function_name(call_site)

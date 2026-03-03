@@ -1,8 +1,8 @@
 """
 LLM generation via pydantic_ai Agent + OpenAI.
 
-Agent has tools: profile_data_and_flow, read_upstream_context, read_file_context,
-build_and_run_gist, validate_output. Streaming and reasoning via run_stream_events.
+Agent has tools: get_runtime_data_context, profile_data_and_flow, read_upstream_context,
+read_file_context, build_and_run_gist, validate_output. Streaming and reasoning via run_stream_events.
 """
 from __future__ import annotations
 
@@ -12,11 +12,13 @@ from typing import Any, Optional
 from pydantic_ai import Agent, RunContext
 
 from semipy.agents.config import get_config
+from semipy.agents.profiler import profile_runtime_context
 from semipy.models import (
     FileContextResult,
     GistRunResult,
     OutputValidationResult,
     ProfileDataResult,
+    RuntimeDataContextResult,
     SemiAgentDeps,
     UpstreamContextResult,
 )
@@ -98,6 +100,26 @@ def _create_agent() -> Agent[SemiAgentDeps]:
             summary=raw.get("summary", ""),
             insights_placeholder=raw.get("insights_placeholder"),
         )
+
+    @agent.tool
+    async def get_runtime_data_context(ctx: RunContext[SemiAgentDeps]) -> RuntimeDataContextResult:
+        """Get a summary of variables in scope (caller_locals and variable_values): structure, schemas, and value distributions. Call this when you need to understand what data is available (DataFrames, lists, dicts, paths, URLs, etc.) so your implementation works for all values, not just a single sample."""
+        try:
+            deps = ctx.deps
+            spec = getattr(deps, "spec", None)
+            if not spec:
+                return RuntimeDataContextResult(success=False, error="No spec in deps.")
+            locals_dict = getattr(spec, "caller_locals", None) or {}
+            variable_values = getattr(spec, "variable_values", None)
+            summary = profile_runtime_context(
+                locals_dict,
+                variable_values=variable_values,
+                total_budget=12000,
+                collection_budget=7000,
+            )
+            return RuntimeDataContextResult(success=True, summary=summary)
+        except Exception as e:
+            return RuntimeDataContextResult(success=False, error=str(e))
 
     @agent.tool
     async def read_upstream_context(ctx: RunContext[SemiAgentDeps]) -> UpstreamContextResult:
@@ -274,22 +296,24 @@ Rules:
 - Wrap the function in a ```python code block.
 - The function must be pure Python unless the request clearly suggests external interaction (e.g. fetching data). Use standard library or requests; do not rely on built-in domain-specific tools unless the prompt explicitly asks for them.
 - Parameters: all values described in the prompt are passed as positional arguments. The function MUST accept and use all positional arguments. Do NOT hardcode any constant values from the prompt. The first argument is typically the value that changes per invocation; the rest are fixed context for this call.
+- Your function is invoked repeatedly (once per row, per element, or per item). The first argument is one value from a column or collection. Implement so the function works for every possible value in that column/collection, not only the single example you may see in get_runtime_data_context. Do not hardcode the sample value (e.g. one date or one country name).
 - Return type: match exactly what the user needs (bool for conditions, str for text, int/float for numbers, or the described type). Prefer a typed signature when the return type is known (e.g. def f(row, c3) -> bool:). The pipeline preserves type annotations.
 - Handle edge cases: None, missing keys, empty data. Prefer safe defaults over raising.
-- Use the data context (variable_values, sample_input) when provided; use actual column names and values from the context. Never fabricate data values.
+- Use the data context (variable_values, sample_input, get_runtime_data_context) when provided; use actual column names and value distributions from the context. Never fabricate data values. Use the full value_distribution / distinct_sample to support all values, not just one.
 - When a usage context is provided (e.g. "passed as argument to X"), return the type that X expects.
 - Do not use emoji or decorative output. No docstrings or comments in the code, just code.
 - When the user provides a previous implementation (adapt or inspiration), preserve its structure where possible and change only what is needed.
 - When "Available library primitives" are shown in the prompt, you may reuse or adapt them to satisfy the request.
 
 Tool usage:
-1. If the spec contains data variables or sample data, you may call profile_data_and_flow(code, working_dir?) first to get data profile and flow.
-2. If adapting from a parent, call read_upstream_context() to read parent sources.
-3. If library primitives are provided, you may call list_library_primitives() to see them again.
-4. Generate the function, then call build_and_run_gist(generated_function_source) with the raw function source only: the exact "def name(...):" and body as a string. No markdown, no ```python wrapper, no surrounding text.
-5. If the gist fails (success=False), read stderr and fix the function; call build_and_run_gist again with the corrected source.
-6. When the gist succeeds, call validate_output(result_repr, expected_type_name) with the result_repr from the gist tool result (and expected_type_name from the user request, e.g. "bool", "list", "str").
-7. Output the final function in a ```python code block."""
+1. When the prompt refers to data (e.g. a column, a table, a file, a URL), call get_runtime_data_context() first. Tables/collections are listed first with full column value distributions; any scalar is labeled as one sample. Your implementation must work for all values in the data (all dates, all countries, etc.), not just that sample. Use this for any domain (tables, PDFs, URLs, dicts, etc.).
+2. If the spec contains data variables or sample data, you may call profile_data_and_flow(code, working_dir?) to get data profile and flow.
+3. If adapting from a parent, call read_upstream_context() to read parent sources.
+4. If library primitives are provided, you may call list_library_primitives() to see them again.
+5. Generate the function, then call build_and_run_gist(generated_function_source) with the raw function source only: the exact "def name(...):" and body as a string. No markdown, no ```python wrapper, no surrounding text.
+6. If the gist fails (success=False), read stderr and fix the function; call build_and_run_gist again with the corrected source.
+7. When the gist succeeds, call validate_output(result_repr, expected_type_name) with the result_repr from the gist tool result (and expected_type_name from the user request, e.g. "bool", "list", "str").
+8. Output the final function in a ```python code block."""
 
 
 _semi_agent: Optional[Agent[SemiAgentDeps]] = None

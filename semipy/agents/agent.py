@@ -201,6 +201,21 @@ class SemiAgent:
                 "(e.g. 'Year of 2020-01-22'). Implement a function that accepts this single string parameter and "
                 "returns the requested value. Do not use zero arguments."
             )
+            parts.append(
+                "- The function is invoked many times (e.g. once per row or per element). "
+                "The argument is one value from a column or collection. Implement so it works for every value in the data, not only the single sample you may see. Do not hardcode the sample."
+            )
+        if getattr(spec, "related_source_segments", None):
+            parts.append("")
+            parts.append("Relevant code (enclosing statement and definitions used):")
+            for seg in spec.related_source_segments:
+                if seg.strip():
+                    parts.append("```")
+                    parts.append(seg.strip())
+                    parts.append("```")
+        if spec.caller_locals and spec.template is None:
+            parts.append("")
+            parts.append("Variables are in scope; call get_runtime_data_context() to see their structure and value distributions.")
         context_block = self._describe_context(spec)
         if context_block:
             parts.append("")

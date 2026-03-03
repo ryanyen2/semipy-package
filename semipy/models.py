@@ -52,6 +52,14 @@ class UpstreamContextResult(BaseModel):
     error: Optional[str] = None
 
 
+class RuntimeDataContextResult(BaseModel):
+    """Result of get_runtime_data_context tool (variables in scope, structure and value distributions)."""
+
+    success: bool
+    summary: str = ""
+    error: Optional[str] = None
+
+
 class GistRunResult(BaseModel):
     """Result of build_and_run_gist tool."""
 

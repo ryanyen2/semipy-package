@@ -186,6 +186,7 @@ class GenerationSpec:
     downstream_requirements: Optional[dict[str, Any]] = None  # requirements from downstream (e.g. required_columns)
     user_source_code: Optional[str] = None  # full source of user's file (for gist building)
     enclosing_function_source: Optional[str] = None  # source of the @semiformal function
+    related_source_segments: Optional[list[str]] = None  # AST-extracted enclosing + definitions (standalone semi)
     library_context: Optional[str] = None  # text block of relevant library primitives for the agent
 
 
