@@ -194,11 +194,12 @@ def _extract_formal_constraint_lines(
             continue
         if not stripped:
             break
-        formal.append(stripped.rstrip())
-        i += 1
-        # keep collecting adjacent asserts/assignments; stop once a non-code boundary appears
+        # Control-flow lines are outside the slot output contract; do not treat them
+        # as "hard constraint" lines to be preserved inside the generated slot body.
         if stripped.startswith(("return ", "raise ", "break ", "continue ")):
             break
+        formal.append(stripped.rstrip())
+        i += 1
     return formal
 
 
@@ -207,6 +208,7 @@ def _infer_output_names_for_statement_block(
     block_end_rel_lineno: int,
     names_defined_before: set[str],
     max_statements: int = 4,
+    exclude_names: set[str] | None = None,
 ) -> list[str]:
     after: list[ast.stmt] = []
     for stmt in fn_def.body:
@@ -217,11 +219,17 @@ def _infer_output_names_for_statement_block(
         return []
     region = after[:max_statements]
     loaded: set[str] = set()
+    assigned: set[str] = set()
     for stmt in region:
         loaded |= _loaded_names(stmt)
-    out = sorted(loaded - names_defined_before)
+        assigned |= _assigned_names(stmt)
+    # Names assigned inside the region are not outputs of the #> block; they
+    # are produced by subsequent formal code statements.
+    out = sorted(loaded - names_defined_before - assigned)
     # Heuristic: avoid very obvious non-locals
     out = [n for n in out if n not in ("True", "False", "None")]
+    if exclude_names:
+        out = [n for n in out if n not in exclude_names]
     return out
 
 
@@ -292,6 +300,16 @@ def scan_informal_specs(
     fn_def = _function_def_from_source(dedented)
     if fn_def is None:
         return []
+
+    exclude_names: set[str] = set()
+    if globals_ns:
+        exclude_names |= set(globals_ns.keys())
+    # Builtins shouldn't be treated as "outputs" of a #> block.
+    try:
+        import builtins as _builtins
+        exclude_names |= set(dir(_builtins))
+    except Exception:
+        pass
 
     # Map of semi call lineno (abs) -> SlotSpec
     semi_slots: list[tuple[int, SlotSpec]] = []
@@ -381,17 +399,21 @@ def scan_informal_specs(
             fn_def,
             block_end_rel,
             names_defined_before=bound_before,
+            exclude_names=exclude_names,
         )
 
         formal_constraints = _extract_formal_constraint_lines(source_lines, indent, block_end_idx)
 
         loaded_in_region: set[str] = set()
+        assigned_in_region: set[str] = set()
         for stmt in fn_def.body:
-            if getattr(stmt, "lineno", 0) and getattr(stmt, "lineno", 0) > block_end_rel:
-                if getattr(stmt, "lineno", 0) > block_end_rel + 20:
+            stmt_lineno = getattr(stmt, "lineno", 0) or 0
+            if stmt_lineno > block_end_rel:
+                if stmt_lineno > block_end_rel + 20:
                     break
                 loaded_in_region |= _loaded_names(stmt)
-        free_var_set = (bound_before | loaded_in_region) - set(output_names)
+                assigned_in_region |= _assigned_names(stmt)
+        free_var_set = (bound_before | loaded_in_region) - assigned_in_region - set(output_names)
         free_vars = _ordered_vars_from_fn(fn_def, free_var_set)
 
         control_context = _control_context_for_line(fn_def, block_end_rel, func_qualname)
@@ -484,6 +506,8 @@ def lower_to_scaffold(
     if not tree.body or not isinstance(tree.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)):
         return dedented
     fn_def = tree.body[0]
+    # Avoid recursively re-applying @semiformal during scaffold compilation.
+    fn_def.decorator_list = []
 
     # If no open regions (#> blocks and semi() calls) were found, we must still route
     # execution through the slot resolver by wrapping the whole function body.

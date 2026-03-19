@@ -36,7 +36,8 @@ def _create_openai_model(config: Any) -> Any:
     model = OpenAIResponsesModel(config.openai_model)
     settings = OpenAIResponsesModelSettings(
         openai_reasoning_effort='low',
-        openai_reasoning_summary='auto',
+        openai_text_verbosity='low',
+        openai_reasoning_summary='concise',
     )
     return model, settings
 
@@ -65,9 +66,15 @@ def _create_openrouter_model(config: Any) -> Any:
 
 
 def _create_agent() -> Agent[SemiAgentDeps]:
-    """Lazy creation of pydantic_ai Agent with OpenAI and tools."""
+    """Lazy creation of pydantic_ai Agent with OpenRouter/OpenAI and tools."""
     config = get_config()
-    model, settings = _create_openai_model(config)
+    # Prefer OpenAI when configured; fall back to OpenRouter otherwise.
+    # This keeps backend selection predictable when both keys are present in `.env`.
+    use_openai = bool(config.openai_api_key) or bool(os.getenv("OPENAI_API_KEY"))
+    if use_openai:
+        model, settings = _create_openai_model(config)
+    else:
+        model, settings = _create_openrouter_model(config)
     agent = Agent[SemiAgentDeps, str](
         model,
         model_settings=settings,
@@ -83,7 +90,7 @@ def _create_agent() -> Agent[SemiAgentDeps]:
     ) -> ProfileDataResult:
         """Run FIRST when the user provides data analysis code. Returns data_profile, data_flow, summary. Set working_dir if code uses relative paths."""
         try:
-            from semipy.agents.refs.example_glm import profile_data_and_flow_impl
+            from semipy.agents.refs.example_glm import profile_data_and_flow_impl  # type: ignore[reportMissingImports]
         except ImportError:
             return ProfileDataResult(
                 success=False,
@@ -308,6 +315,7 @@ Rules:
 - Use the data context (variable_values, sample_input, get_runtime_data_context) when provided; use actual column names and value distributions from the context. Never fabricate data values. Use the full value_distribution / distinct_sample to support all values, not just one.
 - When a usage context is provided (e.g. "passed as argument to X"), return the type that X expects.
 - Do not use emoji or decorative output. No docstrings or comments in the code, just code.
+- Do not call `print()` or include any sample/test invocation code inside the generated function. Return only the requested value.
 - When the user provides a previous implementation (adapt or inspiration), preserve its structure where possible and change only what is needed.
 - When "Available library primitives" are shown in the prompt, you may reuse or adapt them to satisfy the request.
 

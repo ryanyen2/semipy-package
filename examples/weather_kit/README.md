@@ -1,25 +1,26 @@
 # Weather kit: semi for inference, formal for structure
 
-Weather analysis and visualization. **Formal** code handles loading, plotting structure, and data flow. **Semi** handles inference: which column is date/time, how to map fetched weather to table columns, how to preprocess a column. No hardcoded patterns or long conditionals; behavior is inferred from data and context at runtime.
+Weather analysis and visualization. **Formal** code handles loading, plotting layout, and data flow. **Semi** handles inference via `semi("natural language ...", expected_type=...)` inside `@semiformal` where the schema or API mapping is underspecified. Named `semi.foo(...)` is not used; the lowering pipeline only recognizes direct `semi(...)` calls.
 
 ## Layer
 
-- **`open_dataset(path)`** – Load CSV (tabular) or netCDF (grid). Returns `WeatherDataset`. Formal.
-- **`WeatherDataset`** – `.is_grid()` / `.is_table()`, `.variable_names()`, `.get_2d()`, `.table()`, etc. Formal.
+- **`open_dataset(path)`** – Load CSV (tabular) or netCDF (grid). Returns `WeatherDataset`. Formal loader; netCDF coordinate names may use standalone `semi(...)` once when opening the file.
+- **`WeatherDataset`** – `.is_grid()` / `.is_table()`, `.variable_names()`, `.get_2d()`, `.table()`, etc. Grid paths use fixed keys `latitude` / `longitude` in `coord_info` after load.
 - **`plot_map(ds, variable=None, title=None)`** – Formal: matplotlib + `get_2d()`.
-- **`plot_timeseries(ds, variable, date_column=None)`** – When `date_column` is None, uses `semi.pick_date_column(columns)` to infer it.
-- **`latest_append(user_data, city)`** – Uses `semi.fetch_weather(city)` and `semi.map_fetched_weather_to_row(latest, columns)` to append one row; no manual mapping or weathercode tables.
-- **`infer_date_column(ds)`** – Uses `semi.pick_date_column(columns)`.
-- **`preprocess_column(ds, column)`** – Uses `semi.preprocess_series(series, column)`; type and semantics inferred from data.
+- **`plot_timeseries(ds, variable, **extra)`** – `@semiformal`: formal figure and plot; `semi(...)` picks the date column, tick `Locator`, and optional axis tweaks from `extra`.
+- **`latest_append(user_data, city)`** – `@semiformal`: `semi(...)` asks for an HTTP fetch to a public weather API (agent may emit `requests` / `urllib`); formal `pd.concat` appends the row. **`map_fetched_weather_to_row`** (module-level) uses standalone `semi(...)` to align API dicts to table columns.
+- **`preprocess_column(ds, column)`** – `@semiformal`: `semi(...)` returns a coerced Series/list-like from a natural-language cleaning spec.
 
-Semi calls used: `semi.pick_date_column`, `semi.fetch_weather`, `semi.map_fetched_weather_to_row`, `semi.preprocess_series`. The program stays readable; inference is delegated to semi.
+## Agentic pipeline
+
+Fetch and scraping behavior is **not** a separate named tool on `semi`; it is expressed in the **prompt string** passed to `semi(...)` so the same generator tools (`build_and_run_gist`, etc.) apply. Use `uv run python examples/use_weather_kit.py` with `OPENROUTER_API_KEY` (or your configured provider) when generation runs.
 
 ## Run
 
 From repo root:
 
 ```bash
-uv run --extra example python examples/use_weather_kit.py
+uv run python examples/use_weather_kit.py
 ```
 
-Data: grid netCDF and `seattle-weather.csv`. Open-Meteo is used for fetch (no API key).
+Data: grid netCDF (optional) and `seattle-weather.csv`. `latest_append` prompts the model to use a public HTTP weather API (e.g. Open-Meteo-style endpoints).

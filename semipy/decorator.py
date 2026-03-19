@@ -80,7 +80,9 @@ def _decorated_fn_source(
 def _wrap_function(fn: Callable[..., Any], description: Optional[str] = None, filename: Optional[str] = None) -> Callable[..., Any]:
     source, resolved_filename, first_lineno, func_qualname, type_hints = _decorated_fn_source(fn)
     resolved_filename = filename or resolved_filename
-    cache_dir = _find_cache_dir(resolved_filename)
+    # Important: cache_dir may be configured after module import via `semipy.configure(...)`.
+    # Slot proxies therefore read the effective cache_dir dynamically at call time.
+    cache_dir: Optional[Path] = None
 
     slot_specs: list[SlotSpec] = scan_informal_specs(
         source,

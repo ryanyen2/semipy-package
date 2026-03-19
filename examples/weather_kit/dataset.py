@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Optional
-from semipy import semi
+import math
 
 import pandas as pd
 
@@ -56,8 +56,8 @@ class WeatherDataset:
         if not self.is_grid():
             raise ValueError("get_2d is only for grid datasets")
         info = self._coord_info
-        lon = info.get(semi(f"longitude from {info.keys()}", expected_type=str))
-        lat = info.get(semi(f"latitude from {info.keys()}", expected_type=str))
+        lon = info.get("longitude")
+        lat = info.get("latitude")
         values = info.get("values_2d")
         vname = variable or (self._variable_names[0] if self._variable_names else None)
         if vname and vname in info.get("variables_2d", {}):
@@ -72,13 +72,15 @@ class WeatherDataset:
             return self
         import numpy as np
         info = self._coord_info
-        lon = info.get(semi(f"longitude from {info.keys()}", expected_type=str))
-        lat = info.get(semi(f"latitude from {info.keys()}", expected_type=str))
+        lon = info.get("longitude")
+        lat = info.get("latitude")
+        if lon is None or lat is None:
+            return self
         ny, nx = lon.shape[0], lon.shape[1]
         if ny * nx <= max_points:
             return self
-        
-        stride = max(1, int((ny * nx / max_points) ** semi(f"sqrt of {ny * nx / max_points}", expected_type=float)))
+
+        stride = max(1, int(math.ceil(math.sqrt((ny * nx) / max_points))))
         sy, sx = slice(None, None, stride), slice(None, None, stride)
         new_info = {
             "latitude": lat[sy, sx],
@@ -144,10 +146,17 @@ def _load_netcdf(path: Path) -> WeatherDataset:
         raise ImportError(
             "Grid (netCDF) support requires xarray. Install with: pip install xarray netcdf4"
         )
+    from semipy import semi
+
     ds = xr.open_dataset(path)
-    # Find lat/lon with semi (value-style: return key name)
-    lat_var = semi(f"latitude from {ds.coords.keys()}", expected_type=str)
-    lon_var = semi(f"longitude from {ds.coords.keys()}", expected_type=str)
+    lat_var = semi(
+        f"Coordinate name for latitude among {list(ds.coords.keys())!r} in this netCDF dataset.",
+        expected_type=str,
+    )
+    lon_var = semi(
+        f"Coordinate name for longitude among {list(ds.coords.keys())!r} in this netCDF dataset.",
+        expected_type=str,
+    )
 
     variables_2d = {}
     var_names = []

@@ -189,6 +189,10 @@ class SemiAgent:
             if exp is callable:
                 return "callable"
             if isinstance(exp, type):
+                # Fully qualify user-defined/domain types so the model can import the exact
+                # class identity (important for isinstance-based validation).
+                if exp.__module__ not in ("builtins", "typing"):
+                    return f"{exp.__module__}.{exp.__name__}"
                 return exp.__name__
             return repr(exp)
 
@@ -200,6 +204,15 @@ class SemiAgent:
             "Constraints:",
             f"- Return type must be: {_expected_str()}",
         ]
+
+        # For domain objects, we must construct the exact class identity expected by
+        # isinstance(result, expected_type) during validation.
+        if isinstance(spec.expected_type, type) and spec.expected_type.__module__ not in ("builtins", "typing"):
+            exp = spec.expected_type
+            parts.append(
+                f"- Expected domain object type is {exp.__module__}.{exp.__name__}. "
+                "Import that exact class in the generated function and return an instance of it."
+            )
 
         if spec.decision == Decision.ADAPT and spec.parent_sources:
             parts.append("")

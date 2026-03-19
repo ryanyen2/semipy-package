@@ -1,6 +1,10 @@
-"""Weather kit: formal first, semiformal only where schema/data are unknown.
+"""Weather kit: formal first, semiformal only where schema/API mapping is unknown.
 
-  uv run --extra example python examples/use_weather_kit.py
+  uv run python examples/use_weather_kit.py
+
+plot_timeseries and latest_append use @semiformal with semi(\"...\") prompts (not
+semi.fetch_weather). HTTP fetch is specified inside the prompt so the agent can
+generate requests/urllib as needed.
 """
 
 from pathlib import Path

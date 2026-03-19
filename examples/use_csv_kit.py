@@ -2,10 +2,11 @@
 
   uv run python examples/use_csv_kit.py
 
-Loads covid_19_clean_complete.csv. User expresses intent in natural terms:
-semantic select (date and case counts, geography), semantic where (region,
-high burden), semantic sort, assign_semantic for derived columns, and
-semantic merge. The system resolves these via generated or cached implementations.
+Loads covid_19_clean_complete.csv. Mixes formal pipeline code (filters, merges)
+with @semiformal helpers inside csv_kit and a hybrid CovidReportBuilder: formal
+thresholds and loops plus #> blocks and inline semi() for prose and captions
+(same spirit as use_visualization_builder: most code formal, open regions where
+the user states beliefs or underspecified intent).
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ _examples = Path(__file__).resolve().parent
 if str(_examples) not in sys.path:
     sys.path.insert(0, str(_examples))
 
-from csv_kit import SemiTable, open_table
+from csv_kit import CovidReportBuilder, SemiTable, open_table
 
 
 def main() -> None:
@@ -94,6 +95,18 @@ def main() -> None:
         print(combined.show(n=8))
     except Exception:
         print("Semantic merge skipped.")
+    print()
+
+    print("Hybrid report builder (#> opening + semi() captions in a loop):")
+    builder = CovidReportBuilder(tbl)
+    try:
+        opening = builder.narrative_opening(confirmed_floor=10_000)
+        print("Opening:", opening)
+        caps = builder.column_captions(max_cols=5)
+        for k, v in caps.items():
+            print(f"  {k}: {v}")
+    except Exception as e:
+        print("CovidReportBuilder skipped:", e)
     print("Done.")
 
 

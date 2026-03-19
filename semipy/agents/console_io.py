@@ -16,6 +16,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
+from rich.markdown import Markdown
 
 from semipy.types import (
     CacheEntry,
@@ -480,7 +481,7 @@ def print_reasoning_block(content: str) -> None:
     if not content.strip():
         return
     console = get_console()
-    console.print(Panel(content.strip(), title="Reasoning", border_style="dim"))
+    console.print(Panel(Markdown(content.strip()), title="Reasoning", border_style="dim"))
 
 
 def print_response_block(content: str) -> None:
@@ -488,7 +489,7 @@ def print_response_block(content: str) -> None:
     if not content.strip():
         return
     console = get_console()
-    console.print(Panel(content.strip(), title="Response", border_style="blue"))
+    console.print(Panel(Markdown(content.strip()), title="Response", border_style="blue"))
 
 
 def print_tool_call(tool_name: str, args_preview: str = "") -> None:

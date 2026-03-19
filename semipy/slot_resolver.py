@@ -411,19 +411,24 @@ def execute_slot(
     return result
 
 
-def _make_slot_proxy(slot_spec: SlotSpec, source_file: str, cache_dir: Path) -> Callable[..., Any]:
+def _make_slot_proxy(slot_spec: SlotSpec, source_file: str, cache_dir: Path | None) -> Callable[..., Any]:
     """
     Build a callable used by the scaffold:
     - for STATEMENT_BLOCK: return scalar when output_names has 1 element; otherwise return dict
     - for EXPRESSION/FUNCTION_BODY: return scalar
     """
 
+    cache_dir_path: Path | None = cache_dir
+
     def __slot_proxy__(**kwargs: Any) -> Any:
+        # Cache dir is read dynamically from config so users can call
+        # `semipy.configure(cache_dir=...)` after importing this module.
+        effective_cache_dir = cache_dir_path if cache_dir_path is not None else Path(get_config().cache_dir)
         result = execute_slot(
             slot_spec=slot_spec,
             runtime_values=kwargs,
             source_file=source_file,
-            cache_dir=cache_dir,
+            cache_dir=effective_cache_dir,
         )
         if slot_spec.expected_category == SlotCategory.STATEMENT_BLOCK:
             if len(slot_spec.output_names) == 1 and isinstance(result, dict):

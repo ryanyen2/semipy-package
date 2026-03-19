@@ -43,13 +43,17 @@ def _filter_semantic(rows: list[dict[str, Any]], spec: str) -> list[dict[str, An
     return [row for row in rows if semi(f"row {row} matches semantic condition {spec}", expected_type=bool)]
 
 
-@semiformal("sort key for semantic order")
+@semiformal
 def _sort_key_semantic(row: dict[str, Any], meaning: str) -> Any:
     """Compute sort key when order is semantic (e.g. recency, importance), not just column value. Used only for sort_semantic()."""
-    return semi.sort_key(row, by=meaning)
+    return semi(
+        f"Comparable sort key for table row {row!r} when user ordering intent is: {meaning!r}. "
+        f"Return one Python value suitable for ascending sort (smaller means earlier in order).",
+        expected_type=Any,
+    )
 
 
-@semiformal("merge two tables by semantic row matching")
+@semiformal
 def _merge_semantic_rows(
     left_rows: list[dict[str, Any]],
     right_rows: list[dict[str, Any]],
@@ -57,7 +61,13 @@ def _merge_semantic_rows(
     right_cols: list[str],
     how: str,
 ) -> list[dict[str, Any]]:
-    return semi.merge_tables(left_rows, right_rows, left_columns=left_cols, right_columns=right_cols, how=how)
+    return semi(
+        f"Merge two tabular row lists semantically. Left columns {left_cols!r}, right columns {right_cols!r}, "
+        f"intent {how!r}. Left row count {len(left_rows)}, right {len(right_rows)}. "
+        f"Return a list of dicts joining rows that refer to the same entity (e.g. same geography and date); "
+        f"union of keys from both sides per matched row.",
+        expected_type=list,
+    )
 
 
 @semiformal("apply extra parameters to table operation result")
@@ -312,3 +322,33 @@ def open_table(path: Union[str, Path]) -> SemiTable:
         raise FileNotFoundError(str(p))
     df = pd.read_csv(p)
     return SemiTable(df, source_path=p)
+
+
+class CovidReportBuilder:
+    """
+    Hybrid @semiformal usage: formal filtering and iteration, open regions for prose and labels.
+    Mirrors patterns where most code is deterministic and only some statements are underspecified.
+    """
+
+    def __init__(self, tbl: SemiTable) -> None:
+        self._tbl = tbl
+
+    @semiformal
+    def narrative_opening(self, confirmed_floor: int) -> str:
+        subset = self._tbl.where(Confirmed__gte=confirmed_floor)
+        n = len(subset.to_dataframe())
+        #> Write one opening sentence for a briefing that filtered rows to at least `confirmed_floor` confirmed cases and currently has `n` rows after that filter. Keep wording generic (public health table), not tied to one country.
+
+        return opening
+
+    @semiformal
+    def column_captions(self, max_cols: int) -> dict[str, str]:
+        names = self._tbl.columns[: max_cols]
+        out: dict[str, str] = {}
+        for name in names:
+            caption: str = semi(
+                f"Short human-facing caption for a table column named {name!r} in a disease surveillance dataset.",
+                expected_type=str,
+            )
+            out[name] = caption
+        return out
