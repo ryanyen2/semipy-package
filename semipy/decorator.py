@@ -1,18 +1,18 @@
 """
-@semiformal decorator: source analysis and context injection.
-
-Wraps functions (or methods on classes) to set SemiformalContext for the duration
-of the call. Extracts semi() and semi.name() call sites from source via AST.
+@semiformal decorator: scan + lower open regions at decoration time.
 """
 from __future__ import annotations
 
 import functools
 import inspect
 from contextvars import ContextVar
+from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
-from semipy.template import extract_named_call_templates, extract_semi_templates
-from semipy.types import SemiformalContext, SemiCallSiteInfo
+from semipy.lowering import lower_to_scaffold, scan_informal_specs
+from semipy.slot_resolver import _make_slot_proxy
+from semipy.types import SemiformalContext, SlotCategory, SlotSpec
+from semipy.agents.config import get_config
 
 _semiformal_context_var: ContextVar[Optional[SemiformalContext]] = ContextVar(
     "semiformal_context", default=None
@@ -24,91 +24,172 @@ def get_semiformal_context() -> Optional[SemiformalContext]:
     return _semiformal_context_var.get()
 
 
-def _wrap_function(
-    fn: Callable[..., Any],
-    description: Optional[str] = None,
-    filename: Optional[str] = None,
+def _compile_scaffold(
+    scaffold_src: str,
+    module_globals: dict[str, Any],
+    proxy_ns: dict[str, Callable[..., Any]],
 ) -> Callable[..., Any]:
+    local_ns: dict[str, Any] = {}
+    exec(compile(scaffold_src, "<semiformal_scaffold>", "exec"), {**module_globals, **proxy_ns}, local_ns)
+    # scaffold_src should define a single function; return the first callable in locals.
+    for v in local_ns.values():
+        if callable(v) and not isinstance(v, type):
+            return v
+    raise RuntimeError("Scaffold compilation did not produce a callable")
+
+
+def _find_cache_dir(filename: str) -> Path:
+    config = get_config()
+    # Cache directory is global for the repo; session identity is carried by store.py.
+    return Path(config.cache_dir)
+
+
+def _decorated_fn_source(
+    fn: Callable[..., Any],
+) -> tuple[str, str, int, str, dict[str, Any]]:
+    source = ""
+    first_lineno = 1
+    filename = "<unknown>"
     try:
         source = inspect.getsource(fn)
-        try:
-            _, first_lineno = inspect.getsourcelines(fn)
-            first_lineno = first_lineno or 1
-        except (OSError, TypeError):
-            first_lineno = 1
     except OSError:
         source = ""
+    try:
+        _lines, first_lineno = inspect.getsourcelines(fn)
+        first_lineno = first_lineno or 1
+    except Exception:
         first_lineno = 1
-    if filename is None:
-        try:
-            raw = inspect.getsourcefile(fn) or "<unknown>"
-            if raw and raw != "<unknown>":
-                import os
-                filename = os.path.abspath(raw)
-            else:
-                filename = raw
-        except (OSError, TypeError):
-            filename = "<unknown>"
+    try:
+        raw = inspect.getsourcefile(fn) or "<unknown>"
+        filename = str(Path(raw).resolve()) if raw != "<unknown>" else "<unknown>"
+    except Exception:
+        filename = "<unknown>"
+
     func_qualname = getattr(fn, "__qualname__", fn.__name__)
-    semi_sites = extract_semi_templates(
-        source, filename=filename, func_qualname=func_qualname, first_lineno=first_lineno
-    )
-    named_sites = extract_named_call_templates(
-        source, filename=filename, func_qualname=func_qualname, first_lineno=first_lineno
-    )
-    type_hints = {}
+
+    type_hints: dict[str, Any] = {}
     try:
         for name, ann in (inspect.getannotations(fn) or {}).items():
             if name != "return":
                 type_hints[name] = ann
     except Exception:
         pass
+    return source, filename, first_lineno, func_qualname, type_hints
 
-    context = SemiformalContext(
+
+def _wrap_function(fn: Callable[..., Any], description: Optional[str] = None, filename: Optional[str] = None) -> Callable[..., Any]:
+    source, resolved_filename, first_lineno, func_qualname, type_hints = _decorated_fn_source(fn)
+    resolved_filename = filename or resolved_filename
+    cache_dir = _find_cache_dir(resolved_filename)
+
+    slot_specs: list[SlotSpec] = scan_informal_specs(
+        source,
+        filename=resolved_filename,
+        func_qualname=func_qualname,
+        first_lineno=first_lineno,
+        type_hints=getattr(fn, "__annotations__", None) or type_hints,
+        globals_ns=getattr(fn, "__globals__", None) or {},
+    )
+    scaffold_src = lower_to_scaffold(source, slot_specs, slot_index_offset=0)
+
+    ctx = SemiformalContext(
         func_name=func_qualname,
         source_code=source,
         type_hints=type_hints,
-        semi_call_sites=semi_sites,
-        named_call_sites=named_sites,
         first_lineno=first_lineno,
+        slot_specs=slot_specs,
+        scaffold_source=scaffold_src,
     )
+
+    try:
+        proxy_ns = {
+            f"__slot_{i}__": _make_slot_proxy(spec, resolved_filename, cache_dir)
+            for i, spec in enumerate(slot_specs)
+        }
+        scaffold_fn = _compile_scaffold(scaffold_src, fn.__globals__, proxy_ns)
+    except Exception:
+        # Structural error in scaffolding: fall back to executing the whole function as one slot.
+        # This is the only structural fallback allowed by the plan.
+        import typing
+
+        sig = inspect.signature(fn)
+        param_names = list(sig.parameters.keys())
+        expected_type = typing.get_type_hints(fn).get("return", type(None))
+        spec_text = source
+        spec_hash = __import__("hashlib").sha256(spec_text.encode()).hexdigest()[:16]
+        slot_id = __import__("hashlib").sha256(f"{resolved_filename}:{func_qualname}:{first_lineno}:{spec_text}".encode()).hexdigest()[:16]
+
+        whole_slot = SlotSpec(
+            slot_id=slot_id,
+            source_span=(resolved_filename, first_lineno, first_lineno + len(source.splitlines()) - 1),
+            spec_text=spec_text,
+            spec_hash=spec_hash,
+            free_variables=param_names,
+            control_context="method" if "." in func_qualname else "top_level",
+            expected_category=SlotCategory.FUNCTION_BODY,
+            expected_type=expected_type,
+            output_names=[],
+            formal_constraints=[],
+            usage_hints=[],
+            enclosing_function_source=source,
+            enclosing_function_qualname=func_qualname,
+        )
+
+        proxy_fn = _make_slot_proxy(whole_slot, resolved_filename, cache_dir)
+
+        @functools.wraps(fn)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            token = _semiformal_context_var.set(ctx)
+            try:
+                bound = sig.bind_partial(*args, **kwargs)
+                # Ensure defaults don't disappear from the runtime_values dict.
+                bound.apply_defaults()
+                runtime_values = {k: v for k, v in bound.arguments.items()}
+                return proxy_fn(**runtime_values)
+            finally:
+                _semiformal_context_var.reset(token)
+
+        wrapper._semipy_context = ctx  # type: ignore[attr-defined]
+        return wrapper
 
     @functools.wraps(fn)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
-        token = _semiformal_context_var.set(context)
+        token = _semiformal_context_var.set(ctx)
         try:
-            return fn(*args, **kwargs)
+            return scaffold_fn(*args, **kwargs)
         finally:
             _semiformal_context_var.reset(token)
 
+    wrapper._semipy_context = ctx  # type: ignore[attr-defined]
     return wrapper
 
 
-def _methods_with_semi(cls: type) -> list[str]:
-    """Return names of methods that contain semi() or semi.<name>() in their source."""
-    import ast as _ast
-    result: list[str] = []
+def _methods_with_open_regions(cls: type) -> list[str]:
+    import ast
+
+    method_names: list[str] = []
     try:
-        source = inspect.getsource(cls)
-    except (OSError, TypeError):
-        return result
-    try:
-        tree = _ast.parse(source)
-    except SyntaxError:
-        return result
-    for node in _ast.walk(tree):
-        if isinstance(node, _ast.FunctionDef):
-            for n in _ast.walk(node):
-                if not isinstance(n, _ast.Call):
-                    continue
-                func = n.func
-                if isinstance(func, _ast.Name) and func.id == "semi":
-                    result.append(node.name)
+        for name, member in cls.__dict__.items():
+            if not callable(member):
+                continue
+            try:
+                src = inspect.getsource(member)
+            except (OSError, TypeError):
+                continue
+            if "#>" in src or "semi(" in src:
+                method_names.append(name)
+                continue
+            try:
+                tree = ast.parse(src)
+            except SyntaxError:
+                continue
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "semi":
+                    method_names.append(name)
                     break
-                if isinstance(func, _ast.Attribute) and isinstance(func.value, _ast.Name) and func.value.id == "semi":
-                    result.append(node.name)
-                    break
-    return result
+    except Exception:
+        return []
+    return method_names
 
 
 def semiformal(
@@ -129,26 +210,28 @@ def semiformal(
     if fn_or_desc is None and description is None:
         def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
             return _wrap_function(f, filename=None)
+
         return decorator
 
     if isinstance(fn_or_desc, str):
         desc = fn_or_desc
         def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
             return _wrap_function(f, description=desc, filename=None)
+
         return decorator
 
     if callable(fn_or_desc):
-        f = fn_or_desc
-        if isinstance(f, type):
-            method_names = _methods_with_semi(f)
-            for name in method_names:
-                if name in f.__dict__:
-                    orig = f.__dict__[name]
-                    if callable(orig):
-                        setattr(f, name, _wrap_function(orig, filename=None))
-            return f
-        return _wrap_function(f, description=description, filename=None)
+        if isinstance(fn_or_desc, type):
+            class_ = fn_or_desc
+            for name in _methods_with_open_regions(class_):
+                if name in class_.__dict__ and callable(class_.__dict__[name]):
+                    orig = class_.__dict__[name]
+                    setattr(class_, name, _wrap_function(orig, filename=None))
+            return class_
+        return _wrap_function(fn_or_desc, description=description, filename=None)
 
     def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
         return _wrap_function(f, description=description, filename=None)
+
     return decorator
+

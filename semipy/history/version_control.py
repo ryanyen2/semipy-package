@@ -80,6 +80,9 @@ class Slot:
     refs: dict[str, str] = field(default_factory=dict)
     default_branch: str = "main"
     upstream_slot_refs: list[tuple[str, str]] = field(default_factory=list)
+    spec_hash: str = ""
+    slot_spec: dict[str, Any] | None = None
+    enclosing_function_site_id: str | None = None
 
 
 @dataclass
@@ -88,6 +91,8 @@ class Portal:
     source_file: str
     module_name: str
     slots: dict[str, Slot] = field(default_factory=dict)
+    spec_map: dict[str, str] = field(default_factory=dict)
+    enclosing_function_slots: dict[str, list[str]] = field(default_factory=dict)
 
 
 def create_commit(

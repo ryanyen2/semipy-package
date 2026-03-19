@@ -1,80 +1,94 @@
 """
-Integration tests for reactivity: resolver with force_regenerate, graph persistence in cache.
+Integration tests for slot-resolution + dependency graph persistence.
+
+These tests cover the new spec-hash-based resolver behavior:
+- force_regenerate=True triggers ADAPT from the head commit when commits exist
+- force_regenerate=True triggers GENERATE when no commits exist
 """
 from __future__ import annotations
 
 import json
 import tempfile
 from pathlib import Path
-from typing import Any
-
-import pytest
 
 from semipy.history import Portal, Slot, add_commit_to_slot, create_commit, freeze_constants
 from semipy.reactivity import (
     DependencyGraph,
     SlotRef,
     add_dependency,
-    load_dependency_graph,
     mark_downstream_stale,
     save_dependency_graph,
+    load_dependency_graph,
 )
 from semipy.resolver import resolve
-from semipy.types import PromptTemplate, SemiCallSite, TemplatePart, Usage
+from semipy.types import Decision, SlotCategory, SlotSpec
 
 
-def _make_usage(site_id: str, fingerprint: str = "fp1", constants: dict[str, Any] | None = None) -> Usage:
-    call_site = SemiCallSite(filename="/fake/file.py", lineno=10, func_qualname="test_fn")
-    template = PromptTemplate(
-        template_parts=[TemplatePart(is_literal=True, value="x")],
-        variable_names=[],
-        variable_expressions=[],
+def _make_slot_spec(slot_id: str, spec_hash: str) -> SlotSpec:
+    # For resolver unit tests we only care about slot_id/spec_hash; other fields are placeholders.
+    return SlotSpec(
+        slot_id=slot_id,
+        source_span=("/fake/file.py", 10, 10),
+        spec_text="spec",
+        spec_hash=spec_hash,
+        free_variables=[],
+        control_context="top_level",
+        expected_category=SlotCategory.EXPRESSION_STANDALONE,
+        expected_type=type(None),
+        output_names=[],
+        formal_constraints=[],
+        usage_hints=[],
+        enclosing_function_source="",
+        enclosing_function_qualname="test_fn",
     )
-    return Usage(call_site=call_site, template=template, constant_values=constants or {})
 
 
-def test_resolver_force_regenerate_returns_adapt_when_branch_exists() -> None:
-    call_site = SemiCallSite(filename="/fake/file.py", lineno=10, func_qualname="test_fn")
-    slot_id = call_site.site_id
+def test_resolver_force_regenerate_returns_adapt_when_slot_has_commits() -> None:
+    slot_id = "slot_a"
     portal = Portal(session_id="s1", source_file="/fake/file.py", module_name="fake")
     slot = Slot(
         slot_id=slot_id,
-        call_site_info={"filename": call_site.filename, "lineno": call_site.lineno, "func_qualname": call_site.func_qualname},
+        call_site_info={},
         function_name_base="test_fn",
+        spec_hash="old",
     )
+    portal.slots[slot_id] = slot
+
     constants_snapshot = freeze_constants({})
     commit = create_commit(
         parent_ids=(),
-        generated_source="def fn(): return 1",
+        generated_source="def fn():\n    return 1\n",
         template_fingerprint="fp1",
         constants_snapshot=constants_snapshot,
         prompt_snapshot="",
         decision="GENERATE",
         usage_id="",
     )
-    add_commit_to_slot(slot, commit, "main", usage_id="u1")
-    portal.slots[slot_id] = slot
+    add_commit_to_slot(slot, commit, "main", usage_id=slot_id)
 
-    usage = _make_usage(slot_id, "fp1", {})
-    result = resolve(portal, usage, "fp1", {}, force_regenerate=True)
-    assert result.decision.value == "adapt"
+    slot_spec = _make_slot_spec(slot_id, spec_hash="new")
+    result = resolve(portal, slot_spec, force_regenerate=True)
+
+    assert result.decision == Decision.ADAPT
     assert result.slot is slot
     assert result.parent_commit_ids == [commit.commit_id]
 
 
-def test_resolver_force_regenerate_returns_generate_when_no_branch() -> None:
-    call_site = SemiCallSite(filename="/fake/other.py", lineno=1, func_qualname="other")
-    slot_id = call_site.site_id
+def test_resolver_force_regenerate_returns_generate_when_no_commits() -> None:
+    slot_id = "slot_empty"
     portal = Portal(session_id="s2", source_file="/fake/other.py", module_name="other")
     slot = Slot(
         slot_id=slot_id,
         call_site_info={},
         function_name_base="other",
+        spec_hash="old",
     )
     portal.slots[slot_id] = slot
-    usage = _make_usage(slot_id, "fp_other", {})
-    result = resolve(portal, usage, "fp_other", {}, force_regenerate=True)
-    assert result.decision.value == "generate"
+
+    slot_spec = _make_slot_spec(slot_id, spec_hash="new")
+    result = resolve(portal, slot_spec, force_regenerate=True)
+
+    assert result.decision == Decision.GENERATE
     assert result.commit_id is None
 
 
@@ -84,6 +98,7 @@ def test_dependency_graph_persisted_and_loaded_with_stale_state() -> None:
     b = SlotRef("s1", "slot_b")
     add_dependency(g, a, b)
     mark_downstream_stale(g, a, "upstream changed")
+
     with tempfile.TemporaryDirectory() as tmp:
         cache_dir = Path(tmp)
         save_dependency_graph(cache_dir, g)
@@ -95,3 +110,4 @@ def test_dependency_graph_persisted_and_loaded_with_stale_state() -> None:
         loaded = load_dependency_graph(cache_dir)
         assert loaded.statuses[b.key()].stale is True
         assert loaded.statuses[b.key()].stale_reason == "upstream changed"
+

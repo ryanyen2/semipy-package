@@ -20,7 +20,7 @@ dependencies = [
     "pandas>=2.3.3",
     "pretty-little-summary>=0.1.1",
     "pydantic-ai[examples]>=1.63.0",
-    "rich>=14.3.2",
+    "rich[jupyter]>=14.3.2",
 ]
 
 [project.optional-dependencies]

@@ -7,8 +7,24 @@ runs agent with streaming, validates (AST, type, execution), retries with feedba
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
 from typing import Any, Callable, List, Optional
+
+
+def _run_async(coro: Any) -> Any:
+    """Run a coroutine, compatible with both normal Python and Jupyter (already-running event loop).
+
+    When no event loop is running, uses asyncio.run(). When a loop is already running
+    (e.g. in Jupyter), runs the coroutine in a separate thread with its own event loop.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(asyncio.run, coro)
+        return future.result()
 
 from semipy.agents.compiler import _compile_source
 from semipy.agents.config import get_config
@@ -16,6 +32,7 @@ from semipy.agents.console_io import (
     confirm,
     generation_progress,
     get_console,
+    jupyter_capture_console,
     print_pipeline_log,
     print_reasoning_block,
     print_response_block,
@@ -150,30 +167,39 @@ class SemiAgent:
         return profile_value(name, value)
 
     def _describe_context(self, spec: GenerationSpec) -> str:
-        parts: list[str] = []
-        if spec.variable_values:
-            for n, v in spec.variable_values.items():
-                parts.append(self._describe_value(n, v))
-        if spec.context:
-            if spec.context.type_hints:
-                parts.append("Type hints: " + str(spec.context.type_hints))
-            if spec.context.source_code:
-                lines = spec.context.source_code.strip().splitlines()
-                trimmed = lines[:30] if len(lines) > 30 else lines
-                parts.append("Source (excerpt):\n" + "\n".join(trimmed))
-        if not parts:
+        # In the new architecture, runtime values are passed to the generated function via
+        # scaffold slot proxies. We only provide lightweight hints here; the agent can call
+        # get_runtime_data_context() if it needs deeper structure.
+        if not spec.sample_input or not isinstance(spec.sample_input, dict):
             return ""
-        return "Data context:\n" + "\n\n".join(parts)
+        args = spec.sample_input.get("args", ()) or ()
+        parts: list[str] = []
+        if isinstance(args, (list, tuple)) and args:
+            parts.append("Argument types:")
+            for i, v in enumerate(args):
+                parts.append(f"  - arg{i}: {type(v).__name__}")
+        return "\n".join(parts) if parts else ""
 
     def _build_user_prompt(self, spec: GenerationSpec) -> str:
+        def _expected_str() -> str:
+            exp = spec.expected_type
+            if exp is type(None):
+                return "any"
+            if exp is callable:
+                return "callable"
+            if isinstance(exp, type):
+                return exp.__name__
+            return repr(exp)
+
         parts = [
             "Implement a single Python function that satisfies this request:",
             "",
             spec.prompt,
             "",
             "Constraints:",
-            f"- Return type must be: {spec.expected_type.__name__ if spec.expected_type is not type(None) else 'any'}",
+            f"- Return type must be: {_expected_str()}",
         ]
+
         if spec.decision == Decision.ADAPT and spec.parent_sources:
             parts.append("")
             parts.append("Adapt from this previous implementation (same structure, new parameters):")
@@ -183,55 +209,32 @@ class SemiAgent:
             if spec.lineage_summary:
                 parts.append("")
                 parts.append("Lineage: " + spec.lineage_summary.replace("\n", " "))
-        if spec.decision == Decision.FORK and spec.parent_sources:
+
+        slot_block = ""
+        if spec.slot_spec:
+            s = spec.slot_spec
+            slot_block += f"Slot category: {s.expected_category.value}\n"
+            if s.free_variables:
+                slot_block += f"Slot inputs (positional arg order): {s.free_variables}\n"
+            if s.output_names:
+                slot_block += f"Output names: {s.output_names}\n"
+            if s.formal_constraints:
+                slot_block += "Hard constraints (must preserve verbatim):\n"
+                slot_block += "\n".join(f"  {line}" for line in s.formal_constraints)
+                slot_block += "\n"
+            if spec.scaffold_source:
+                slot_block += "Scaffold context (surrounding formal code):\n"
+                slot_block += f"```python\n{spec.scaffold_source}\n```\n"
+
+        if slot_block:
             parts.append("")
-            parts.append("Use as inspiration (structure has changed):")
-            parts.append("```python")
-            parts.append(spec.parent_sources[0].strip())
-            parts.append("```")
-        if spec.template and spec.template.variable_names and not spec.method_name:
-            n = len(spec.template.variable_names)
-            parts.append(
-                f"- The function will be called with exactly {n} positional arguments (in order). "
-                "The first argument is the value that changes per invocation; the rest are fixed context for this call."
-            )
-        elif spec.template is None and not spec.method_name:
-            parts.append(
-                "- The function will be called with exactly one positional argument: the full prompt string "
-                "(e.g. 'Year of 2020-01-22'). Implement a function that accepts this single string parameter and "
-                "returns the requested value. Do not use zero arguments."
-            )
-            parts.append(
-                "- The function is invoked many times (e.g. once per row or per element). "
-                "The argument is one value from a column or collection. Implement so it works for every value in the data, not only the single sample you may see. Do not hardcode the sample."
-            )
-        if getattr(spec, "related_source_segments", None):
-            parts.append("")
-            parts.append("Relevant code (enclosing statement and definitions used):")
-            for seg in spec.related_source_segments:
-                if seg.strip():
-                    parts.append("```")
-                    parts.append(seg.strip())
-                    parts.append("```")
-        if spec.caller_locals and spec.template is None:
-            parts.append("")
-            parts.append("Variables are in scope; call get_runtime_data_context() to see their structure and value distributions.")
+            parts.append(slot_block.rstrip())
+
         context_block = self._describe_context(spec)
         if context_block:
             parts.append("")
             parts.append(context_block)
-        if getattr(spec, "usage_hint", ""):
-            parts.append(f"- Usage context: the result will be {spec.usage_hint}")
-            if "FormatStrFormatter" in spec.usage_hint:
-                parts.append(
-                    "- The result is passed to matplotlib FormatStrFormatter: use a Python % format (e.g. %.1f, %d), not strftime (e.g. %Y-%m-%d)."
-                )
-        if spec.sample_input:
-            parts.append("- Sample input (the function will be called with these argument types):")
-            parts.append(json.dumps(spec.sample_input, default=repr, indent=2))
-        if spec.constant_values:
-            parts.append("- Constant context (these are passed as positional arguments after the first; use them as function parameters):")
-            parts.append(json.dumps(spec.constant_values, default=repr, indent=2))
+
         if getattr(spec, "downstream_requirements", None):
             reqs = spec.downstream_requirements
             if isinstance(reqs, dict) and reqs:
@@ -239,82 +242,18 @@ class SemiAgent:
                 parts.append("Downstream requirements (your output will be consumed by operations that need):")
                 for k, v in reqs.items():
                     parts.append(f"  - {k}: {v}")
+
         if getattr(spec, "upstream_lineage", None):
             lineage = spec.upstream_lineage
             if lineage:
                 parts.append("")
                 parts.append("Upstream dependency context: this step consumes output from prior steps in the pipeline.")
-        if getattr(spec, "library_context", None) and spec.library_context.strip():
-            parts.append("")
-            parts.append(spec.library_context)
-        if spec.decision == Decision.COMPOSE and spec.parent_sources:
-            parts.append("")
-            parts.append("Compose from this library primitive (adapt to the current request):")
-            parts.append("```python")
-            parts.append(spec.parent_sources[0].strip())
-            parts.append("```")
+
         return "\n".join(parts)
 
     def _build_named_user_prompt(self, spec: GenerationSpec) -> str:
-        parts = [
-            spec.prompt,
-            "",
-            "Constraints:",
-            f"- Return type must be: {spec.expected_type.__name__ if spec.expected_type is not type(None) else 'any'}",
-        ]
-        if spec.decision == Decision.ADAPT and spec.parent_sources:
-            parts.append("")
-            parts.append("Adapt from this previous implementation (same structure, new parameters):")
-            parts.append("```python")
-            parts.append(spec.parent_sources[0].strip())
-            parts.append("```")
-            if spec.lineage_summary:
-                parts.append("")
-                parts.append("Lineage: " + spec.lineage_summary.replace("\n", " "))
-        if spec.decision == Decision.FORK and spec.parent_sources:
-            parts.append("")
-            parts.append("Use as inspiration (structure has changed):")
-            parts.append("```python")
-            parts.append(spec.parent_sources[0].strip())
-            parts.append("```")
-        context_block = self._describe_context(spec)
-        if context_block:
-            parts.append("")
-            parts.append(context_block)
-        if getattr(spec, "usage_hint", ""):
-            parts.append(f"- Usage context: the result will be {spec.usage_hint}")
-            if "FormatStrFormatter" in spec.usage_hint:
-                parts.append(
-                    "- The result is passed to matplotlib FormatStrFormatter: use a Python % format (e.g. %.1f, %d), not strftime (e.g. %Y-%m-%d)."
-                )
-        if spec.sample_input:
-            parts.append("- Sample input (the function will be called with these argument types):")
-            parts.append(json.dumps(spec.sample_input, default=repr, indent=2))
-        if spec.constant_values:
-            parts.append("- Constant context (these are passed as positional arguments after the first; use them as function parameters):")
-            parts.append(json.dumps(spec.constant_values, default=repr, indent=2))
-        if getattr(spec, "downstream_requirements", None):
-            reqs = spec.downstream_requirements
-            if isinstance(reqs, dict) and reqs:
-                parts.append("")
-                parts.append("Downstream requirements (your output will be consumed by operations that need):")
-                for k, v in reqs.items():
-                    parts.append(f"  - {k}: {v}")
-        if getattr(spec, "upstream_lineage", None):
-            lineage = spec.upstream_lineage
-            if lineage:
-                parts.append("")
-                parts.append("Upstream dependency context: this step consumes output from prior steps in the pipeline.")
-        if getattr(spec, "library_context", None) and spec.library_context.strip():
-            parts.append("")
-            parts.append(spec.library_context)
-        if spec.decision == Decision.COMPOSE and spec.parent_sources:
-            parts.append("")
-            parts.append("Compose from this library primitive (adapt to the current request):")
-            parts.append("```python")
-            parts.append(spec.parent_sources[0].strip())
-            parts.append("```")
-        return "\n".join(parts)
+        # Named semi.* calls are removed in the new lowering architecture.
+        return self._build_user_prompt(spec)
 
     def _build_retry_prompt(
         self,
@@ -323,7 +262,7 @@ class SemiAgent:
         result: ValidationResult,
         attempt: int,
     ) -> str:
-        base = self._build_named_user_prompt(spec) if spec.method_name else self._build_user_prompt(spec)
+        base = self._build_user_prompt(spec)
         parts = [
             base,
             "\n\nPrevious attempt failed validation:",
@@ -354,22 +293,13 @@ class SemiAgent:
             gist_builder=GistBuilder(spec),
             executor=executor,
         )
-        prompt = (
-            user_prompt_override
-            if user_prompt_override is not None
-            else (self._build_named_user_prompt(spec) if spec.method_name else self._build_user_prompt(spec))
-        )
+        prompt = user_prompt_override if user_prompt_override is not None else self._build_user_prompt(spec)
         agent = get_semi_agent()
 
         if self.verbose:
             decision = spec.decision if spec.decision is not None else Decision.GENERATE
             get_console().print(
                 f"[dim][semipy][/] Invoking LLM | decision=[cyan]{decision.value}[/]"
-                + (
-                    f" | library_context={len(spec.library_context or '')} chars"
-                    if getattr(spec, "library_context", None) and spec.library_context
-                    else " | library_context=none"
-                )
             )
 
         part_buffers: dict = {}
@@ -433,7 +363,7 @@ class SemiAgent:
         total_attempts = self.max_retries + 1
         decision = spec.decision if spec.decision is not None else Decision.GENERATE
 
-        with generation_progress(self.verbose) as progress:
+        with jupyter_capture_console(), generation_progress(self.verbose) as progress:
             progress.set_call_site(spec.call_site)
             progress.log_step("Generate")
             progress.log_step(f"Decision: {decision_description(decision)}")
@@ -468,7 +398,7 @@ class SemiAgent:
                     prompt_override = None
 
                 try:
-                    entry = asyncio.run(self.generate_async(spec, user_prompt_override=prompt_override))
+                    entry = _run_async(self.generate_async(spec, user_prompt_override=prompt_override))
                 except SemiGenerationError as e:
                     last_source = getattr(e, "last_source", "") or ""
                     last_result = getattr(e, "last_result", None)

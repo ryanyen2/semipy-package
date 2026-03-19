@@ -64,12 +64,12 @@ pytest  # use: uv sync --extra dev first
 | root | `store.py` | load_portal, save_portal, write_dispatch_module, load_function_from_dispatch |
 | agents | `config.py` | SemiConfig; get_config() / configure() |
 | agents | `compiler.py` | _compile_source() to turn generated Python source into a callable |
-| agents | `agent.py` | SemiAgent: generate(spec); prompt building; stream event handling; validate and retry with feedback |
+| agents | `agent.py` | SemiAgent: generate(spec); prompt building; stream event handling; validate and retry with feedback; _run_async() for Jupyter (no asyncio.run from running loop) |
 | agents | `generator.py` | pydantic_ai Agent (OpenRouter) + tools; get_semi_agent(); SYSTEM_PROMPT |
 | agents | `gist.py` | GistBuilder(spec).build(generated_source) -> Gist; minimal runnable script for sandbox validation |
 | agents | `executor.py` | GistExecutor: execute_sync/execute_async (E2B or subprocess); ExecutionResult |
 | agents | `validator.py` | validate() (AST, type, execution); validate_with_gist(); _extract_function_source |
-| agents | `console_io.py` | Rich-based console output; DAG logs; streaming (print_reasoning_block, print_tool_call, etc.) |
+| agents | `console_io.py` | Rich-based console output; DAG logs; streaming (print_reasoning_block, print_tool_call, etc.); Jupyter: jupyter_capture_console() for single scrollable Panel |
 | agents | `tools.py` | Tool refs in prompts ({TOOL(...)}); parse_tool_refs, register_tool |
 | agents | `profiler.py` | profile_value() for data profiling in agent context |
 | history | `version_control.py` | Commit, Branch, Slot, Portal; create_commit, add_commit_to_slot, walk_history, find_branch_by_fingerprint |

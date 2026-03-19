@@ -1,20 +1,11 @@
-"""Resolve usage to REUSE, ADAPT, COMPOSE, FORK, or GENERATE using the DAG."""
+"""Resolve one durable SlotSpec to REUSE / ADAPT / GENERATE using spec_hash."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from semipy.history import (
-    Commit,
-    Slot,
-    find_branch_by_fingerprint,
-    find_commit_by_fingerprint,
-    find_commit_by_operation_signature,
-    freeze_constants,
-    compute_operation_signature,
-    walk_history,
-)
-from semipy.types import Decision, GenerationSpec, Usage
+from semipy.history import Commit, Slot, walk_history
+from semipy.types import Decision, SlotSpec
 
 
 @dataclass
@@ -28,142 +19,17 @@ class ResolutionResult:
     commit_id: Optional[str]
 
 
-def resolve(
-    portal: Any,
-    usage: Usage,
-    template_fingerprint: str,
-    constants: dict[str, Any],
-    force_regenerate: bool = False,
-    library: Optional[Any] = None,
-    spec_for_compose: Optional[GenerationSpec] = None,
-) -> ResolutionResult:
-    """
-    Resolve a usage against the portal DAG.
-
-    Returns REUSE with commit_id when a matching implementation exists;
-    returns ADAPT or GENERATE with parent_commit_ids and lineage when a new
-    or adapted implementation is needed. When force_regenerate is True,
-    skip REUSE checks and return ADAPT or GENERATE.
-    """
-    slot_id = usage.call_site.site_id
-    usage_id = usage.usage_id()
-    constants_snapshot = freeze_constants(constants)
-    operation_signature = compute_operation_signature(template_fingerprint, constants_snapshot)
-
-    slot = portal.slots.get(slot_id)
-    if slot is None:
-        return ResolutionResult(
-            decision=Decision.GENERATE,
-            slot=None,
-            branch_name=None,
-            parent_commit_ids=[],
-            parent_sources=[],
-            lineage_summary=None,
-            commit_id=None,
-        )
-
-    if force_regenerate:
-        branch_match = find_branch_by_fingerprint(slot, template_fingerprint)
-        if branch_match is not None:
-            branch_name, head_commit = branch_match
-            parent_sources = [head_commit.generated_source]
-            lineage = _lineage_summary(slot, head_commit.commit_id)
-            return ResolutionResult(
-                decision=Decision.ADAPT,
-                slot=slot,
-                branch_name=branch_name,
-                parent_commit_ids=[head_commit.commit_id],
-                parent_sources=parent_sources,
-                lineage_summary=lineage,
-                commit_id=None,
-            )
-        return ResolutionResult(
-            decision=Decision.GENERATE,
-            slot=slot,
-            branch_name=None,
-            parent_commit_ids=[],
-            parent_sources=[],
-            lineage_summary=None,
-            commit_id=None,
-        )
-
-    ref_commit_id = slot.refs.get(usage_id)
-    if ref_commit_id is not None:
-        return ResolutionResult(
-            decision=Decision.REUSE,
-            slot=slot,
-            branch_name=None,
-            parent_commit_ids=[],
-            parent_sources=[],
-            lineage_summary=None,
-            commit_id=ref_commit_id,
-        )
-
-    existing = find_commit_by_operation_signature(slot, operation_signature, usage_id)
-    if existing is not None:
-        return ResolutionResult(
-            decision=Decision.REUSE,
-            slot=slot,
-            branch_name=None,
-            parent_commit_ids=[],
-            parent_sources=[],
-            lineage_summary=None,
-            commit_id=existing.commit_id,
-        )
-
-    by_fingerprint = find_commit_by_fingerprint(slot, template_fingerprint, usage_id)
-    if by_fingerprint is not None:
-        return ResolutionResult(
-            decision=Decision.REUSE,
-            slot=slot,
-            branch_name=None,
-            parent_commit_ids=[],
-            parent_sources=[],
-            lineage_summary=None,
-            commit_id=by_fingerprint.commit_id,
-        )
-
-    branch_match = find_branch_by_fingerprint(slot, template_fingerprint)
-    if branch_match is not None:
-        branch_name, head_commit = branch_match
-        parent_sources = [head_commit.generated_source]
-        lineage = _lineage_summary(slot, head_commit.commit_id)
-        return ResolutionResult(
-            decision=Decision.ADAPT,
-            slot=slot,
-            branch_name=branch_name,
-            parent_commit_ids=[head_commit.commit_id],
-            parent_sources=parent_sources,
-            lineage_summary=lineage,
-            commit_id=None,
-        )
-
-    if library is not None and spec_for_compose is not None:
-        try:
-            from semipy.library.injection import select_relevant_primitives
-            prims = select_relevant_primitives(library, spec_for_compose, max_count=1)
-            if prims:
-                return ResolutionResult(
-                    decision=Decision.COMPOSE,
-                    slot=slot,
-                    branch_name=None,
-                    parent_commit_ids=[],
-                    parent_sources=[prims[0].source],
-                    lineage_summary="compose from library",
-                    commit_id=None,
-                )
-        except Exception:
-            pass
-
-    return ResolutionResult(
-        decision=Decision.GENERATE,
-        slot=slot,
-        branch_name=None,
-        parent_commit_ids=[],
-        parent_sources=[],
-        lineage_summary=None,
-        commit_id=None,
-    )
+def _head_commit(slot: Slot) -> Optional[Commit]:
+    # Prefer head of default branch.
+    branch = slot.branches.get(slot.default_branch)
+    if branch is not None:
+        c = slot.commits.get(branch.head)
+        if c is not None:
+            return c
+    # Otherwise choose most recent commit across all branches/refs.
+    if not slot.commits:
+        return None
+    return max(slot.commits.values(), key=lambda c: c.timestamp)
 
 
 def _lineage_summary(slot: Slot, commit_id: str) -> str:
@@ -174,3 +40,91 @@ def _lineage_summary(slot: Slot, commit_id: str) -> str:
     if len(commits) > 5:
         lines.append(f"  ... {len(commits) - 5} more")
     return "\n".join(lines)
+
+
+def resolve(
+    portal: Any,
+    slot_spec: SlotSpec,
+    *,
+    force_regenerate: bool = False,
+) -> ResolutionResult:
+    """
+    Resolution precedence:
+    1. No slot in portal -> GENERATE
+    2. force_regenerate=True and slot has commits -> ADAPT (head as parent)
+    3. force_regenerate=True and no commits -> GENERATE
+    4. slot.spec_hash == slot_spec.spec_hash and commits exist -> REUSE (head)
+    5. spec_hash mismatch and commits exist -> ADAPT (head as parent)
+    6. No commits -> GENERATE
+    """
+    slot = portal.slots.get(slot_spec.slot_id)
+    if slot is None:
+        return ResolutionResult(
+            decision=Decision.GENERATE,
+            slot=None,
+            branch_name="main",
+            parent_commit_ids=[],
+            parent_sources=[],
+            lineage_summary=None,
+            commit_id=None,
+        )
+
+    has_commits = bool(slot.commits)
+    head = _head_commit(slot) if has_commits else None
+
+    if not has_commits:
+        return ResolutionResult(
+            decision=Decision.GENERATE,
+            slot=slot,
+            branch_name="main",
+            parent_commit_ids=[],
+            parent_sources=[],
+            lineage_summary=None,
+            commit_id=None,
+        )
+
+    if force_regenerate:
+        if head is None:
+            return ResolutionResult(
+                decision=Decision.GENERATE,
+                slot=slot,
+                branch_name="main",
+                parent_commit_ids=[],
+                parent_sources=[],
+                lineage_summary=None,
+                commit_id=None,
+            )
+        lineage = _lineage_summary(slot, head.commit_id)
+        return ResolutionResult(
+            decision=Decision.ADAPT,
+            slot=slot,
+            branch_name=f"b_{slot_spec.spec_hash[:8]}",
+            parent_commit_ids=[head.commit_id],
+            parent_sources=[head.generated_source],
+            lineage_summary=lineage,
+            commit_id=None,
+        )
+
+    # Not forced: decide REUSE vs ADAPT on stored spec_hash.
+    if slot.spec_hash == slot_spec.spec_hash:
+        return ResolutionResult(
+            decision=Decision.REUSE,
+            slot=slot,
+            branch_name=None,
+            parent_commit_ids=[],
+            parent_sources=[],
+            lineage_summary=None,
+            commit_id=head.commit_id if head is not None else None,
+        )
+
+    # spec mismatch -> ADAPT from head
+    lineage = _lineage_summary(slot, head.commit_id) if head is not None else None
+    return ResolutionResult(
+        decision=Decision.ADAPT,
+        slot=slot,
+        branch_name=f"b_{slot_spec.spec_hash[:8]}",
+        parent_commit_ids=[head.commit_id] if head is not None else [],
+        parent_sources=[head.generated_source] if head is not None else [],
+        lineage_summary=lineage,
+        commit_id=None,
+    )

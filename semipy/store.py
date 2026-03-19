@@ -97,6 +97,9 @@ def _slot_to_dict(s: Slot) -> dict[str, Any]:
         "refs": dict(s.refs),
         "default_branch": s.default_branch,
         "upstream_slot_refs": list(s.upstream_slot_refs),
+        "spec_hash": s.spec_hash,
+        "slot_spec": s.slot_spec,
+        "enclosing_function_site_id": s.enclosing_function_site_id,
     }
 
 
@@ -115,6 +118,9 @@ def _slot_from_dict(d: dict[str, Any]) -> Slot:
         refs=dict(d.get("refs", {})),
         default_branch=d.get("default_branch", "main"),
         upstream_slot_refs=[tuple(p) for p in d.get("upstream_slot_refs", [])],
+        spec_hash=d.get("spec_hash", ""),
+        slot_spec=d.get("slot_spec", None),
+        enclosing_function_site_id=d.get("enclosing_function_site_id", None),
     )
 
 
@@ -124,6 +130,8 @@ def _portal_to_dict(p: Portal) -> dict[str, Any]:
         "source_file": p.source_file,
         "module_name": p.module_name,
         "slots": {sid: _slot_to_dict(s) for sid, s in p.slots.items()},
+        "spec_map": dict(p.spec_map),
+        "enclosing_function_slots": dict(p.enclosing_function_slots),
     }
 
 
@@ -134,6 +142,8 @@ def _portal_from_dict(d: dict[str, Any]) -> Portal:
         source_file=d.get("source_file", ""),
         module_name=d.get("module_name", ""),
         slots=slots,
+        spec_map=dict(d.get("spec_map", {})),
+        enclosing_function_slots=dict(d.get("enclosing_function_slots", {})),
     )
 
 
@@ -191,7 +201,15 @@ def _get_active_commit(slot: Slot) -> Optional[Commit]:
 
 
 def write_dispatch_module(cache_dir: Path, portal: Portal) -> tuple[Path, dict[str, tuple[int, int]]]:
-    """Write dispatch module with one implementation per slot (active commit). All usage_ids in the slot map to that function. Returns (path, fn_line_map)."""
+    """
+    Write dispatch module with one implementation per slot (active commit).
+
+    Dispatch format (new):
+      DISPATCH = { "<slot_id>": "<function_name>" }
+
+    Also populates `portal.spec_map[slot_id] = "<function_name>:<start>-<end>"`.
+    Returns (path, fn_line_map).
+    """
     path = _dispatch_module_path(cache_dir, portal.module_name)
     _dispatch_dir(cache_dir).mkdir(parents=True, exist_ok=True)
 
@@ -210,7 +228,17 @@ def write_dispatch_module(cache_dir: Path, portal: Portal) -> tuple[Path, dict[s
         if active is None:
             continue
         fn_name = function_name_for_commit(slot, active)
-        lines.append(f"# slot: {slot.function_name_base} | commit: {active.commit_id[:8]} | {active.decision}")
+        slot_cat = None
+        slot_spec = getattr(slot, "slot_spec", None)
+        if isinstance(slot_spec, dict):
+            slot_cat = slot_spec.get("expected_category")
+        spec_preview = ""
+        if isinstance(slot_spec, dict):
+            spec_preview = (slot_spec.get("spec_text") or "").replace("\n", " ")
+            spec_preview = spec_preview[:200] + ("..." if len(spec_preview) > 200 else "")
+        lines.append(
+            f"# slot: {slot.slot_id} | category: {slot_cat or 'unknown'} | commit: {active.commit_id[:8]} | {active.decision} | spec: {spec_preview}"
+        )
         start_line = len(lines) + 1
         source_only = _dispatch_source_only(active.generated_source)
         fn_source = _source_with_function_name(source_only, fn_name)
@@ -219,8 +247,8 @@ def write_dispatch_module(cache_dir: Path, portal: Portal) -> tuple[Path, dict[s
         lines.append("")
         end_line = len(lines)
         fn_line_map[fn_name] = (start_line, end_line)
-        for usage_id in slot.refs:
-            dispatch_entries.append(f"DISPATCH[{repr(usage_id)}] = {repr(fn_name)}")
+        dispatch_entries.append(f"DISPATCH[{repr(slot.slot_id)}] = {repr(fn_name)}")
+        portal.spec_map[slot.slot_id] = f"{fn_name}:{start_line}-{end_line}"
 
     if dispatch_entries:
         lines.append("")
@@ -228,6 +256,11 @@ def write_dispatch_module(cache_dir: Path, portal: Portal) -> tuple[Path, dict[s
 
     path.write_text("\n".join(lines), encoding="utf-8")
     return path, fn_line_map
+
+
+def get_spec_map_entry(portal: Portal, slot_id: str) -> Optional[str]:
+    """Return the spec_map entry for `slot_id` if present."""
+    return portal.spec_map.get(slot_id)
 
 
 def get_dispatch_function_line_range(dispatch_path: Path, function_name: str) -> tuple[int, int]:
@@ -266,13 +299,28 @@ def load_function_from_dispatch(
     if not path.exists():
         return None
     key = module_name
+    def _load() -> dict[str, Any]:
+        ns: dict[str, Any] = {}
+        exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), ns)
+        return ns
+
     if key not in module_cache:
         try:
-            ns: dict[str, Any] = {}
-            exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), ns)
-            module_cache[key] = ns
+            module_cache[key] = _load()
         except Exception:
             return None
+
     ns = module_cache[key]
     fn = ns.get(function_name)
-    return fn if callable(fn) and not isinstance(fn, type) else None
+    if callable(fn) and not isinstance(fn, type):
+        return fn
+
+    # Dispatch module may have been updated after the namespace was cached.
+    # If the requested function isn't present, reload once from disk.
+    try:
+        module_cache[key] = _load()
+    except Exception:
+        return None
+    ns = module_cache[key]
+    fn2 = ns.get(function_name)
+    return fn2 if callable(fn2) and not isinstance(fn2, type) else None

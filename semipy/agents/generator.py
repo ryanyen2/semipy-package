@@ -109,8 +109,14 @@ def _create_agent() -> Agent[SemiAgentDeps]:
             spec = getattr(deps, "spec", None)
             if not spec:
                 return RuntimeDataContextResult(success=False, error="No spec in deps.")
-            locals_dict = getattr(spec, "caller_locals", None) or {}
-            variable_values = getattr(spec, "variable_values", None)
+            sample_input = getattr(spec, "sample_input", None)
+            runtime_values: dict[str, Any] = {}
+            if isinstance(sample_input, dict):
+                rv = sample_input.get("runtime_values", None)
+                if isinstance(rv, dict):
+                    runtime_values = rv
+            locals_dict: dict[str, Any] = {}
+            variable_values = runtime_values or None
             summary = profile_runtime_context(
                 locals_dict,
                 variable_values=variable_values,
@@ -304,6 +310,14 @@ Rules:
 - Do not use emoji or decorative output. No docstrings or comments in the code, just code.
 - When the user provides a previous implementation (adapt or inspiration), preserve its structure where possible and change only what is needed.
 - When "Available library primitives" are shown in the prompt, you may reuse or adapt them to satisfy the request.
+
+Slot category instructions (from SlotSpec):
+- EXPRESSION: generate def __slot_N__(arg1, arg2, ...) that returns a single value matching expected_type. The returned value replaces the slot call in the scaffold.
+- If the slot has zero inputs (no free variables), the signature must be `def __slot_N__(): ...` with no required positional parameters.
+- STATEMENT_BLOCK: generate def __slot_N__(arg1, arg2, ...) that returns a dict[str, Any] with exactly the keys: output_names. Each key maps to the value that the key name should bind.
+- FUNCTION_BODY: implement the full function body as today; return expected_type.
+- If expected_type is `callable`, your function must return another callable (a factory). If expected_type is a domain class, construct and return an instance of that class.
+- Hard constraints (must preserve): lines provided as formal_constraints MUST appear verbatim in your implementation. Do not remove or modify them.
 
 Tool usage:
 1. When the prompt refers to data (e.g. a column, a table, a file, a URL), call get_runtime_data_context() first. Tables/collections are listed first with full column value distributions; any scalar is labeled as one sample. Your implementation must work for all values in the data (all dates, all countries, etc.), not just that sample. Use this for any domain (tables, PDFs, URLs, dicts, etc.).

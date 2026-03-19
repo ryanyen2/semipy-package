@@ -2,10 +2,12 @@
 Rich-based console output for the semiformal pipeline.
 
 Provides one-line DAG logs (reuse/adapt/generate), validation error panels,
-progress status, and confirmation prompts.
+progress status, and confirmation prompts. In Jupyter, agent generation output
+is captured and printed as one scrollable Panel per cell.
 """
 from __future__ import annotations
 
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -24,14 +26,58 @@ from semipy.types import (
 )
 
 _console: Optional[Console] = None
+_jupyter_output_console: Optional[Console] = None
+
+
+def _is_jupyter() -> bool:
+    """True if running inside Jupyter (notebook or IPython)."""
+    try:
+        if "ipykernel" in sys.modules:
+            return True
+        ipy = sys.modules.get("IPython", None)
+        if ipy is not None and getattr(ipy, "get_ipython", None):
+            return ipy.get_ipython() is not None
+    except Exception:
+        pass
+    return False
 
 
 def get_console() -> Console:
-    """Return the shared Rich Console (works in terminal, REPL, and Jupyter)."""
-    global _console
+    """Return the shared Rich Console (works in terminal, REPL, and Jupyter).
+    When in Jupyter and inside jupyter_capture_console(), returns a Console that
+    writes to the ipywidgets Output so all output appends in one cell."""
+    global _console, _jupyter_output_console
+    if _jupyter_output_console is not None:
+        return _jupyter_output_console
     if _console is None:
         _console = Console()
     return _console
+
+
+@contextmanager
+def jupyter_capture_console():
+    """In Jupyter, send all generation output to a single ipywidgets.Output so it
+    appends in one scrollable area instead of creating many output cells.
+    No-op when not in Jupyter or when ipywidgets/IPython.display unavailable."""
+    global _jupyter_output_console
+    if not _is_jupyter():
+        yield
+        return
+    try:
+        import ipywidgets as ipw
+        from IPython.display import display
+    except ImportError:
+        yield
+        return
+    out = ipw.Output()
+    display(out)
+    prev = _jupyter_output_console
+    with out:
+        _jupyter_output_console = Console()
+        try:
+            yield
+        finally:
+            _jupyter_output_console = prev
 
 
 def decision_description(decision: Decision) -> str:
@@ -60,13 +106,11 @@ def _format_location(filename: str, lineno: int, func_qualname: str) -> str:
 
 
 def _call_site_file_url(filename: str, lineno: int) -> str:
-    """file:// URL for opening at line (IDE-friendly). Uses resolved path for link target."""
+    """file:// URL for opening at line (IDE-friendly). Resolved path; if not under cwd (e.g. Jupyter temp), use absolute URI."""
     if not filename:
         return ""
-    # p = Path(filename).resolve()
-    # use relative path instead of resolved path
-    p = Path(filename).relative_to(Path.cwd())
     try:
+        p = Path(filename).resolve()
         uri = p.as_uri()
         return f"{uri}:{lineno}" if lineno else uri
     except Exception:

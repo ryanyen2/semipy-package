@@ -1,48 +1,11 @@
-"""Context-aware validation of generated semi() functions.
-
-When spec provides caller context (context, caller_locals, source_file_imports),
-we build a minimal partial program: substitute the generated function for semi(),
-execute the enclosing statement from the user's function, and check for errors.
-If execution raises, the traceback is returned as the validation error for the
-repair loop. Otherwise we fall back to basic execution with sample_input.
-"""
 from __future__ import annotations
 
 import ast
 import inspect
 import traceback
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
-from semipy.types import GenerationSpec, PromptTemplate, ValidationResult
-
-_UNKNOWN_RETURN_NONE_MSG = (
-    "Return type is unknown (expected_type is None) and the function returned None. "
-    "Consider adding a type hint so validation can verify the result."
-)
-
-
-def count_function_positional_params(source: str) -> int:
-    """
-    Return the number of positional parameters of the first function definition in source.
-    Used to verify that a reused commit's implementation accepts at least as many
-    positional arguments as the template has variables (cross-constant reuse).
-    """
-    extracted = _extract_function_source(source)
-    if not extracted.strip():
-        return 0
-    try:
-        tree = ast.parse(extracted)
-    except SyntaxError:
-        return 0
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef):
-            n = 0
-            for a in node.args.args:
-                if a.arg in ("*args", "**kwargs"):
-                    break
-                n += 1
-            return n
-    return 0
+from semipy.types import GenerationSpec, SlotCategory, ValidationResult
 
 
 def _extract_function_source(raw: str) -> str:
@@ -61,173 +24,31 @@ def _extract_function_source(raw: str) -> str:
     return raw
 
 
-def _extract_enclosing_statement(
-    source_code: str,
-    semi_call_lineno: int,
-    first_lineno: int,
-) -> Optional[str]:
-    """Return the source of the top-level statement that contains the semi() call line, or None."""
-    if not source_code.strip() or semi_call_lineno < first_lineno:
+def _validate_formal_constraints(generated_source: str, formal_constraints: list[str]) -> Optional[str]:
+    if not formal_constraints:
         return None
-    rel = semi_call_lineno - first_lineno + 1  # 1-based line within function source
-    try:
-        tree = ast.parse(source_code)
-    except SyntaxError:
-        return None
-    if not tree.body or not isinstance(tree.body[0], ast.FunctionDef):
-        return None
-    func = tree.body[0]
-    for stmt in func.body:
-        start = stmt.lineno
-        end = getattr(stmt, "end_lineno", stmt.lineno)
-        if start <= rel <= end:
-            seg = ast.get_source_segment(source_code, stmt)
-            return seg.strip() if seg else None
+    for line in formal_constraints:
+        stripped = (line or "").strip()
+        if not stripped:
+            continue
+        if stripped not in generated_source:
+            return f"Missing formal constraint line in generated source: {stripped!r}"
     return None
 
 
-def _build_mock_semi(
-    generated_fn: Callable[..., Any],
-    template: Optional[PromptTemplate],
-) -> Any:
-    """Return a mock 'semi' usable in exec namespace: __call__ for inline, __getattr__ for semi.name()."""
-
-    class _MockSemi:
-        def __init__(self, fn: Callable[..., Any], tpl: Optional[PromptTemplate]) -> None:
-            self._fn = fn
-            self._template = tpl
-
-        def __call__(self, prompt: str, *, expected_type: Any = None, **kw: Any) -> Any:
-            frame = inspect.currentframe()
-            if frame is not None and frame.f_back is not None and self._template is not None:
-                exprs = getattr(self._template, "variable_expressions", None) or []
-                values = []
-                globals_dict = frame.f_back.f_globals
-                locals_dict = frame.f_back.f_locals
-                for expr in exprs:
-                    try:
-                        values.append(eval(expr, globals_dict, locals_dict))
-                    except Exception:
-                        values.append(None)
-                return self._fn(*values)
-            return self._fn(prompt)
-
-        def __getattr__(self, name: str) -> Callable[..., Any]:
-            def _named(*args: Any, **kwargs: Any) -> Any:
-                return self._fn(*args, **kwargs)
-
-            return _named
-
-    return _MockSemi(generated_fn, template)
-
-
-def _validate_in_context(source: str, spec: GenerationSpec) -> ValidationResult:
-    """Compile generated function, build namespace with imports + caller_locals + mock semi, exec enclosing statement."""
-    from semipy.agents.compiler import _compile_source
-
-    try:
-        fn = _compile_source(source)
-    except Exception as e:
-        return ValidationResult(
-            passed=False,
-            ast_valid=True,
-            type_correct=True,
-            execution_ok=False,
-            error_message=f"Compile failed: {e}",
-        )
-    if fn is None:
-        return ValidationResult(
-            passed=False,
-            ast_valid=True,
-            type_correct=True,
-            execution_ok=False,
-            error_message="No callable in compiled source",
-        )
-
-    context = spec.context
-    if context is None or spec.caller_locals is None:
-        return ValidationResult(
-            passed=False,
-            ast_valid=True,
-            type_correct=True,
-            execution_ok=False,
-            error_message="Missing context or caller_locals for in-context validation",
-        )
-
-    imports = spec.source_file_imports or []
-    namespace: dict[str, Any] = {}
-    for imp in imports:
-        try:
-            exec(imp, namespace)
-        except Exception:
-            pass
-    namespace.update(spec.caller_locals)
-    mock = _build_mock_semi(fn, spec.template)
-    namespace["semi"] = mock
-
-    statement = _extract_enclosing_statement(
-        context.source_code,
-        spec.call_site.lineno,
-        getattr(context, "first_lineno", 1),
-    )
-    if not statement:
-        return ValidationResult(
-            passed=False,
-            ast_valid=True,
-            type_correct=True,
-            execution_ok=False,
-            error_message="Could not extract enclosing statement for in-context execution",
-        )
-
-    try:
-        exec(compile(statement, "<context_validation>", "exec"), namespace, namespace)
-    except Exception:
-        tb = traceback.format_exc()
-        return ValidationResult(
-            passed=False,
-            ast_valid=True,
-            type_correct=True,
-            execution_ok=False,
-            error_message=tb,
-        )
-
-    return ValidationResult(
-        passed=True,
-        ast_valid=True,
-        type_correct=True,
-        execution_ok=True,
-        error_message="",
-    )
-
-
-def _validate_result_type_pydantic(result: Any, expected_type: type) -> Optional[str]:
-    """
-    Validate result against expected_type using pydantic TypeAdapter when available.
-    Returns an error message if validation fails, None if it passes or pydantic is unavailable.
-    """
-    if expected_type is type(None):
-        return None
-    try:
-        from pydantic import TypeAdapter
-        from pydantic import ValidationError as PydanticValidationError
-    except ImportError:
-        return None
-    try:
-        adapter = TypeAdapter(expected_type)
-        adapter.validate_python(result)
-        return None
-    except PydanticValidationError as e:
-        return str(e)
-    except Exception:
-        return None
+def _validate_callable_shape(result: Any) -> bool:
+    return callable(result)
 
 
 def _validate_basic_execution(
-    expected_type: type,
-    sample_input: Optional[dict[str, Any]],
+    *,
     fn: Any,
+    expected_type: Any,
+    sample_input: Optional[dict[str, Any]],
+    slot_category: SlotCategory | None,
+    output_names: list[str],
 ) -> ValidationResult:
-    """Run generated function with sample_input and check return type. Uses pydantic when available for strict type validation."""
+    # We intentionally do not require non-None results for unknown types.
     if sample_input is None:
         return ValidationResult(
             passed=True,
@@ -236,39 +57,24 @@ def _validate_basic_execution(
             execution_ok=True,
             error_message="",
         )
+    args = sample_input.get("args", ()) or ()
+    kwargs = sample_input.get("kwargs", {}) or {}
+
     try:
-        args = sample_input.get("args", ())
-        kwargs = sample_input.get("kwargs", {})
-        result = fn(*args, **kwargs)
-        if expected_type is type(None) and result is None:
+        # Fast, deterministic signature check so failures don't require executing the function body.
+        try:
+            sig = inspect.signature(fn)
+            sig.bind(*args, **kwargs)
+        except TypeError as e:
             return ValidationResult(
                 passed=False,
                 ast_valid=True,
                 type_correct=True,
-                execution_ok=True,
-                error_message=_UNKNOWN_RETURN_NONE_MSG,
+                execution_ok=False,
+                error_message=f"Signature mismatch: {e}",
             )
-        if expected_type is not type(None) and not isinstance(result, expected_type):
-            pydantic_err = _validate_result_type_pydantic(result, expected_type)
-            msg = (
-                f"Return value did not match expected type {expected_type.__name__}: {pydantic_err}"
-                if pydantic_err
-                else f"Returned {type(result).__name__}, expected {expected_type.__name__}"
-            )
-            return ValidationResult(
-                passed=False,
-                ast_valid=True,
-                type_correct=False,
-                execution_ok=True,
-                error_message=msg,
-            )
-        return ValidationResult(
-            passed=True,
-            ast_valid=True,
-            type_correct=True,
-            execution_ok=True,
-            error_message="",
-        )
+
+        result = fn(*args, **kwargs)
     except Exception:
         return ValidationResult(
             passed=False,
@@ -278,20 +84,109 @@ def _validate_basic_execution(
             error_message=traceback.format_exc(),
         )
 
+    # Category shape checks.
+    if slot_category == SlotCategory.STATEMENT_BLOCK:
+        if output_names:
+            if not isinstance(result, dict):
+                return ValidationResult(
+                    passed=False,
+                    ast_valid=True,
+                    type_correct=False,
+                    execution_ok=True,
+                    error_message=f"STATEMENT_BLOCK must return dict; got {type(result).__name__}",
+                )
+            if set(result.keys()) != set(output_names):
+                return ValidationResult(
+                    passed=False,
+                    ast_valid=True,
+                    type_correct=False,
+                    execution_ok=True,
+                    error_message=f"STATEMENT_BLOCK dict keys mismatch. expected={output_names} got={list(result.keys())}",
+                )
+        else:
+            # Side-effect blocks are allowed to return None.
+            if result is not None:
+                return ValidationResult(
+                    passed=False,
+                    ast_valid=True,
+                    type_correct=True,
+                    execution_ok=True,
+                    error_message=f"STATEMENT_BLOCK with no output_names must return None; got {type(result).__name__}",
+                )
+
+    # Return type checks.
+    if expected_type is type(None):
+        # Unknown type: accept any.
+        return ValidationResult(
+            passed=True,
+            ast_valid=True,
+            type_correct=True,
+            execution_ok=True,
+            error_message="",
+        )
+
+    if expected_type is callable:
+        if not _validate_callable_shape(result):
+            return ValidationResult(
+                passed=False,
+                ast_valid=True,
+                type_correct=False,
+                execution_ok=True,
+                error_message=f"Expected a callable result; got {type(result).__name__}",
+            )
+        return ValidationResult(
+            passed=True,
+            ast_valid=True,
+            type_correct=True,
+            execution_ok=True,
+            error_message="",
+        )
+
+    # Domain classes and plain Python types.
+    if isinstance(expected_type, type):
+        if not isinstance(result, expected_type):
+            return ValidationResult(
+                passed=False,
+                ast_valid=True,
+                type_correct=False,
+                execution_ok=True,
+                error_message=f"Returned {type(result).__name__}, expected {expected_type.__name__}",
+            )
+        return ValidationResult(
+            passed=True,
+            ast_valid=True,
+            type_correct=True,
+            execution_ok=True,
+            error_message="",
+        )
+
+    # Fallback for non-type expected_type: best-effort acceptance.
+    return ValidationResult(
+        passed=True,
+        ast_valid=True,
+        type_correct=True,
+        execution_ok=True,
+        error_message="",
+    )
+
 
 def validate(
     raw_source: str,
-    expected_type: type,
+    expected_type: Any,
     sample_input: Optional[dict[str, Any]] = None,
     enable_execution: bool = True,
     usage_hint: str = "",
     spec: Optional[GenerationSpec] = None,
 ) -> ValidationResult:
     """
-    Stage 1: AST parse and ensure one function def.
-    Stage 2: If spec has context (context, caller_locals): context-aware execution of enclosing statement.
-    Otherwise: basic execution with sample_input and return type check.
+    Validate generated slot implementation:
+    - AST parse + ensure one function def
+    - execute with sample_input (if enable_execution)
+    - enforce STATEMENT_BLOCK return dict keys
+    - enforce formal_constraints presence (verbatim substring match)
     """
+    del usage_hint  # usage_hint is legacy; constraints are handled via SlotSpec.
+
     source = _extract_function_source(raw_source)
     if not source.strip():
         return ValidationResult(
@@ -323,31 +218,26 @@ def validate(
             error_message="No function definition found",
         )
 
-    ast_valid = True
-    type_ok = True
-
     if not enable_execution:
         return ValidationResult(
-            passed=ast_valid and type_ok,
-            ast_valid=ast_valid,
-            type_correct=type_ok,
+            passed=True,
+            ast_valid=True,
+            type_correct=True,
             execution_ok=True,
             error_message="",
         )
 
-    use_context = (
-        spec is not None
-        and spec.context is not None
-        and spec.caller_locals is not None
-    )
-    if use_context:
-        statement = _extract_enclosing_statement(
-            spec.context.source_code,
-            spec.call_site.lineno,
-            getattr(spec.context, "first_lineno", 1),
+    # Formal constraint check first; it's purely textual.
+    formal_constraints = (spec.slot_spec.formal_constraints if spec and spec.slot_spec else []) if spec is not None else []
+    constraint_err = _validate_formal_constraints(source, formal_constraints)
+    if constraint_err is not None:
+        return ValidationResult(
+            passed=False,
+            ast_valid=True,
+            type_correct=True,
+            execution_ok=False,
+            error_message=constraint_err,
         )
-        if statement is not None and not statement.strip().startswith("return "):
-            return _validate_in_context(source, spec)
 
     try:
         ns: dict[str, Any] = {}
@@ -362,85 +252,26 @@ def validate(
                 error_message="No callable in compiled source",
             )
         fn = fns[0]
-    except Exception as e:
+    except Exception:
         return ValidationResult(
             passed=False,
             ast_valid=True,
             type_correct=True,
             execution_ok=False,
-            error_message=str(e),
+            error_message=traceback.format_exc(),
         )
+
+    slot_category = spec.slot_spec.expected_category if spec and spec.slot_spec else None
+    output_names = spec.slot_spec.output_names if spec and spec.slot_spec else []
 
     effective_type = spec.expected_type if spec is not None else expected_type
-    effective_sample = spec.sample_input if spec is not None else sample_input
-    return _validate_basic_execution(effective_type, effective_sample, fn)
+    effective_sample = spec.sample_input if spec is not None and spec.sample_input is not None else sample_input
 
-
-def validate_with_gist(
-    source: str,
-    spec: GenerationSpec,
-    gist_builder: Any,
-    executor: Any,
-) -> ValidationResult:
-    """
-    Validate generated function by building a gist and running it in the sandbox.
-    Returns ValidationResult with gist_executed, gist_stdout, gist_stderr set.
-    Falls back to standard validate() if gist building fails.
-    """
-    source = _extract_function_source(source)
-    if not source.strip():
-        return ValidationResult(
-            passed=False,
-            ast_valid=False,
-            type_correct=False,
-            execution_ok=False,
-            error_message="No Python code found in response",
-        )
-    try:
-        tree = ast.parse(source)
-    except SyntaxError as e:
-        return ValidationResult(
-            passed=False,
-            ast_valid=False,
-            type_correct=False,
-            execution_ok=False,
-            error_message=f"Syntax error: {e}",
-        )
-    funcs = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]
-    if not funcs:
-        return ValidationResult(
-            passed=False,
-            ast_valid=False,
-            type_correct=False,
-            execution_ok=False,
-            error_message="No function definition found",
-        )
-    gist = gist_builder.build(source)
-    if gist is None:
-        return validate(source, spec.expected_type, spec.sample_input, True, getattr(spec, "usage_hint", ""), spec)
-    result = executor.execute_sync(gist.source)
-    from semipy.agents.compiler import _compile_source
-    try:
-        fn = _compile_source(source)
-    except Exception as e:
-        return ValidationResult(
-            passed=False,
-            ast_valid=True,
-            type_correct=False,
-            execution_ok=False,
-            error_message=str(e),
-            gist_executed=result.success,
-            gist_stdout=result.stdout,
-            gist_stderr=result.stderr,
-        )
-    exec_result = _validate_basic_execution(spec.expected_type, spec.sample_input, fn)
-    return ValidationResult(
-        passed=exec_result.passed,
-        ast_valid=exec_result.ast_valid,
-        type_correct=exec_result.type_correct,
-        execution_ok=exec_result.execution_ok,
-        error_message=exec_result.error_message,
-        gist_executed=result.success,
-        gist_stdout=result.stdout,
-        gist_stderr=result.stderr,
+    return _validate_basic_execution(
+        fn=fn,
+        expected_type=effective_type,
+        sample_input=effective_sample,
+        slot_category=slot_category,
+        output_names=output_names,
     )
+

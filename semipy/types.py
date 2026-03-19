@@ -12,10 +12,7 @@ def session_id_from_filename(filename: str) -> str:
     if not filename or filename == "<unknown>":
         return hashlib.sha256(b"<unknown>").hexdigest()[:16]
     normalized = filename.replace("\\", "/").strip().lower()
-    if "/" in normalized:
-        base = normalized.split("/")[-1]
-    else:
-        base = normalized
+    base = normalized.split("/")[-1] if "/" in normalized else normalized
     if base.endswith(".py"):
         base = base[:-3]
     if not base:
@@ -28,10 +25,7 @@ def session_module_name_from_filename(filename: str) -> str:
     if not filename or filename == "<unknown>":
         return "unknown"
     normalized = filename.replace("\\", "/").strip()
-    if "/" in normalized:
-        base = normalized.split("/")[-1]
-    else:
-        base = normalized
+    base = normalized.split("/")[-1] if "/" in normalized else normalized
     if base.endswith(".py"):
         base = base[:-3]
     return base or "unknown"
@@ -39,7 +33,7 @@ def session_module_name_from_filename(filename: str) -> str:
 
 @dataclass(frozen=True)
 class SemiCallSite:
-    """Identifies where semi() is called for cache and context lookup."""
+    """Identifies where semi() is called for diagnostics and standalone slot ids."""
 
     filename: str
     lineno: int
@@ -52,54 +46,36 @@ class SemiCallSite:
         return hashlib.sha256(key.encode()).hexdigest()[:16]
 
 
-@dataclass
-class TemplatePart:
-    """One segment of a decomposed f-string: either literal or variable."""
+class SlotCategory(Enum):
+    """Durable slot category derived from where an open region lives."""
 
-    is_literal: bool
-    value: str  # literal text or the source expression for variable
-
-
-@dataclass
-class PromptTemplate:
-    """Decomposed f-string: literal parts and variable expressions for cache keying."""
-
-    template_parts: list[TemplatePart]
-    variable_names: list[str]  # names for generated function params (v0, c1, ...)
-    variable_expressions: list[str] = field(default_factory=list)  # source code to eval at runtime
+    EXPRESSION = "expression"  # inline semi(...) inside @semiformal
+    EXPRESSION_STANDALONE = "standalone"  # semi(...) outside @semiformal
+    STATEMENT_BLOCK = "statement"  # a #> block producing named locals
+    FUNCTION_BODY = "function_body"  # whole @semiformal body (no #> found)
 
 
-def _template_hash_for_usage(template_parts: list[TemplatePart], constant_values: dict[str, Any]) -> str:
-    """Stable hash for template + constants."""
-    import json
-    try:
-        const_ser = json.dumps(constant_values, sort_keys=True, default=repr)
-    except Exception:
-        const_ser = repr(sorted(constant_values.items()))
-    parts_ser = json.dumps([(p.is_literal, p.value) for p in template_parts], sort_keys=True)
-    raw = f"{parts_ser}|{const_ser}"
-    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+def _stable_slot_hash(key: str) -> str:
+    return hashlib.sha256(key.encode()).hexdigest()[:16]
 
 
 @dataclass(frozen=True)
-class Usage:
-    """A single semi() call site with concrete prompt (literal parts + variable bindings)."""
+class SlotSpec:
+    """Durable specification for one open region (one LLM generation unit)."""
 
-    call_site: SemiCallSite
-    template: PromptTemplate
-    constant_values: dict[str, Any]  # param/precomputed values that are part of cache key
-    expected_type: type = type(None)  # when set, included in usage_id so value vs function style get distinct cache
-
-    def usage_id(self) -> str:
-        """Stable id for this usage (site_id + template_hash with constants + expected_type when set)."""
-        th = _template_hash_for_usage(
-            list(self.template.template_parts),
-            self.constant_values,
-        )
-        type_suffix = ""
-        if self.expected_type is not None and self.expected_type is not type(None):
-            type_suffix = f":{getattr(self.expected_type, '__name__', repr(self.expected_type))}"
-        return f"{self.call_site.site_id}:{th}{type_suffix}"
+    slot_id: str
+    source_span: tuple[str, int, int]
+    spec_text: str
+    spec_hash: str
+    free_variables: list[str]
+    control_context: str
+    expected_category: SlotCategory
+    expected_type: Any
+    output_names: list[str]
+    formal_constraints: list[str]
+    usage_hints: list[str]
+    enclosing_function_source: str
+    enclosing_function_qualname: str
 
 
 @dataclass
@@ -114,80 +90,54 @@ class CacheEntry:
     tool_calls_made: Optional[list[str]] = None
 
 
-@dataclass
-class SemiCallSiteInfo:
-    """Per-call-site template and type info from decorator analysis (inline semi(f\"...\"))."""
-
-    call_site: SemiCallSite
-    template: PromptTemplate
-    expected_type: type
-    loop_variant_names: list[str]  # which variable_names are loop-variant (function params)
-    usage_hint: str = ""
-
-
-@dataclass
-class NamedCallSiteInfo:
-    """Per-call-site info for semi.name(...) from decorator analysis."""
-
-    call_site: SemiCallSite
-    method_name: str
-    template: PromptTemplate
-    expected_type: type
-    loop_variant_names: list[str]
-    kwarg_names: list[str]
-    usage_hint: str = ""
-
-
-@dataclass
-class SemiformalContext:
-    """Context set by @semiformal decorator for the duration of the call."""
-
-    func_name: str
-    source_code: str
-    type_hints: dict[str, Any]
-    semi_call_sites: list[SemiCallSiteInfo] = field(default_factory=list)
-    named_call_sites: list[NamedCallSiteInfo] = field(default_factory=list)
-    first_lineno: int = 1  # file line number where function source starts
-
-
 class Decision(Enum):
-    """Resolution decision: how this invocation was satisfied (reuse vs new commit)."""
+    """Resolution decision: how this slot implementation was satisfied."""
 
     REUSE = "reuse"
-    ADAPT = "adapt"  # same structure, adapt from parent commit (e.g. new prompt/constants)
-    COMPOSE = "compose"  # compose from library primitive matching template/semantics
+    ADAPT = "adapt"
+    COMPOSE = "compose"
     FORK = "fork"
     GENERATE = "generate"
     MERGE = "merge"
 
 
 @dataclass
+class SemiformalContext:
+    """Context set by @semiformal for the duration of a call."""
+
+    func_name: str
+    source_code: str
+    type_hints: dict[str, Any]
+    first_lineno: int
+    slot_specs: list[SlotSpec]
+    scaffold_source: str
+
+
+@dataclass
 class GenerationSpec:
-    """Input to the agent for one generation request."""
+    """Input to the agent for one slot generation request."""
 
     prompt: str
     call_site: SemiCallSite
-    template: Optional[PromptTemplate]
-    context: Optional[SemiformalContext]
-    expected_type: type
-    sample_input: Optional[dict[str, Any]] = None
-    constant_values: Optional[dict[str, Any]] = None
-    variable_values: Optional[dict[str, Any]] = None
-    require_external_tools: bool = False
+    expected_type: Any
     decision: Optional[Decision] = None
+
     parent_sources: Optional[list[str]] = None
     parent_commit_ids: Optional[list[str]] = None
     lineage_summary: Optional[str] = None
-    method_name: Optional[str] = None  # for semi.name(...) named calls
-    usage_hint: str = ""
-    caller_locals: Optional[dict[str, Any]] = None  # snapshot of caller frame locals
-    source_file_imports: Optional[list[str]] = None  # module-level import statements
-    upstream_lineage: Optional[list[tuple[str, str]]] = None  # list of (session_id, slot_id) from upstream data
-    downstream_requirements: Optional[dict[str, Any]] = None  # requirements from downstream (e.g. required_columns)
-    user_source_code: Optional[str] = None  # full source of user's file (for gist building)
-    enclosing_function_source: Optional[str] = None  # source of the @semiformal function
-    related_source_segments: Optional[list[str]] = None  # AST-extracted enclosing + definitions (standalone semi)
-    library_context: Optional[str] = None  # text block of relevant library primitives for the agent
+
+    slot_spec: SlotSpec | None = None
+    scaffold_source: str | None = None
+    sibling_slot_ids: list[str] | None = None
+    sample_input: dict[str, Any] | None = None
+
+    source_file_imports: list[str] | None = None
+    upstream_lineage: Optional[list[tuple[str, str]]] = None
+    downstream_requirements: Optional[dict[str, Any]] = None
+    enclosing_function_source: str | None = None
+
+    # kept for agent tooling / gist validation
+    user_source_code: Optional[str] = None
 
 
 @dataclass
@@ -219,26 +169,11 @@ class SemiGenerationError(Exception):
 
 
 def _interpret_semi_call_cause(cause: BaseException) -> tuple[str, str]:
-    """From the underlying exception, return (what_went_wrong, fix_hint) for the debugger summary."""
+    """From the underlying exception, return (what_went_wrong, fix_hint)."""
     msg = str(cause).strip()
     what = msg
     fix = "Adjust your semi() prompt or the generated implementation so the return value matches what the callee expects."
-    if "is not a valid value for" in msg and "supported values are" in msg:
-        try:
-            import re
-            m = re.search(r"supported values are ([^.]+)", msg, re.IGNORECASE)
-            supported = (m.group(1).strip() if m else "").strip("'\" ")
-            m2 = re.search(r"^(.+?) is not a valid value", msg)
-            raw = m2.group(1).strip() if m2 else ""
-            if raw.startswith("{") and "}" in raw:
-                received = "a dict (e.g. kwargs). The callee expects a single value, not a dict."
-            else:
-                received = raw if len(raw) <= 60 else raw[:57] + "..."
-            what = f"The callee expects one of {supported}, but received: {received}"
-            fix = f"Make your semi() return one of {supported} (e.g. a string), not a dict."
-        except Exception:
-            pass
-    elif "must be an instance of" in msg or ("must be" in msg and "not" in msg):
+    if "must be an instance of" in msg or ("must be" in msg and "not" in msg):
         what = msg
         fix = "Make your semi() return the type the callee expects (see the error above)."
     return (what, fix)
@@ -250,6 +185,7 @@ def _read_source_line(filename: str, lineno: int) -> Optional[str]:
         return None
     try:
         from pathlib import Path
+
         path = Path(filename).resolve()
         if not path.exists():
             return None
@@ -267,6 +203,7 @@ def _read_source_lines(path: str, start_line: int, end_line: int, max_lines: int
         return []
     try:
         from pathlib import Path
+
         p = Path(path).resolve()
         if not p.exists():
             return []
@@ -287,6 +224,7 @@ def _relative_path_display(path: str, max_len: int = 64) -> str:
     """Return path relative to cwd for display."""
     try:
         from pathlib import Path
+
         p = Path(path).resolve()
         try:
             s = str(p.relative_to(Path.cwd()))
@@ -298,7 +236,7 @@ def _relative_path_display(path: str, max_len: int = 64) -> str:
 
 
 class SemiCallError(Exception):
-    """Raised when a generated semi() function raises at runtime. Includes a debugger-style summary."""
+    """Raised when a generated semi() function raises at runtime."""
 
     def __init__(
         self,
@@ -368,7 +306,7 @@ class SemiCallError(Exception):
 
 
 # Protocol for deterministic tools run by the agent (e.g. code analyzer, checker).
-# Called after each validation failure with (spec, source, result); returns structured info for logging.
+# Called after each validation failure with (spec, source, result).
 SemiToolResult = dict[str, Any]
 SemiTool = Callable[[GenerationSpec, str, ValidationResult], SemiToolResult]
 
