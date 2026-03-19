@@ -12,7 +12,14 @@ from semipy.history import Branch, Commit, Portal, Slot
 
 def _source_with_function_name(source: str, fn_name: str) -> str:
     """Rename the first function definition in source to fn_name so dispatch lookup works."""
-    return re.sub(r"\bdef\s+\w+\s*\(", f"def {fn_name}(", source.strip(), count=1)
+    s = source.strip()
+
+    # Handle both `def` and `async def` emitted by the model.
+    def _repl(m: re.Match[str]) -> str:
+        async_kw = m.group(1) or ""
+        return f"{async_kw}def {fn_name}("
+
+    return re.sub(r"\b(async\s+)?def\s+\w+\s*\(", _repl, s, count=1)
 
 
 def _dispatch_source_only(source: str) -> str:
@@ -179,7 +186,14 @@ def save_portal(cache_dir: Path, portal: Portal) -> None:
 
 def function_name_for_commit(slot: Slot, commit: Commit) -> str:
     """Function name in dispatch module: base_commitid (8 chars)."""
-    base = slot.function_name_base
+    base = slot.function_name_base or "slot"
+    # Sanitize in case base contains notebook placeholders like "<lambda>".
+    base = base.strip().replace("<", "").replace(">", "")
+    base = re.sub(r"[^0-9a-zA-Z_]", "_", base)
+    if not base:
+        base = "slot"
+    if base[0].isdigit():
+        base = "_" + base
     short = commit.commit_id[:8]
     return f"{base}_{short}"
 
@@ -324,3 +338,51 @@ def load_function_from_dispatch(
     ns = module_cache[key]
     fn2 = ns.get(function_name)
     return fn2 if callable(fn2) and not isinstance(fn2, type) else None
+
+
+def load_function_from_dispatch_by_slot_id(
+    cache_dir: Path,
+    module_name: str,
+    slot_id: str,
+    module_cache: dict[str, dict[str, Any]],
+) -> Optional[Callable[..., Any]]:
+    """
+    More robust dispatch lookup: load the module namespace and resolve
+    the function name via DISPATCH[slot_id].
+    """
+    path = _dispatch_module_path(cache_dir, module_name)
+    if not path.exists():
+        return None
+
+    key = module_name
+
+    def _load() -> dict[str, Any]:
+        ns: dict[str, Any] = {}
+        exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), ns)
+        return ns
+
+    if key not in module_cache:
+        try:
+            module_cache[key] = _load()
+        except Exception:
+            return None
+
+    ns = module_cache[key]
+    dispatch = ns.get("DISPATCH", None)
+    if not isinstance(dispatch, dict):
+        # reload once in case the module changed
+        try:
+            module_cache[key] = _load()
+        except Exception:
+            return None
+        ns = module_cache[key]
+        dispatch = ns.get("DISPATCH", None)
+
+    if not isinstance(dispatch, dict):
+        return None
+
+    fn_name = dispatch.get(slot_id)
+    if not fn_name or not isinstance(fn_name, str):
+        return None
+    fn = ns.get(fn_name)
+    return fn if callable(fn) and not isinstance(fn, type) else None

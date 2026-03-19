@@ -123,6 +123,22 @@ def _profile_sequence(name: str, value: Any, budget: int) -> str:
         lines.append(f"  type distribution: {types}")
     except Exception:
         lines.append("  (sample skipped)")
+
+    # If this is a pandas-like Series/collection, prefer a small unique sample.
+    try:
+        uniq_fn = getattr(value, "unique", None)
+        if callable(uniq_fn):
+            head = value
+            try:
+                head = value.head(200)  # type: ignore[attr-defined]
+            except Exception:
+                # Keep `value` as-is if head isn't available.
+                head = value
+            uniq = list(uniq_fn(head))  # type: ignore[misc]
+            uniq = uniq[:50]
+            lines.append(f"  unique_sample (<=50 from head): {uniq}")
+    except Exception:
+        pass
     return _truncate("\n".join(lines), budget)
 
 

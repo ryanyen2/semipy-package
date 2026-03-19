@@ -30,6 +30,7 @@ from semipy.reactivity import (
 from semipy.resolver import resolve
 from semipy.store import (
     function_name_for_commit,
+    load_function_from_dispatch_by_slot_id,
     load_function_from_dispatch,
     load_portal,
     save_portal,
@@ -48,6 +49,27 @@ from semipy.types import (
 )
 
 _dispatch_globals_cache: dict[str, dict[str, Any]] = {}
+
+
+def _sanitize_identifier(s: str) -> str:
+    # Ensure generated dispatch function names are valid Python identifiers.
+    # Replace common placeholders like "<lambda>".
+    if not s:
+        return "slot"
+    s = s.strip()
+    s = s.replace("<", "").replace(">", "")
+    out_chars: list[str] = []
+    for ch in s:
+        if ch.isalnum() or ch == "_":
+            out_chars.append(ch)
+        else:
+            out_chars.append("_")
+    out = "".join(out_chars)
+    if not out:
+        out = "slot"
+    if out[0].isdigit():
+        out = "_" + out
+    return out
 
 
 def _extract_source_file_imports(filename: str) -> list[str]:
@@ -77,6 +99,7 @@ def _call_site_from_slot(slot_spec: SlotSpec) -> SemiCallSite:
 
 def _function_name_base(slot_spec: SlotSpec) -> str:
     base = (slot_spec.enclosing_function_qualname or "slot").replace(".", "_")
+    base = _sanitize_identifier(base)
     return f"{base}_slot_{slot_spec.slot_id[:8]}"
 
 
@@ -253,39 +276,53 @@ def execute_slot(
                 _dispatch_globals_cache.pop(module_name, None)
                 fn = load_function_from_dispatch(cache_dir, module_name, fn_name, _dispatch_globals_cache)
             if fn is None:
-                raise RuntimeError(f"Dispatch function not found: {fn_name}")
-            result = _call_generated_fn(
-                fn=fn,
-                slot_spec=slot_spec,
-                runtime_values=runtime_values,
-                prompt_preview=slot_spec.spec_text,
-                generated_path=str(dispatch_path),
-            )
+                # Fall back to resolving by DISPATCH[slot_id] mapping.
+                fn = load_function_from_dispatch_by_slot_id(
+                    cache_dir,
+                    module_name,
+                    slot_spec.slot_id,
+                    _dispatch_globals_cache,
+                )
+            if fn is None:
+                # Cache inconsistency: dispatch module can't be executed (e.g. invalid function names).
+                # Force regeneration so we rewrite dispatch with the current naming/sanitization.
+                force_regenerate = True
+            else:
+                result = _call_generated_fn(
+                    fn=fn,
+                    slot_spec=slot_spec,
+                    runtime_values=runtime_values,
+                    prompt_preview=slot_spec.spec_text,
+                    generated_path=str(dispatch_path),
+                )
 
-            if dep_graph is not None:
-                upstream_chain: list[SlotRef] = []
-                for val in runtime_values.values():
-                    flow = extract_flow(val)
-                    if flow is not None:
-                        upstream_chain.append(flow.producing_slot)
-                try:
-                    setattr(
-                        result,
-                        FLOW_ATTR,
-                        create_flow(
-                            session_id=session_id,
-                            slot_id=slot_spec.slot_id,
-                            commit_id=commit.commit_id,
-                            upstream_chain=upstream_chain,
-                            output_profile=profile_output(result),
-                        ),
-                    )
-                except (TypeError, AttributeError):
-                    pass
-                update_slot_commit(dep_graph, current_slot_ref, commit.commit_id)
-                clear_stale(dep_graph, current_slot_ref)
-                save_dependency_graph(cache_dir, dep_graph)
-            return result
+                if dep_graph is not None:
+                    upstream_chain: list[SlotRef] = []
+                    for val in runtime_values.values():
+                        flow = extract_flow(val)
+                        if flow is not None:
+                            upstream_chain.append(flow.producing_slot)
+                    try:
+                        setattr(
+                            result,
+                            FLOW_ATTR,
+                            create_flow(
+                                session_id=session_id,
+                                slot_id=slot_spec.slot_id,
+                                commit_id=commit.commit_id,
+                                upstream_chain=upstream_chain,
+                                output_profile=profile_output(result),
+                            ),
+                        )
+                    except (TypeError, AttributeError):
+                        pass
+                    update_slot_commit(dep_graph, current_slot_ref, commit.commit_id)
+                    clear_stale(dep_graph, current_slot_ref)
+                    save_dependency_graph(cache_dir, dep_graph)
+                return result
+
+        if force_regenerate:
+            resolution = resolve(portal, slot_spec, force_regenerate=True)
 
     # ADAPT / GENERATE
     generation_spec = build_generation_spec(
@@ -335,6 +372,8 @@ def execute_slot(
     fn_name = function_name_for_commit(slot, commit)
     dispatch_path = _dispatch_module_path(cache_dir, module_name)
     fn = load_function_from_dispatch(cache_dir, module_name, fn_name, _dispatch_globals_cache)
+    if fn is None:
+        fn = load_function_from_dispatch_by_slot_id(cache_dir, module_name, slot.slot_id, _dispatch_globals_cache)
     if fn is None:
         fn = entry.compiled_fn
     if fn is None:

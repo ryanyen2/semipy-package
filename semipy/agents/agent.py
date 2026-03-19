@@ -54,7 +54,7 @@ from semipy.types import (
     SemiTool,
     ValidationResult,
 )
-from semipy.agents.profiler import profile_value
+from semipy.agents.profiler import profile_runtime_context, profile_value
 from semipy.agents.validator import validate, _extract_function_source
 
 
@@ -167,18 +167,19 @@ class SemiAgent:
         return profile_value(name, value)
 
     def _describe_context(self, spec: GenerationSpec) -> str:
-        # In the new architecture, runtime values are passed to the generated function via
-        # scaffold slot proxies. We only provide lightweight hints here; the agent can call
-        # get_runtime_data_context() if it needs deeper structure.
+        # Provide deterministic profiling of runtime values directly in the prompt.
+        # This reduces reliance on the model deciding when to call tools.
         if not spec.sample_input or not isinstance(spec.sample_input, dict):
             return ""
-        args = spec.sample_input.get("args", ()) or ()
-        parts: list[str] = []
-        if isinstance(args, (list, tuple)) and args:
-            parts.append("Argument types:")
-            for i, v in enumerate(args):
-                parts.append(f"  - arg{i}: {type(v).__name__}")
-        return "\n".join(parts) if parts else ""
+        runtime_values = spec.sample_input.get("runtime_values", None)
+        if not isinstance(runtime_values, dict) or not runtime_values:
+            return ""
+        return "Runtime data profile:\n" + profile_runtime_context(
+            locals_dict={},
+            variable_values=runtime_values,
+            total_budget=12000,
+            collection_budget=7000,
+        )
 
     def _build_user_prompt(self, spec: GenerationSpec) -> str:
         def _expected_str() -> str:
