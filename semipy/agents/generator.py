@@ -309,6 +309,7 @@ Rules:
 - Wrap the function in a ```python code block.
 - The function must be pure Python unless the request clearly suggests external interaction (e.g. fetching data). Use standard library or requests; do not rely on built-in domain-specific tools unless the prompt explicitly asks for them.
 - Parameters: all values described in the prompt are passed as positional arguments. The function MUST accept and use all positional arguments. Do NOT hardcode any constant values from the prompt. The first argument is typically the value that changes per invocation; the rest are fixed context for this call.
+- Gist sandbox calls may pass None for non-primitive arguments (e.g. a method's `self` placeholder). Do not assume a real instance; use only the primitive parameters you need, or branch on None and still return a valid value for validation.
 - Your function is invoked repeatedly (once per row, per element, or per item). The first argument is one value from a column or collection. Implement so the function works for every possible value in that column/collection, not only the single example you may see in get_runtime_data_context. Do not hardcode the sample value (e.g. one date or one country name).
 - Return type: match exactly what the user needs (bool for conditions, str for text, int/float for numbers, or the described type). Prefer a typed signature when the return type is known (e.g. def f(row, c3) -> bool:). The pipeline preserves type annotations.
 - Handle edge cases: None, missing keys, empty data. Prefer safe defaults over raising.

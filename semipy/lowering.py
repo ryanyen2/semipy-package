@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import ast
+import builtins
 import hashlib
 import textwrap
 from dataclasses import dataclass
 from typing import Any, Optional
 
 from semipy.types import Decision, SlotCategory, SlotSpec, SemiCallSite, _stable_slot_hash
+
+# Names from the builtins module are never slot parameters (avoid len, range, max, ...).
+_BUILTIN_NAMES: frozenset[str] = frozenset(vars(builtins))
 
 
 def _sha16(s: str) -> str:
@@ -347,7 +351,7 @@ def scan_informal_specs(
             bound_before = _bound_names_before(fn_def, rel_lineno)
             loaded_in_call = _loaded_names(node)
             # Exclude the semi() symbol itself; scaffold will replace semi() with __slot_N__.
-            free_var_set = (bound_before | loaded_in_call) - {"semi"}
+            free_var_set = (bound_before | loaded_in_call) - {"semi"} - _BUILTIN_NAMES
             free_vars = _ordered_vars_from_fn(fn_def, free_var_set)
 
             control_context = _control_context_for_line(fn_def, rel_lineno, func_qualname)
@@ -404,16 +408,17 @@ def scan_informal_specs(
 
         formal_constraints = _extract_formal_constraint_lines(source_lines, indent, block_end_idx)
 
-        loaded_in_region: set[str] = set()
+        # Only names already bound before the statement after the #> block are slot inputs.
+        # Do not scan later statements: that pulls in builtins and unrelated names (semi, ticker, ax)
+        # from loops below and blows up the generated signature.
         assigned_in_region: set[str] = set()
         for stmt in fn_def.body:
             stmt_lineno = getattr(stmt, "lineno", 0) or 0
             if stmt_lineno > block_end_rel:
                 if stmt_lineno > block_end_rel + 20:
                     break
-                loaded_in_region |= _loaded_names(stmt)
                 assigned_in_region |= _assigned_names(stmt)
-        free_var_set = (bound_before | loaded_in_region) - assigned_in_region - set(output_names)
+        free_var_set = bound_before - assigned_in_region - set(output_names) - _BUILTIN_NAMES
         free_vars = _ordered_vars_from_fn(fn_def, free_var_set)
 
         control_context = _control_context_for_line(fn_def, block_end_rel, func_qualname)

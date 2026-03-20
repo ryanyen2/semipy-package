@@ -14,6 +14,29 @@ from typing import Any, Optional
 from semipy.types import GenerationSpec
 
 
+def _expr_for_gist_invocation(value: Any) -> str:
+    """
+    Build a Python expression string for embedding in generated gist source.
+    repr() of arbitrary objects (e.g. class instances) is not valid Python when pasted
+    as a call argument; use literals for primitives and None for everything else.
+    """
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return repr(value)
+    if isinstance(value, bytes):
+        return repr(value)
+    if isinstance(value, tuple):
+        inner = ", ".join(_expr_for_gist_invocation(x) for x in value)
+        if len(value) == 1:
+            return f"({inner},)"
+        return f"({inner})"
+    if isinstance(value, list):
+        return "[" + ", ".join(_expr_for_gist_invocation(x) for x in value) + "]"
+    if isinstance(value, dict):
+        parts = [f"{_expr_for_gist_invocation(k)}: {_expr_for_gist_invocation(v)}" for k, v in value.items()]
+        return "{" + ", ".join(parts) + "}"
+    return "None"
+
+
 def _get_names_used(node: ast.AST) -> set[str]:
     """Collect all name ids read from an AST node (for dependency tracking)."""
     names: set[str] = set()
@@ -255,15 +278,15 @@ def _build_test_invocation(spec: GenerationSpec, fn_name: str) -> str:
         args = sample.get("args", ())
         kwargs = sample.get("kwargs", {})
         if args or kwargs:
-            args_str = ", ".join(repr(a) for a in args)
+            args_str = ", ".join(_expr_for_gist_invocation(a) for a in args)
             if kwargs:
-                args_str += ", " + ", ".join(f"{k}={repr(v)}" for k, v in kwargs.items())
+                args_str += ", " + ", ".join(f"{k}={_expr_for_gist_invocation(v)}" for k, v in kwargs.items())
             return f"{marker} = {fn_name}({args_str})\nprint({repr(marker)}, repr({marker}), flush=True)"
     variable_values = getattr(spec, "variable_values", None) or {}
     if variable_values:
         ordered = getattr(spec.template, "variable_names", []) if spec.template else []
         if ordered:
             vals = [variable_values.get(n, None) for n in ordered]
-            args_str = ", ".join(repr(v) for v in vals)
+            args_str = ", ".join(_expr_for_gist_invocation(v) for v in vals)
             return f"{marker} = {fn_name}({args_str})\nprint({repr(marker)}, repr({marker}), flush=True)"
     return f"{marker} = {fn_name}()\nprint({repr(marker)}, repr({marker}), flush=True)"
