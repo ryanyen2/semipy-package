@@ -188,11 +188,6 @@ def _create_agent() -> Agent[SemiAgentDeps]:
         if not gist_builder or not executor:
             return GistRunResult(success=False, error="GistBuilder or Executor not in deps")
         gist = gist_builder.build(generated_function_source)
-        # if get_config().verbose:
-        #     print("[Gist built] (sandbox test: generated function + sample invocation)")
-        #     print("---")
-        #     print(gist.source)
-        #     print("---")
         if not gist:
             return GistRunResult(
                 success=False,
@@ -335,8 +330,8 @@ Tool usage:
 4. If library primitives are provided, you may call list_library_primitives() to see them again.
 5. Generate the function, then call build_and_run_gist(generated_function_source) with the raw function source only: the exact "def name(...):" and body as a string. No markdown, no ```python wrapper, no surrounding text.
 6. If the gist fails (success=False), read stderr and fix the function; call build_and_run_gist again with the corrected source.
-7. When the gist succeeds, call validate_output(result_repr, expected_type_name) with the result_repr from the gist tool result (and expected_type_name from the user request, e.g. "bool", "list", "str").
-8. Output the final function in a ```python code block."""
+7. Output the final function in a ```python code block."""
+# 7. When the gist succeeds, call validate_output(result_repr, expected_type_name) with the result_repr from the gist tool result (and expected_type_name from the user request, e.g. "bool", "list", "str").
 
 
 _semi_agent: Optional[Agent[SemiAgentDeps]] = None

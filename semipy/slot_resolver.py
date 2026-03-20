@@ -12,6 +12,7 @@ from semipy.history.version_control import (
     create_commit,
     freeze_constants,
 )
+from semipy.session_anchor import resolve_portal_anchor
 from semipy.reactivity import (
     FLOW_ATTR,
     SlotRef,
@@ -236,10 +237,11 @@ def execute_slot(
     - attach DataFlow to result for downstream inference
     """
     config = get_config()
-    session_id = session_id_from_filename(source_file)
-    module_name = session_module_name_from_filename(source_file)
+    portal_anchor = resolve_portal_anchor(source_file)
+    session_id = session_id_from_filename(portal_anchor)
+    module_name = session_module_name_from_filename(portal_anchor)
 
-    portal = load_portal(cache_dir, session_id, source_file, module_name)
+    portal = load_portal(cache_dir, session_id, portal_anchor, module_name)
     slot = _ensure_slot(portal, slot_spec)
 
     dep_graph = _get_dep_graph(cache_dir) if getattr(config, "reactive", True) else None

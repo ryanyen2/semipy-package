@@ -41,6 +41,7 @@ class SemiConfig:
     cocoindex_db_url: str = ""
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     resolution_async_verify: bool = False
+    session_source: Optional[str] = None
 
     def configure(
         self,
@@ -72,6 +73,7 @@ class SemiConfig:
         cocoindex_db_url: Optional[str] = None,
         embedding_model: Optional[str] = None,
         resolution_async_verify: Optional[bool] = None,
+        session_source: Optional[str] = None,
     ) -> None:
         """Update config attributes from the given keyword arguments (only non-None values)."""
         if openrouter_api_key is not None:
@@ -130,6 +132,8 @@ class SemiConfig:
             self.embedding_model = embedding_model
         if resolution_async_verify is not None:
             self.resolution_async_verify = resolution_async_verify
+        if session_source is not None:
+            self.session_source = session_source
 
 
 _config: Optional[SemiConfig] = None

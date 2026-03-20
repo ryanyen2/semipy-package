@@ -21,7 +21,7 @@ class SmartChart:
         n = len(self.data)
 
         #> Given {n} variables, decide subplot grid (rows, cols).
-        return rows, cols
+        return rows, cols  # type: ignore[name-defined]
 
     @semiformal
     def infer_axis_config(self, key: str, values: list[float]) -> dict[str, Any]:
@@ -30,27 +30,24 @@ class SmartChart:
 
         #> Infer axis display config for variable named "{key}" with sample values.
         #> Decide scale, label, and tick density
-        return {"scale": scale, "label": label, "tick_density": tick_density}
+        return {"scale": scale, "label": label, "tick_density": tick_density}  # type: ignore[name-defined]
 
-    @semiformal
+
     def render(self, fig_size: tuple[float, float] | None = None) -> plt.Figure:
         rows, cols = self.infer_layout()
         fig, axes = plt.subplots(rows, cols, figsize=fig_size or (cols * 4, rows * 3))
         axes_flat = [axes] if rows * cols == 1 else list(axes.flat)
-        #> infer color palette based on the domain of the data
 
         for ax, (key, values) in zip(axes_flat, self.data.items()):
-            config = self.infer_axis_config(key, values)
-            ax.set_yscale(config["scale"])
-            ax.set_ylabel(config["label"])
+            ax.set_yscale(semi(f"scale for '{key}' with values {values}"))
+            ax.set_ylabel(semi(f"label for '{key}' with values {values}"))
             ax.plot(range(len(values)), values)
             ax.set_title(key)
 
             tick_fmt: ticker.Formatter = semi(f"tick formatter object for '{key}' with scale={config['scale']}, density={config['tick_density']}, range=[{min(values):.3g}, {max(values):.3g}]. Return a matplotlib.ticker.FuncFormatter axis-independent (do not use ScalarFormatter internals that require an axis). Format numeric ticks into human-friendly strings (respect unit suffix inferred from key like _ppm, _K, _ms). Density controls number of decimals; for 'dense' use more precision, for 'sparse' use fewer decimals.", expected_type=ticker.Formatter)
             ax.yaxis.set_major_formatter(tick_fmt)
 
-            x_label: str = semi(f"x-axis label for a time-series plot of '{key}' with {len(values)} points", expected_type=str)
-            ax.set_xlabel(x_label)
+            ax.set_xlabel('Time Index')
 
         fig.suptitle(self.title)
         fig.tight_layout()
@@ -67,10 +64,10 @@ def main() -> None:
     )
 
     data = {
-        "co2_ppm": [280, 285, 300, 330, 360],
-        "temperature_K": [287, 288, 289.5, 291, 293],
-        "latency_ms": [0.3, 0.5, 0.4, 0.7, 1.2],
-        "pressure_Pa": [101325, 101300, 101280, 101250, 101220],
+        "co2_ppm": [280, 285, 300, 330, 360, 370, 380, 390, 400, 410, 420, 430, 400, 350, 420, 470, 480, 410, 452],
+        "temperature_K": [287, 288, 289.5, 291, 293, 295, 297, 299, 301, 303, 305, 307, 319, 301, 293, 295, 317, 319, 321],
+        "latency_ms": [0.3, 0.5, 0.4, 0.7, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.1, 0.9, 1.0, 3.1, 2.2, 2.3, 2.4, 2.5, 2.6],
+        "pressure_Pa": [101325, 101300, 101280, 101250, 101220, 101190, 101160, 99999, 11111, 101070, 101040, 101010, 100980, 100950, 100920, 100890, 100860, 100820, 100800],
     }
     chart = SmartChart(data=data, title="Inferred Layout + Axis Config")
 
