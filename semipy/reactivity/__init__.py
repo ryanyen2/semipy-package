@@ -20,6 +20,7 @@ from semipy.reactivity.reactive import (
 from semipy.reactivity.flow import (
     DataFlow,
     FLOW_ATTR,
+    attach_producer_flow,
     create_flow,
     extract_flow,
     profile_output,
@@ -49,6 +50,7 @@ __all__ = [
     "SlotRef",
     "DataFlow",
     "FLOW_ATTR",
+    "attach_producer_flow",
     "add_dependency",
     "add_downstream_requirement",
     "clear_stale",

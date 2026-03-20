@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from semipy.models import (
+    DocumentContextResult,
     FileContextResult,
     GistRunResult,
     OutputValidationResult,
@@ -82,6 +83,17 @@ def format_tool_call_line(tool_name: str, args: Any, *, debug: bool = False) -> 
         if sl is not None and el is not None:
             return f"Read file {rel} (lines {sl}-{el})"
         return f"Read file {rel}"
+
+    if tool_name == "read_document_context":
+        fp = args.get("file_path") or ""
+        rel = _relative_file(str(fp))
+        ci = args.get("chunk_index", 0)
+        lh = args.get("layout_heavy")
+        bk = args.get("backend") or "auto"
+        extra = f", {bk}"
+        if lh:
+            extra += ", layout_heavy"
+        return f"Read document {rel} (chunk {ci}{extra})"
 
     if tool_name == "profile_data_and_flow":
         code = args.get("code") or ""
@@ -175,6 +187,18 @@ def _file_context_outcome(fr: FileContextResult) -> tuple[str, bool]:
     return (f"read {n} lines", True)
 
 
+def _document_context_outcome(dr: DocumentContextResult) -> tuple[str, bool]:
+    if not dr.success:
+        return ((dr.error or "failed")[:120], False)
+    n = len((dr.content or "").splitlines())
+    parts = [f"chunk {dr.chunk_index + 1}/{dr.total_chunks}", f"{n} lines"]
+    if dr.page_count is not None:
+        parts.append(f"{dr.page_count} pages")
+    if (dr.source_kind or "").strip():
+        parts.append(dr.source_kind.strip())
+    return ("; ".join(parts), True)
+
+
 def _upstream_outcome(ur: UpstreamContextResult) -> tuple[str, bool]:
     if not ur.success:
         return ((ur.error or "failed")[:120], False)
@@ -202,6 +226,7 @@ def _coerce_to_models(tool_name: str, content: Any) -> Any:
         (OutputValidationResult, ("validate_output",)),
         (ProfileDataResult, ("profile_data_and_flow",)),
         (FileContextResult, ("read_file_context",)),
+        (DocumentContextResult, ("read_document_context",)),
         (UpstreamContextResult, ("read_upstream_context",)),
         (RuntimeDataContextResult, ("get_runtime_data_context",)),
     ):
@@ -235,6 +260,8 @@ def format_tool_result_line(
         return _profile_outcome(coerced)
     if isinstance(coerced, FileContextResult):
         return _file_context_outcome(coerced)
+    if isinstance(coerced, DocumentContextResult):
+        return _document_context_outcome(coerced)
     if isinstance(coerced, UpstreamContextResult):
         return _upstream_outcome(coerced)
     if isinstance(coerced, RuntimeDataContextResult):

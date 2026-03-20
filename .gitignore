@@ -36,3 +36,5 @@ __pycache__/
 rich/
 
 .semiformal*/*
+tests/pdf/*
+eng.traineddata

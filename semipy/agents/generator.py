@@ -2,18 +2,22 @@
 LLM generation via pydantic_ai Agent + OpenAI.
 
 Agent has tools: get_runtime_data_context, profile_data_and_flow, read_upstream_context,
-read_file_context, build_and_run_gist, validate_output. Streaming and reasoning via run_stream_events.
+read_file_context, read_document_context, build_and_run_gist, validate_output. Streaming and reasoning via run_stream_events.
 """
 from __future__ import annotations
 
+import math
 import os
+from pathlib import Path
 from typing import Any, Optional
 
 from pydantic_ai import Agent, RunContext
 
 from semipy.agents.config import get_config
 from semipy.agents.profiler import profile_runtime_context
+from semipy.documents import load_document_text
 from semipy.models import (
+    DocumentContextResult,
     FileContextResult,
     GistRunResult,
     OutputValidationResult,
@@ -180,6 +184,62 @@ def _create_agent() -> Agent[SemiAgentDeps]:
             return FileContextResult(success=False, error=str(e))
 
     @agent.tool
+    async def read_document_context(
+        ctx: RunContext[SemiAgentDeps],
+        file_path: str,
+        chunk_index: int = 0,
+        chunk_size: int = 12000,
+        layout_heavy: bool = False,
+        backend: str = "auto",
+    ) -> DocumentContextResult:
+        """Load document text via semipy document I/O: UTF-8 for text files; PDFs use liteparse and/or LlamaCloud (see semipy.documents.load_document_text). Set layout_heavy true for scanned or layout-heavy PDFs. backend is auto, liteparse, or llama_cloud. Large bodies are chunked; increase chunk_index for more."""
+        try:
+            p = Path(file_path).expanduser().resolve()
+            if not p.exists():
+                return DocumentContextResult(
+                    success=False,
+                    error=f"File not found: {file_path}",
+                )
+            bk = backend if backend in ("auto", "liteparse", "llama_cloud") else "auto"
+            source_kind = "pdf" if p.suffix.casefold() == ".pdf" else "text"
+            try:
+                full_text = load_document_text(
+                    p,
+                    backend=bk,
+                    layout_heavy=layout_heavy,
+                )
+            except Exception as e:
+                return DocumentContextResult(
+                    success=False,
+                    error=str(e),
+                    source_kind=source_kind,
+                )
+            size = max(1000, int(chunk_size))
+            if not full_text:
+                return DocumentContextResult(
+                    success=True,
+                    content="",
+                    page_count=None,
+                    chunk_index=0,
+                    total_chunks=1,
+                    source_kind=source_kind,
+                )
+            total_chunks = max(1, math.ceil(len(full_text) / size))
+            idx = max(0, min(int(chunk_index), total_chunks - 1))
+            start = idx * size
+            chunk = full_text[start : start + size]
+            return DocumentContextResult(
+                success=True,
+                content=chunk,
+                page_count=None,
+                chunk_index=idx,
+                total_chunks=total_chunks,
+                source_kind=source_kind,
+            )
+        except Exception as e:
+            return DocumentContextResult(success=False, error=str(e))
+
+    @agent.tool
     async def build_and_run_gist(ctx: RunContext[SemiAgentDeps], generated_function_source: str) -> GistRunResult:
         """Assemble a minimal runnable gist (user context + generated function), execute in sandbox, return stdout/stderr/result. Call this to test your generated function."""
         deps = ctx.deps
@@ -327,10 +387,11 @@ Tool usage:
 1. When the prompt refers to data (e.g. a column, a table, a file, a URL), call get_runtime_data_context() first. Tables/collections are listed first with full column value distributions; any scalar is labeled as one sample. Your implementation must work for all values in the data (all dates, all countries, etc.), not just that sample. Use this for any domain (tables, PDFs, URLs, dicts, etc.).
 2. If the spec contains data variables or sample data, you may call profile_data_and_flow(code, working_dir?) to get data profile and flow.
 3. If adapting from a parent, call read_upstream_context() to read parent sources.
-4. If library primitives are provided, you may call list_library_primitives() to see them again.
-5. Generate the function, then call build_and_run_gist(generated_function_source) with the raw function source only: the exact "def name(...):" and body as a string. No markdown, no ```python wrapper, no surrounding text.
-6. If the gist fails (success=False), read stderr and fix the function; call build_and_run_gist again with the corrected source.
-7. Output the final function in a ```python code block."""
+4. If the prompt references a PDF or document on disk, call read_document_context(file_path, chunk_index=0, chunk_size=...) and, if total_chunks>1, additional chunks as needed.
+5. If library primitives are provided, you may call list_library_primitives() to see them again.
+6. Generate the function, then call build_and_run_gist(generated_function_source) with the raw function source only: the exact "def name(...):" and body as a string. No markdown, no ```python wrapper, no surrounding text.
+7. If the gist fails (success=False), read stderr and fix the function; call build_and_run_gist again with the corrected source.
+8. Output the final function in a ```python code block."""
 # 7. When the gist succeeds, call validate_output(result_repr, expected_type_name) with the result_repr from the gist tool result (and expected_type_name from the user request, e.g. "bool", "list", "str").
 
 

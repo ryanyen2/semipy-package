@@ -6,11 +6,12 @@ and caches a Python function via an agentic pipeline (OpenRouter + pydantic_ai);
 later runs reuse the cached implementation.
 """
 from semipy.decorator import semiformal
+from semipy.documents import load_document_text
 from semipy.semi_fn import semi
 from semipy.agents.config import SemiConfig, configure, get_config
 from semipy.types import Decision, SemiCallError, SemiGenerationError, compute_spec_equivalence_key
 from semipy.agents.tools import register_tool, parse_tool_refs
-from semipy.reactivity import DependencyGraph, SlotRef, DataFlow
+from semipy.reactivity import DependencyGraph, SlotRef, DataFlow, attach_producer_flow
 from semipy.library import (
     load_library,
     run_sleep_phase,
@@ -22,6 +23,7 @@ from semipy.agents.gist import GistBuilder, Gist
 from semipy.agents.executor import GistExecutor, ExecutionResult
 from semipy.models import (
     SemiAgentDeps,
+    DocumentContextResult,
     ProfileDataResult,
     GistRunResult,
     OutputValidationResult,
@@ -30,6 +32,7 @@ from semipy.models import (
 __all__ = [
     "semiformal",
     "semi",
+    "load_document_text",
     "SemiConfig",
     "configure",
     "get_config",
@@ -42,6 +45,8 @@ __all__ = [
     "DependencyGraph",
     "SlotRef",
     "DataFlow",
+    "attach_producer_flow",
+    "DocumentContextResult",
     "GistBuilder",
     "Gist",
     "GistExecutor",

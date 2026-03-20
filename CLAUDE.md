@@ -17,6 +17,7 @@ uv sync
 source .venv/bin/activate
 uv run python examples/use_csv_kit.py
 uv run python examples/use_weather_kit.py
+uv run python examples/use_contract_intelligence.py
 pytest  # use: uv sync --extra dev first
 ```
 
@@ -42,10 +43,10 @@ Pipeline messages use plain language (e.g. “No reusable implementation; creati
 
 ## Package layout
 
-- **Root** (`semipy/`): `types.py`, `models.py`, `decorator.py`, `template.py`, `semi_fn.py`, `resolver.py`, `store.py`. Entry point and core types; no subpackage imports for these.
+- **Root** (`semipy/`): `types.py`, `models.py`, `decorator.py`, `template.py`, `semi_fn.py`, `resolver.py`, `store.py`, `documents.py` (`load_document_text`: PDF via liteparse and/or LlamaCloud). Entry point and core types; no subpackage imports for these.
 - **agents/** (`semipy/agents/`): Agentic pipeline: config, agent, generator, gist, executor, validator, profiler, tools, console_io, console_messages (tool line formatters), console_view (terminal Live timeline + peek), compiler, resolution_advisor (optional cross-slot reuse check). All LLM, tools, validation, and UX live here.
 - **history/** (`semipy/history/`): Version control (Merkle DAG): `version_control.py` with Commit, Branch, Slot, Portal; create_commit, add_commit_to_slot, walk_history, find_branch_by_fingerprint, etc.
-- **reactivity/** (`semipy/reactivity/`): Data flow and reactive invalidation: `reactive.py` (DependencyGraph, SlotRef, add_dependency, is_stale, mark_downstream_stale, persistence); `flow.py` (DataFlow, create_flow, extract_flow, profile_output).
+- **reactivity/** (`semipy/reactivity/`): Data flow and reactive invalidation: `reactive.py` (DependencyGraph, SlotRef, add_dependency, is_stale, mark_downstream_stale, persistence); `flow.py` (DataFlow, create_flow, extract_flow, profile_output, `attach_producer_flow` so list outputs can carry `_semi_flow` for downstream slot edges).
 
 ## Architecture
 
@@ -62,7 +63,7 @@ Pipeline messages use plain language (e.g. “No reusable implementation; creati
         -> SemiAgent.generate(spec)  [agents.agent]
           -> pydantic_ai Agent (OpenRouter) with tools [agents.generator]
           -> run_stream_events(prompt, deps) -> streaming (reasoning, tool calls, response)
-          -> tools: profile_data_and_flow, read_upstream_context, read_file_context, build_and_run_gist, validate_output
+          -> tools: profile_data_and_flow, read_upstream_context, read_file_context, read_document_context, build_and_run_gist, validate_output
           -> extract generated_source from deps or response
         -> validate() [agents.validator] -> create_commit [history] -> save_portal -> write_dispatch_module()
         -> load and execute new function
@@ -78,6 +79,7 @@ Pipeline messages use plain language (e.g. “No reusable implementation; creati
 | root | `decorator.py` | @semiformal; source inspection and context injection via contextvars |
 | root | `template.py` | AST-based f-string decomposition; structural fingerprint; loop-variant vs constant variables |
 | root | `semi_fn.py` | semi() entry point; call-site identification, portal/resolver/store flow, agent invocation |
+| root | `documents.py` | `load_document_text`: UTF-8 text files; PDFs via liteparse and/or LlamaCloud (`layout_heavy`, `backend`) |
 | root | `resolver.py` | resolve(portal, usage, fingerprint, constants) -> REUSE / ADAPT / GENERATE (ResolutionResult) |
 | root | `store.py` | load_portal, save_portal, write_dispatch_module, load_function_from_dispatch |
 | agents | `config.py` | SemiConfig; get_config() / configure() |

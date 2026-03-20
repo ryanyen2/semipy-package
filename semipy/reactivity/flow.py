@@ -125,3 +125,35 @@ def _flow_from_inputs(*values: Any) -> Optional[DataFlow]:
 def extract_flow(obj: Any) -> Optional[DataFlow]:
     """Duck-typed extraction of flow from a value."""
     return getattr(obj, FLOW_ATTR, None)
+
+
+class _SemiFlowList(list[Any]):
+    """List subclass so producer flow can be stored (built-in list rejects arbitrary attributes)."""
+
+
+def attach_producer_flow(result: Any, flow: DataFlow) -> Any:
+    """
+    Store *flow* on *result* for dependency tracking.
+
+    Plain ``list`` instances cannot take new attributes; those are wrapped in
+    ``_SemiFlowList`` and the same flow is attached to each element when
+    ``setattr`` succeeds, so downstream slots that receive a single row still
+    see upstream provenance.
+    """
+    if result is None:
+        return result
+    try:
+        setattr(result, FLOW_ATTR, flow)
+        return result
+    except (TypeError, AttributeError):
+        pass
+    if isinstance(result, list):
+        wrapped = _SemiFlowList(result)
+        setattr(wrapped, FLOW_ATTR, flow)
+        for item in wrapped:
+            try:
+                setattr(item, FLOW_ATTR, flow)
+            except (TypeError, AttributeError):
+                pass
+        return wrapped
+    return result

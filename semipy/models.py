@@ -43,6 +43,18 @@ class FileContextResult(BaseModel):
     error: Optional[str] = None
 
 
+class DocumentContextResult(BaseModel):
+    """Result of read_document_context tool (text or PDF via liteparse when available)."""
+
+    success: bool
+    content: str = ""
+    error: Optional[str] = None
+    page_count: Optional[int] = None
+    chunk_index: int = 0
+    total_chunks: int = 1
+    source_kind: str = ""
+
+
 class UpstreamContextResult(BaseModel):
     """Result of read_upstream_context tool (parent implementations)."""
 

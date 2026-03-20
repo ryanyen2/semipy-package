@@ -14,10 +14,10 @@ from semipy.history.version_control import (
 )
 from semipy.session_anchor import resolve_portal_anchor
 from semipy.reactivity import (
-    FLOW_ATTR,
     SlotRef,
     _get_dep_graph,
     add_dependency,
+    attach_producer_flow,
     clear_stale,
     create_flow,
     extract_flow,
@@ -317,20 +317,16 @@ def execute_slot(
                         flow = extract_flow(val)
                         if flow is not None:
                             upstream_chain.append(flow.producing_slot)
-                    try:
-                        setattr(
-                            result,
-                            FLOW_ATTR,
-                            create_flow(
-                                session_id=session_id,
-                                slot_id=slot_spec.slot_id,
-                                commit_id=commit.commit_id,
-                                upstream_chain=upstream_chain,
-                                output_profile=profile_output(result),
-                            ),
-                        )
-                    except (TypeError, AttributeError):
-                        pass
+                    result = attach_producer_flow(
+                        result,
+                        create_flow(
+                            session_id=session_id,
+                            slot_id=slot_spec.slot_id,
+                            commit_id=commit.commit_id,
+                            upstream_chain=upstream_chain,
+                            output_profile=profile_output(result),
+                        ),
+                    )
                     update_slot_commit(dep_graph, current_slot_ref, commit.commit_id)
                     clear_stale(dep_graph, current_slot_ref)
                     save_dependency_graph(cache_dir, dep_graph)
@@ -431,20 +427,16 @@ def execute_slot(
             flow = extract_flow(val)
             if flow is not None:
                 upstream_chain.append(flow.producing_slot)
-        try:
-            setattr(
-                result,
-                FLOW_ATTR,
-                create_flow(
-                    session_id=session_id,
-                    slot_id=slot_spec.slot_id,
-                    commit_id=commit.commit_id,
-                    upstream_chain=upstream_chain,
-                    output_profile=profile_output(result),
-                ),
-            )
-        except (TypeError, AttributeError):
-            pass
+        result = attach_producer_flow(
+            result,
+            create_flow(
+                session_id=session_id,
+                slot_id=slot_spec.slot_id,
+                commit_id=commit.commit_id,
+                upstream_chain=upstream_chain,
+                output_profile=profile_output(result),
+            ),
+        )
 
     return result
 

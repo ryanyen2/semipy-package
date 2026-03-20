@@ -2342,6 +2342,32 @@ wheels = [
 ]
 
 [[package]]
+name = "liteparse"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/41/5a/04430d03e58dc972c62f6a23c720077337da4f6a52ea13a58d252507844f/liteparse-1.0.0.tar.gz", hash = "sha256:437a9470f64948a478ecd75175bf8be25fcbf0614738a06cb27fe27adcd5f9f4", size = 6760, upload-time = "2026-03-19T04:31:53.528Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f7/cd/75731d07c63e0181d5f6369896669a18ca81714c7518a7a9ba4df2fada51/liteparse-1.0.0-py3-none-any.whl", hash = "sha256:27a617049bf66de4057f756157f6151e79d052f918951271aaa38f93657f0c85", size = 7530, upload-time = "2026-03-19T04:31:52.189Z" },
+]
+
+[[package]]
+name = "llama-cloud"
+version = "1.6.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "distro" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/15/bc/72256200ae875bfb352a1043a6008472829517e1bff4e3b1311639def2f8/llama_cloud-1.6.0.tar.gz", hash = "sha256:b00c75df76b59becca72f262c755a59529f0c09f0cda79e086eedefc62d59ac8", size = 2274742, upload-time = "2026-03-05T23:55:34.405Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e2/e1/c40aff3fe70c6b457ee89f6cdaee8678fb63986b12734e7d6e4fc481d6dc/llama_cloud-1.6.0-py3-none-any.whl", hash = "sha256:3b880587ef82f23dc9f1998395b31f8a4afd77eb88f99689358a67375d16d413", size = 394869, upload-time = "2026-03-05T23:55:33.172Z" },
+]
+
+[[package]]
 name = "logfire"
 version = "4.25.0"
 source = { registry = "https://pypi.org/simple" }
@@ -4551,6 +4577,8 @@ dependencies = [
     { name = "firecrawl-py" },
     { name = "ipykernel" },
     { name = "ipywidgets" },
+    { name = "liteparse" },
+    { name = "llama-cloud" },
     { name = "openrouter" },
     { name = "pandas" },
     { name = "pretty-little-summary" },
@@ -4583,6 +4611,8 @@ requires-dist = [
     { name = "firecrawl-py", specifier = ">=1.0" },
     { name = "ipykernel", specifier = ">=7.2.0" },
     { name = "ipywidgets", specifier = ">=8.1.8" },
+    { name = "liteparse", specifier = ">=1.0.0" },
+    { name = "llama-cloud", specifier = ">=1.6.0" },
     { name = "matplotlib", marker = "extra == 'example'", specifier = ">=3.10.8" },
     { name = "netcdf4", marker = "extra == 'example'", specifier = ">=1.7.3" },
     { name = "openrouter", specifier = ">=0.7.11" },

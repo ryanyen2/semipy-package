@@ -26,6 +26,7 @@ source .venv/bin/activate
 # Set OPENROUTER_API_KEY in .env or environment
 uv run python examples/use_csv_kit.py
 uv run python examples/use_weather_kit.py
+uv run python examples/use_contract_intelligence.py
 ```
 
 To run without activating the venv:
@@ -53,7 +54,7 @@ def filter_errors(rows):
 # Later runs: use cached function only.
 ```
 
-See `examples/use_csv_kit.py`, `examples/csv_kit/table.py`, `examples/use_weather_kit.py`, and `examples/weather_kit/ops.py` for patterns.
+See `examples/use_csv_kit.py`, `examples/csv_kit/table.py`, `examples/use_weather_kit.py`, `examples/weather_kit/ops.py`, and `examples/use_contract_intelligence.py` for patterns.
 
 ## Cache
 
