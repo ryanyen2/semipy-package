@@ -83,6 +83,7 @@ class Slot:
     spec_hash: str = ""
     slot_spec: dict[str, Any] | None = None
     enclosing_function_site_id: str | None = None
+    advisor_state: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

@@ -9,7 +9,12 @@ from typing import Any, Optional
 
 from semipy.agents.config import get_config
 from semipy.slot_resolver import execute_slot
-from semipy.types import SlotCategory, SlotSpec, SemiCallSite
+from semipy.types import (
+    SlotCategory,
+    SlotSpec,
+    SemiCallSite,
+    compute_spec_equivalence_key,
+)
 
 
 def _sha16(s: str) -> str:
@@ -215,6 +220,13 @@ def _semi_standalone(prompt: str, *, expected_type: Any = None) -> Any:
 
     expected = expected_type if expected_type is not None else type(None)
     spec_hash = _sha16(spec_text)
+    spec_equivalence_key = compute_spec_equivalence_key(
+        spec_text,
+        free_variable_keys,
+        expected,
+        expected_category=SlotCategory.EXPRESSION_STANDALONE,
+        output_names=[],
+    )
     slot_id = _sha16(f"{filename}:{func_qualname}:{start_abs}:{spec_text}")
 
     control_context = "method" if "." in (func_qualname or "") else "top_level"
@@ -224,6 +236,7 @@ def _semi_standalone(prompt: str, *, expected_type: Any = None) -> Any:
         source_span=(filename, start_abs, start_abs),
         spec_text=spec_text,
         spec_hash=spec_hash,
+        spec_equivalence_key=spec_equivalence_key,
         free_variables=free_variable_keys,
         control_context=control_context,
         expected_category=SlotCategory.EXPRESSION_STANDALONE,

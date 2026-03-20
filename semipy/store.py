@@ -107,6 +107,7 @@ def _slot_to_dict(s: Slot) -> dict[str, Any]:
         "spec_hash": s.spec_hash,
         "slot_spec": s.slot_spec,
         "enclosing_function_site_id": s.enclosing_function_site_id,
+        "advisor_state": dict(getattr(s, "advisor_state", {}) or {}),
     }
 
 
@@ -128,6 +129,7 @@ def _slot_from_dict(d: dict[str, Any]) -> Slot:
         spec_hash=d.get("spec_hash", ""),
         slot_spec=d.get("slot_spec", None),
         enclosing_function_site_id=d.get("enclosing_function_site_id", None),
+        advisor_state=dict(d.get("advisor_state", {}) or {}),
     )
 
 

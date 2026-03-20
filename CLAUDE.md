@@ -6,6 +6,8 @@ This file provides guidance when working with code in this repository.
 
 A runtime semiformal system. The `@semiformal` decorator and `semi()` let users express underspecified logic (natural-language conditions, extraction rules). On first invocation, an LLM generates a Python function via an **agentic pipeline** (OpenRouter + pydantic_ai with tools); the function is validated and cached. Subsequent calls reuse the cached implementation with no LLM invocation.
 
+**Slot identity vs reuse:** `slot_id` stays unique per source line (and spec text), but `spec_equivalence_key` (in `SlotSpec`) fingerprints the durable meaning: template text, free-variable names/order, expected return type, slot category, and output names. If a new call site has no commits yet, `resolver.resolve` can **REUSE** another slot’s compiled implementation from the dispatch module when the equivalence key matches (e.g. the same `semi(f"...")` template in another notebook cell). Optional `configure(resolution_async_verify=True)` runs `agents/resolution_advisor.py` in a background thread after such a borrow; a `GENERATE` verdict persists `force_regenerate_next` in the slot’s `advisor_state` for the following call.
+
 ## Commands
 
 ```bash
@@ -25,7 +27,7 @@ pytest  # use: uv sync --extra dev first
 ## Package layout
 
 - **Root** (`semipy/`): `types.py`, `models.py`, `decorator.py`, `template.py`, `semi_fn.py`, `resolver.py`, `store.py`. Entry point and core types; no subpackage imports for these.
-- **agents/** (`semipy/agents/`): Agentic pipeline: config, agent, generator, gist, executor, validator, profiler, tools, console_io, compiler. All LLM, tools, validation, and UX live here.
+- **agents/** (`semipy/agents/`): Agentic pipeline: config, agent, generator, gist, executor, validator, profiler, tools, console_io, compiler, resolution_advisor (optional cross-slot reuse check). All LLM, tools, validation, and UX live here.
 - **history/** (`semipy/history/`): Version control (Merkle DAG): `version_control.py` with Commit, Branch, Slot, Portal; create_commit, add_commit_to_slot, walk_history, find_branch_by_fingerprint, etc.
 - **reactivity/** (`semipy/reactivity/`): Data flow and reactive invalidation: `reactive.py` (DependencyGraph, SlotRef, add_dependency, is_stale, mark_downstream_stale, persistence); `flow.py` (DataFlow, create_flow, extract_flow, profile_output).
 

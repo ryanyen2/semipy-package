@@ -7,7 +7,14 @@ import textwrap
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from semipy.types import Decision, SlotCategory, SlotSpec, SemiCallSite, _stable_slot_hash
+from semipy.types import (
+    Decision,
+    SlotCategory,
+    SlotSpec,
+    SemiCallSite,
+    _stable_slot_hash,
+    compute_spec_equivalence_key,
+)
 
 # Names from the builtins module are never slot parameters (avoid len, range, max, ...).
 _BUILTIN_NAMES: frozenset[str] = frozenset(vars(builtins))
@@ -260,6 +267,13 @@ def _make_slot_spec(
     enclosing_function_qualname: str,
 ) -> SlotSpec:
     spec_hash = _sha16(spec_text)
+    spec_equivalence_key = compute_spec_equivalence_key(
+        spec_text,
+        free_variables,
+        expected_type,
+        expected_category=expected_category,
+        output_names=output_names,
+    )
     slot_id = _make_slot_id(filename, func_qualname, start_abs_lineno, spec_text)
     source_span = (filename, start_abs_lineno, end_abs_lineno)
     return SlotSpec(
@@ -267,6 +281,7 @@ def _make_slot_spec(
         source_span=source_span,
         spec_text=spec_text,
         spec_hash=spec_hash,
+        spec_equivalence_key=spec_equivalence_key,
         free_variables=free_variables,
         control_context=control_context,
         expected_category=expected_category,

@@ -52,4 +52,3 @@ async def classify_with_llm(
     except (asyncio.TimeoutError, Exception):
         pass
     return default
-    return default

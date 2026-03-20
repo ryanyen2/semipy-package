@@ -59,6 +59,51 @@ def _stable_slot_hash(key: str) -> str:
     return hashlib.sha256(key.encode()).hexdigest()[:16]
 
 
+def compute_spec_equivalence_key(
+    spec_text: str,
+    free_variables: list[str],
+    expected_type: Any,
+    *,
+    expected_category: SlotCategory,
+    output_names: list[str],
+) -> str:
+    """
+    Stable fingerprint of the semiformal *meaning* for reuse across call sites.
+
+    Excludes file path and line number so two semi() calls with the same template,
+    arity, return contract, and slot category can share one implementation.
+    """
+    fv = ",".join(free_variables)
+    outs = ",".join(output_names)
+    raw = (
+        f"{spec_text}\0{fv}\0{repr(expected_type)}\0{expected_category.value}\0{outs}"
+    )
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def equivalence_key_from_stored_snapshot(snapshot: dict[str, Any] | None) -> Optional[str]:
+    """
+    Read spec_equivalence_key from a persisted slot_spec dict, or derive the same
+    fingerprint legacy portals used implicitly (spec + free vars + type repr + category + outputs).
+    """
+    if not snapshot:
+        return None
+    k = snapshot.get("spec_equivalence_key")
+    if isinstance(k, str) and len(k) >= 8:
+        return k
+    spec_text = snapshot.get("spec_text") or ""
+    fv = snapshot.get("free_variables") or []
+    et = snapshot.get("expected_type")
+    if et is None:
+        et = repr(type(None))
+    elif not isinstance(et, str):
+        et = repr(et)
+    cat_raw = snapshot.get("expected_category") or SlotCategory.EXPRESSION_STANDALONE.value
+    outs = snapshot.get("output_names") or []
+    raw = f"{spec_text}\0{','.join(fv)}\0{et}\0{cat_raw}\0{','.join(outs)}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
 @dataclass(frozen=True)
 class SlotSpec:
     """Durable specification for one open region (one LLM generation unit)."""
@@ -67,6 +112,7 @@ class SlotSpec:
     source_span: tuple[str, int, int]
     spec_text: str
     spec_hash: str
+    spec_equivalence_key: str
     free_variables: list[str]
     control_context: str
     expected_category: SlotCategory

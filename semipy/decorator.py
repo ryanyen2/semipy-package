@@ -11,7 +11,7 @@ from typing import Any, Callable, Optional, Union
 
 from semipy.lowering import lower_to_scaffold, scan_informal_specs
 from semipy.slot_resolver import _make_slot_proxy
-from semipy.types import SemiformalContext, SlotCategory, SlotSpec
+from semipy.types import SemiformalContext, SlotCategory, SlotSpec, compute_spec_equivalence_key
 from semipy.agents.config import get_config
 
 _semiformal_context_var: ContextVar[Optional[SemiformalContext]] = ContextVar(
@@ -120,12 +120,20 @@ def _wrap_function(fn: Callable[..., Any], description: Optional[str] = None, fi
         spec_text = source
         spec_hash = __import__("hashlib").sha256(spec_text.encode()).hexdigest()[:16]
         slot_id = __import__("hashlib").sha256(f"{resolved_filename}:{func_qualname}:{first_lineno}:{spec_text}".encode()).hexdigest()[:16]
+        spec_equivalence_key = compute_spec_equivalence_key(
+            spec_text,
+            param_names,
+            expected_type,
+            expected_category=SlotCategory.FUNCTION_BODY,
+            output_names=[],
+        )
 
         whole_slot = SlotSpec(
             slot_id=slot_id,
             source_span=(resolved_filename, first_lineno, first_lineno + len(source.splitlines()) - 1),
             spec_text=spec_text,
             spec_hash=spec_hash,
+            spec_equivalence_key=spec_equivalence_key,
             free_variables=param_names,
             control_context="method" if "." in func_qualname else "top_level",
             expected_category=SlotCategory.FUNCTION_BODY,

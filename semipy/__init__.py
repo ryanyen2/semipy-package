@@ -8,7 +8,7 @@ later runs reuse the cached implementation.
 from semipy.decorator import semiformal
 from semipy.semi_fn import semi
 from semipy.agents.config import SemiConfig, configure, get_config
-from semipy.types import Decision, SemiCallError, SemiGenerationError
+from semipy.types import Decision, SemiCallError, SemiGenerationError, compute_spec_equivalence_key
 from semipy.agents.tools import register_tool, parse_tool_refs
 from semipy.reactivity import DependencyGraph, SlotRef, DataFlow
 from semipy.library import (
@@ -36,6 +36,7 @@ __all__ = [
     "Decision",
     "SemiCallError",
     "SemiGenerationError",
+    "compute_spec_equivalence_key",
     "register_tool",
     "parse_tool_refs",
     "DependencyGraph",

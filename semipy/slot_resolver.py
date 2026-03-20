@@ -44,6 +44,7 @@ from semipy.types import (
     SemiCallSite,
     SlotCategory,
     SlotSpec,
+    equivalence_key_from_stored_snapshot,
     session_id_from_filename,
     session_module_name_from_filename,
 )
@@ -109,6 +110,7 @@ def _slot_spec_snapshot(slot_spec: SlotSpec) -> dict[str, Any]:
         "source_span": slot_spec.source_span,
         "spec_text": slot_spec.spec_text,
         "spec_hash": slot_spec.spec_hash,
+        "spec_equivalence_key": slot_spec.spec_equivalence_key,
         "free_variables": slot_spec.free_variables,
         "control_context": slot_spec.control_context,
         "expected_category": slot_spec.expected_category.value,
@@ -251,36 +253,47 @@ def execute_slot(
                 add_dependency(dep_graph, upstream=flow.producing_slot, downstream=current_slot_ref)
 
     force_regenerate = False
-    spec_changed = slot.spec_hash and slot.spec_hash != slot_spec.spec_hash
+    old_snap = slot.slot_spec if isinstance(slot.slot_spec, dict) else {}
+    old_eq = equivalence_key_from_stored_snapshot(old_snap) if old_snap else None
+    if old_eq is not None:
+        spec_changed = old_eq != slot_spec.spec_equivalence_key
+    else:
+        spec_changed = bool(slot.spec_hash) and slot.spec_hash != slot_spec.spec_hash
     if spec_changed:
         force_regenerate = True
         if dep_graph is not None:
             mark_downstream_stale(dep_graph, current_slot_ref, "spec changed")
     if dep_graph is not None and is_stale(dep_graph, current_slot_ref):
         force_regenerate = True
+    adv = getattr(slot, "advisor_state", None) or {}
+    if isinstance(adv, dict) and adv.get("force_regenerate_next"):
+        force_regenerate = True
+        adv.pop("force_regenerate_next", None)
+        slot.advisor_state = adv
+        save_portal(cache_dir, portal)
 
     resolution = resolve(portal, slot_spec, force_regenerate=force_regenerate)
 
     source_file_imports = _extract_source_file_imports(source_file)
 
-    if resolution.decision == Decision.REUSE and resolution.slot is not None and resolution.commit_id is not None:
-        commit = resolution.slot.commits.get(resolution.commit_id)
+    if resolution.decision == Decision.REUSE and resolution.commit_id is not None:
+        dispatch_slot_id = resolution.reuse_dispatch_slot_id or slot_spec.slot_id
+        commit_holder = portal.slots.get(dispatch_slot_id) or slot
+        commit = commit_holder.commits.get(resolution.commit_id) if commit_holder else None
         if commit is None:
-            # If we lost the commit, re-enter generation by forcing regenerate.
             force_regenerate = True
         else:
-            fn_name = function_name_for_commit(resolution.slot, commit)
+            fn_name = function_name_for_commit(commit_holder, commit)
             dispatch_path = _dispatch_module_path(cache_dir, module_name)
             fn = load_function_from_dispatch(cache_dir, module_name, fn_name, _dispatch_globals_cache)
             if fn is None:
                 _dispatch_globals_cache.pop(module_name, None)
                 fn = load_function_from_dispatch(cache_dir, module_name, fn_name, _dispatch_globals_cache)
             if fn is None:
-                # Fall back to resolving by DISPATCH[slot_id] mapping.
                 fn = load_function_from_dispatch_by_slot_id(
                     cache_dir,
                     module_name,
-                    slot_spec.slot_id,
+                    dispatch_slot_id,
                     _dispatch_globals_cache,
                 )
             if fn is None:
@@ -319,6 +332,29 @@ def execute_slot(
                     update_slot_commit(dep_graph, current_slot_ref, commit.commit_id)
                     clear_stale(dep_graph, current_slot_ref)
                     save_dependency_graph(cache_dir, dep_graph)
+                if resolution.reuse_dispatch_slot_id:
+                    from semipy.agents.resolution_advisor import schedule_cross_slot_reuse_verification
+                    from semipy.resolver import list_equivalence_donors
+
+                    donors = list_equivalence_donors(portal, slot_spec, slot_spec.slot_id)
+                    summaries: list[str] = []
+                    for s, c in donors[:12]:
+                        ci = s.call_site_info or {}
+                        summaries.append(
+                            f"commit_id={c.commit_id} slot_id={s.slot_id} "
+                            f"file={ci.get('filename', '')} line={ci.get('lineno', 0)}"
+                        )
+                    schedule_cross_slot_reuse_verification(
+                        cache_dir=cache_dir,
+                        session_id=session_id,
+                        source_file=source_file,
+                        module_name=module_name,
+                        slot_spec=slot_spec,
+                        donor_slot_id=resolution.reuse_dispatch_slot_id,
+                        donor_commit_id=commit.commit_id,
+                        candidate_summaries=summaries,
+                        chosen_source_excerpt=commit.generated_source,
+                    )
                 return result
 
         if force_regenerate:

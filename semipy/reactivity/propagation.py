@@ -60,49 +60,50 @@ def rebuild_spec_from_commit(
     slot_ref: SlotRef,
     commit_id: str,
     cache_dir: Path,
-    library_context: Optional[str] = None,
 ) -> Optional[Any]:
     """
     Rebuild a GenerationSpec from the slot's commit context so the agent can regenerate.
     Returns None if slot/commit not found or portal state is missing. Caller must provide portal.
     """
-    from semipy.history import Slot
+    _ = cache_dir  # reserved for future file-context enrichment
     slot_id = slot_ref.slot_id
-    session_id = slot_ref.session_id
-    slot: Optional[Slot] = None
-    for s in getattr(portal, "slots", {}).values():
-        if getattr(s, "slot_id", None) == slot_id:
-            slot = s
-            break
+    slot = getattr(portal, "slots", {}).get(slot_id)
+    if slot is None:
+        for s in getattr(portal, "slots", {}).values():
+            if getattr(s, "slot_id", None) == slot_id:
+                slot = s
+                break
     if slot is None:
         return None
     commit = slot.commits.get(commit_id) if getattr(slot, "commits", None) else None
     if commit is None:
         return None
-    from semipy.types import GenerationSpec, SemiCallSite
+    from semipy.types import Decision, GenerationSpec, SemiCallSite
+
     call_site_info = getattr(slot, "call_site_info", {}) or {}
     call_site = SemiCallSite(
         filename=call_site_info.get("filename", ""),
         lineno=call_site_info.get("lineno", 0),
         func_qualname=call_site_info.get("func_qualname", ""),
     )
-    spec = GenerationSpec(
-        prompt=commit.prompt_snapshot,
+    return GenerationSpec(
+        prompt=commit.prompt_snapshot or "",
         call_site=call_site,
-        template=None,
-        context=None,
         expected_type=type(None),
-        sample_input=None,
-        constant_values=None,
-        variable_values=None,
-        require_external_tools=False,
-        decision=None,
+        decision=Decision.ADAPT,
         parent_sources=[commit.generated_source],
         parent_commit_ids=[commit.commit_id],
         lineage_summary=None,
-        library_context=library_context,
+        slot_spec=None,
+        scaffold_source=None,
+        sibling_slot_ids=None,
+        sample_input=None,
+        source_file_imports=None,
+        upstream_lineage=None,
+        downstream_requirements=None,
+        enclosing_function_source=None,
+        user_source_code=None,
     )
-    return spec
 
 
 def propagate_eager(
