@@ -222,6 +222,16 @@ def _interpret_semi_call_cause(cause: BaseException) -> tuple[str, str]:
     if "must be an instance of" in msg or ("must be" in msg and "not" in msg):
         what = msg
         fix = "Make your semi() return the type the callee expects (see the error above)."
+    if isinstance(cause, TypeError):
+        if "unhashable type" in msg.lower() and "dict" in msg:
+            what = (
+                f"{msg} — Often the callee expected a string or other hashable (e.g. a Matplotlib scale name), "
+                "but received a dict or wrong type from semi()."
+            )
+            fix = (
+                "Pass the right expected_type to semi() (e.g. expected_type=str), or use structured values from "
+                "another function (e.g. axis config) instead of a second semi() for the same field."
+            )
     return (what, fix)
 
 

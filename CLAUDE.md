@@ -26,10 +26,24 @@ pytest  # use: uv sync --extra dev first
 - Optional: **E2B_API_KEY** for sandboxed gist execution (otherwise subprocess fallback).
 - Python >= 3.10. Uses `uv` for dependency and environment management.
 
+## Console UX (`configure`)
+
+Generation output is controlled by `stream`, `verbose`, and `SemiConfig` fields:
+
+- **`stream`** with **`console_verbosity`**: together they set how model output is shown. `effective_stream_display_mode()` maps to `none` (no streaming UI), `peek` (terminal Live strip + rolling tail), or `full` (large reasoning/response panels; `console_verbosity="debug"`).
+- **`console_peek_lines`**: height of the rolling “Model output (peek)” region in peek mode (default 2).
+- **`console_timeline`**: when true and peek mode applies, a horizontal phase strip (Resolve | Model | Tools | Validate | Done) appears in the terminal.
+- **`console_show_elapsed`**: show elapsed seconds on the timeline strip.
+- **`console_verbosity`**: `normal` (default), `quiet` (minimal tool lines), or `debug` (tool names and extra detail where supported).
+
+Peek mode uses Rich `Live` with a rolling line deque (see `examples/rich/vertical_window.py`) in the terminal; in Jupyter, the same tail is shown via throttled `Panel` updates so the cell is not flooded. Stream chunks come from `PartDeltaEvent` and must use `event.index` (deltas can arrive before `PartStartEvent` in some streams).
+
+Pipeline messages use plain language (e.g. “No reusable implementation; creating a new one.”, “Implementing code…”) instead of “cache miss” / “Calling agent”. If a **downstream API** (e.g. Matplotlib) raises after `semi()` returns, pass `expected_type` so generation validates the shape, or reuse structured outputs from another slot instead of duplicating the same field with a second `semi()`.
+
 ## Package layout
 
 - **Root** (`semipy/`): `types.py`, `models.py`, `decorator.py`, `template.py`, `semi_fn.py`, `resolver.py`, `store.py`. Entry point and core types; no subpackage imports for these.
-- **agents/** (`semipy/agents/`): Agentic pipeline: config, agent, generator, gist, executor, validator, profiler, tools, console_io, compiler, resolution_advisor (optional cross-slot reuse check). All LLM, tools, validation, and UX live here.
+- **agents/** (`semipy/agents/`): Agentic pipeline: config, agent, generator, gist, executor, validator, profiler, tools, console_io, console_messages (tool line formatters), console_view (terminal Live timeline + peek), compiler, resolution_advisor (optional cross-slot reuse check). All LLM, tools, validation, and UX live here.
 - **history/** (`semipy/history/`): Version control (Merkle DAG): `version_control.py` with Commit, Branch, Slot, Portal; create_commit, add_commit_to_slot, walk_history, find_branch_by_fingerprint, etc.
 - **reactivity/** (`semipy/reactivity/`): Data flow and reactive invalidation: `reactive.py` (DependencyGraph, SlotRef, add_dependency, is_stale, mark_downstream_stale, persistence); `flow.py` (DataFlow, create_flow, extract_flow, profile_output).
 

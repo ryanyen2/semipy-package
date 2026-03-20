@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
-import json
 from typing import Any, Callable, List, Optional
 
 
@@ -27,8 +26,11 @@ def _run_async(coro: Any) -> Any:
         return future.result()
 
 from semipy.agents.compiler import _compile_source
-from semipy.agents.config import get_config
+from semipy.agents.config import effective_stream_display_mode, get_config
+from semipy.agents.console_messages import format_tool_call_line, format_tool_result_line
+from semipy.agents.console_view import GenerationStreamView, JupyterStreamPeek
 from semipy.agents.console_io import (
+    _is_jupyter,
     confirm,
     generation_progress,
     get_console,
@@ -36,10 +38,12 @@ from semipy.agents.console_io import (
     print_pipeline_log,
     print_reasoning_block,
     print_response_block,
-    print_tool_call,
-    print_tool_result,
+    print_tool_intent_line,
+    print_tool_outcome_line,
+    print_friendly_exception,
     source_preview,
-    decision_description,
+    pipeline_generate_status,
+    pipeline_resolution_message,
     validation_error_panel,
 )
 from semipy.agents.generator import get_semi_agent
@@ -58,13 +62,27 @@ from semipy.agents.profiler import profile_runtime_context, profile_value
 from semipy.agents.validator import validate, _extract_function_source
 
 
+def _tool_args_dict(part: Any) -> dict[str, Any]:
+    if hasattr(part, "args_as_dict"):
+        try:
+            d = part.args_as_dict()
+            return d if isinstance(d, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
 def _handle_stream_event(
     event: Any,
     part_buffers: dict,
     current_part_index: Optional[int],
     current_part_type: Optional[str],
     reasoning_blocks: list,
+    *,
     verbose: bool,
+    stream_mode: str,
+    console_verbosity: str,
+    stream_sink: Optional[Any],
 ) -> tuple[Optional[int], Optional[str]]:
     """Dispatch stream event to console; return updated (current_part_index, current_part_type)."""
     from pydantic_ai import (
@@ -77,21 +95,32 @@ def _handle_stream_event(
 
     idx = current_part_index
     ptype = current_part_type
+    show_tool_lines = verbose and console_verbosity != "quiet"
+    debug_tools = console_verbosity == "debug"
+    out_console = stream_sink.console if stream_sink is not None else get_console()
+    show_names = debug_tools
 
     if isinstance(event, PartStartEvent):
         if idx is not None and part_buffers.get(idx):
             content = part_buffers[idx].strip()
-            if content and verbose:
+            if content:
                 if ptype == "thinking":
-                    print_reasoning_block(content)
-                    reasoning_blocks.append(content)
+                    if verbose and stream_mode == "full":
+                        print_reasoning_block(content)
+                    if verbose:
+                        reasoning_blocks.append(content)
                 else:
-                    print_response_block(content)
+                    if verbose and stream_mode == "full":
+                        print_response_block(content)
         part_buffers.clear()
+        if stream_sink is not None:
+            stream_sink.clear_stream_buffer()
+            stream_sink.set_active_phase("Model")
         idx = event.index
         part_type_name = type(event.part).__name__
         ptype = "thinking" if "Thinking" in part_type_name else "text"
     elif isinstance(event, PartDeltaEvent):
+        idx = event.index
         delta = event.delta
         content = ""
         if isinstance(delta, ThinkingPartDelta):
@@ -100,35 +129,52 @@ def _handle_stream_event(
         elif isinstance(delta, TextPartDelta):
             content = delta.content_delta or ""
             ptype = "text"
-        if content and idx is not None:
+        else:
+            content = ""
+        if content:
             part_buffers.setdefault(idx, "")
             part_buffers[idx] += content
+            if stream_mode == "peek" and stream_sink is not None:
+                stream_sink.append_stream_delta(content, kind="thinking" if ptype == "thinking" else "output")
     elif isinstance(event, FinalResultEvent):
-        if idx is not None and part_buffers.get(idx) and verbose:
+        if idx is not None and part_buffers.get(idx):
             content = part_buffers[idx].strip()
             if content:
                 if ptype == "thinking":
-                    print_reasoning_block(content)
-                    reasoning_blocks.append(content)
+                    if verbose and stream_mode == "full":
+                        print_reasoning_block(content)
+                    if verbose:
+                        reasoning_blocks.append(content)
                 else:
-                    print_response_block(content)
+                    if verbose and stream_mode == "full":
+                        print_response_block(content)
         part_buffers.clear()
         idx = None
         ptype = None
+        if stream_sink is not None:
+            stream_sink.set_active_phase("Validate")
     elif isinstance(event, FunctionToolCallEvent):
         tool_name = getattr(event.part, "tool_name", "?")
-        args = getattr(event.part, "args", {})
-        args_preview = str(args)[:120] + ("..." if len(str(args)) > 120 else "")
-        if verbose:
-            print_tool_call(tool_name, args_preview)
+        args = _tool_args_dict(event.part)
+        intent = format_tool_call_line(tool_name, args, debug=debug_tools)
+        if show_tool_lines:
+            print_tool_intent_line(
+                tool_name,
+                intent,
+                console=out_console,
+                show_tool_name=show_names,
+            )
+        if stream_sink is not None:
+            stream_sink.set_active_phase("Tools")
     elif isinstance(event, FunctionToolResultEvent):
-        result = event.result
-        content_preview = str(getattr(result, "content", ""))[:200]
-        if len(str(getattr(result, "content", ""))) > 200:
-            content_preview += "..."
-        tool_name = getattr(result, "tool_name", "?")
-        if verbose:
-            print_tool_result(tool_name, content_preview, success=True)
+        tr = event.result
+        tool_name = getattr(tr, "tool_name", "?")
+        content = getattr(tr, "content", None)
+        outcome, ok = format_tool_result_line(tool_name, content, debug=debug_tools)
+        if show_tool_lines:
+            print_tool_outcome_line(outcome, ok, console=out_console)
+        if stream_sink is not None:
+            stream_sink.set_active_phase("Model")
 
     return (idx, ptype)
 
@@ -269,6 +315,24 @@ class SemiAgent:
         # Named semi.* calls are removed in the new lowering architecture.
         return self._build_user_prompt(spec)
 
+    def _make_stream_sink(
+        self,
+    ) -> Optional[GenerationStreamView | JupyterStreamPeek]:
+        """Peek UI: Rich Live + timeline in terminal; throttled panels in Jupyter."""
+        cfg = get_config()
+        if not (self.verbose and effective_stream_display_mode(cfg) == "peek"):
+            return None
+        if _is_jupyter():
+            return JupyterStreamPeek(get_console(), cfg.console_peek_lines)
+        view = GenerationStreamView(
+            get_console(),
+            cfg.console_peek_lines,
+            enabled=True,
+            show_timeline=cfg.console_timeline,
+        )
+        view.set_show_elapsed(cfg.console_show_elapsed)
+        return view
+
     def _build_retry_prompt(
         self,
         spec: GenerationSpec,
@@ -294,9 +358,12 @@ class SemiAgent:
         self,
         spec: GenerationSpec,
         user_prompt_override: Optional[str] = None,
+        stream_sink: Optional[GenerationStreamView | JupyterStreamPeek] = None,
     ) -> CacheEntry:
         """Run pydantic_ai agent with streaming; validate and return CacheEntry."""
         config = get_config()
+        stream_mode = effective_stream_display_mode(config)
+        console_verbosity = (config.console_verbosity or "normal").lower()
         executor = GistExecutor(
             use_e2b=config.use_e2b,
             timeout=config.gist_timeout,
@@ -310,7 +377,7 @@ class SemiAgent:
         prompt = user_prompt_override if user_prompt_override is not None else self._build_user_prompt(spec)
         agent = get_semi_agent()
 
-        if self.verbose:
+        if self.verbose and stream_sink is None:
             decision = spec.decision if spec.decision is not None else Decision.GENERATE
             get_console().print(
                 f"[dim][semipy][/] Invoking LLM | decision=[cyan]{decision.value}[/]"
@@ -330,7 +397,10 @@ class SemiAgent:
                     current_part_index,
                     current_part_type,
                     reasoning_blocks,
-                    self.verbose,
+                    verbose=self.verbose,
+                    stream_mode=stream_mode,
+                    console_verbosity=console_verbosity,
+                    stream_sink=stream_sink,
                 )
                 if hasattr(event, "result") and hasattr(event.result, "output"):
                     final_output = getattr(event.result.output, "content", None) or str(event.result.output)
@@ -345,6 +415,9 @@ class SemiAgent:
             # print(f"Generated source:\n {source}")
         if not source.strip():
             raise SemiGenerationError("Agent did not produce a Python function (no code block or build_and_run_gist source).")
+
+        if stream_sink is not None:
+            stream_sink.set_active_phase("Validate")
 
         result = validate(
             source,
@@ -364,6 +437,8 @@ class SemiAgent:
         fn = _compile_source(source)
         reasoning_summary = "\n\n".join(reasoning_blocks[:3]) if reasoning_blocks else None
         tool_calls = getattr(deps, "tool_calls_log", None)
+        if stream_sink is not None:
+            stream_sink.set_active_phase("Done")
         return CacheEntry(
             generated_source=source,
             compiled_fn=fn,
@@ -376,14 +451,19 @@ class SemiAgent:
         """Synchronous wrapper: run generate_async in a new event loop."""
         total_attempts = self.max_retries + 1
         decision = spec.decision if spec.decision is not None else Decision.GENERATE
+        cfg = get_config()
+        use_peek_sink = self.verbose and effective_stream_display_mode(cfg) == "peek"
 
-        with jupyter_capture_console(), generation_progress(self.verbose) as progress:
+        with jupyter_capture_console(), generation_progress(
+            self.verbose,
+            use_status_line=not use_peek_sink,
+        ) as progress:
             progress.set_call_site(spec.call_site)
             progress.log_step("Generate")
-            progress.log_step(f"Decision: {decision_description(decision)}")
-            print_pipeline_log(spec.call_site, "resolve", f"Cache miss. {decision_description(decision)}")
+            progress.log_step(f"Decision: {pipeline_resolution_message(decision)}")
+            print_pipeline_log(spec.call_site, "resolve", pipeline_resolution_message(decision))
             progress.set_stage("generate")
-            progress.update(f"Cache miss. {decision_description(decision)}")
+            progress.update(pipeline_resolution_message(decision))
             if self.confirm_on_external_tools and getattr(spec, "require_external_tools", False):
                 config = get_config()
                 if not confirm(
@@ -401,25 +481,47 @@ class SemiAgent:
             for attempt in range(total_attempts):
                 progress.log_step(f"Generating (attempt {attempt + 1}/{total_attempts})")
                 if last_result and (last_result.error_message or ""):
-                    print_pipeline_log(spec.call_site, "generate", f"Retry {attempt + 1}/{total_attempts}: fixing validation error")
+                    print_pipeline_log(
+                        spec.call_site,
+                        "generate",
+                        pipeline_generate_status(attempt + 1, total_attempts, retry=True),
+                    )
                     progress.set_stage("generate")
-                    progress.update(f"Retrying (attempt {attempt + 1}/{total_attempts}): fixing validation error...")
+                    progress.update(pipeline_generate_status(attempt + 1, total_attempts, retry=True))
                     prompt_override = self._build_retry_prompt(spec, last_source, last_result, attempt)
                 else:
-                    print_pipeline_log(spec.call_site, "generate", f"Calling agent (attempt {attempt + 1}/{total_attempts})")
+                    print_pipeline_log(
+                        spec.call_site,
+                        "generate",
+                        pipeline_generate_status(attempt + 1, total_attempts, retry=False),
+                    )
                     progress.set_stage("generate")
-                    progress.update(f"Calling agent (attempt {attempt + 1}/{total_attempts})...")
+                    progress.update(pipeline_generate_status(attempt + 1, total_attempts, retry=False))
                     prompt_override = None
 
+                stream_sink = self._make_stream_sink()
+                if stream_sink is not None:
+                    stream_sink.__enter__()
                 try:
-                    entry = _run_async(self.generate_async(spec, user_prompt_override=prompt_override))
+                    entry = _run_async(
+                        self.generate_async(
+                            spec,
+                            user_prompt_override=prompt_override,
+                            stream_sink=stream_sink,
+                        )
+                    )
                 except SemiGenerationError as e:
                     last_source = getattr(e, "last_source", "") or ""
                     last_result = getattr(e, "last_result", None)
                     if attempt + 1 >= total_attempts:
                         progress.record_failure(str(e), validation_result=last_result, source=last_source, call_site=spec.call_site)
+                        if (get_config().console_verbosity or "").lower() == "debug":
+                            print_friendly_exception(e, title="Generation failed")
                         raise
                     continue
+                finally:
+                    if stream_sink is not None:
+                        stream_sink.__exit__(None, None, None)
 
                 progress.log_step("Valid")
                 progress.record_success(attempt + 1, call_site=spec.call_site)

@@ -39,12 +39,20 @@ class SmartChart:
         axes_flat = [axes] if rows * cols == 1 else list(axes.flat)
 
         for ax, (key, values) in zip(axes_flat, self.data.items()):
-            ax.set_yscale(semi(f"scale for '{key}' with values {values}"))
-            ax.set_ylabel(semi(f"label for '{key}' with values {values}"))
+            axis_cfg = self.infer_axis_config(key, values)
+            ax.set_yscale(str(axis_cfg["scale"]))
+            ax.set_ylabel(str(axis_cfg["label"]))
             ax.plot(range(len(values)), values)
             ax.set_title(key)
 
-            tick_fmt: ticker.Formatter = semi(f"tick formatter object for '{key}' with scale={config['scale']}, density={config['tick_density']}, range=[{min(values):.3g}, {max(values):.3g}]. Return a matplotlib.ticker.FuncFormatter axis-independent (do not use ScalarFormatter internals that require an axis). Format numeric ticks into human-friendly strings (respect unit suffix inferred from key like _ppm, _K, _ms). Density controls number of decimals; for 'dense' use more precision, for 'sparse' use fewer decimals.", expected_type=ticker.Formatter)
+            tick_fmt: ticker.Formatter = semi(
+                f"tick formatter object for '{key}' with scale={axis_cfg['scale']!r}, "
+                f"density={axis_cfg['tick_density']!r}, range=[{min(values):.3g}, {max(values):.3g}]. "
+                "Return a matplotlib.ticker.FuncFormatter axis-independent (do not use ScalarFormatter internals that require an axis). "
+                "Format numeric ticks into human-friendly strings (respect unit suffix inferred from key like _ppm, _K, _ms). "
+                "Density controls number of decimals; for 'dense' use more precision, for 'sparse' use fewer decimals.",
+                expected_type=ticker.Formatter,
+            )
             ax.yaxis.set_major_formatter(tick_fmt)
 
             ax.set_xlabel('Time Index')

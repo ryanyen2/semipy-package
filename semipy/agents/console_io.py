@@ -98,6 +98,30 @@ def decision_description(decision: Decision) -> str:
     return str(decision.value)
 
 
+def pipeline_resolution_message(decision: Decision) -> str:
+    """Short user-facing line after resolve (why generation runs)."""
+    if decision == Decision.REUSE:
+        return "Using a matching cached implementation."
+    if decision == Decision.ADAPT:
+        return "No exact reuse; adapting from a previous version and generating code."
+    if decision == Decision.COMPOSE:
+        return "Composing from a library primitive; generating code."
+    if decision == Decision.FORK:
+        return "Structure changed; generating on a new branch."
+    if decision == Decision.GENERATE:
+        return "No reusable implementation; creating a new one."
+    if decision == Decision.MERGE:
+        return "Merging branches; generating code."
+    return decision_description(decision)
+
+
+def pipeline_generate_status(attempt: int, total: int, *, retry: bool) -> str:
+    """Status line while the agent runs (replaces technical 'Calling agent')."""
+    if retry:
+        return f"Adjusting implementation after validation (attempt {attempt}/{total})…"
+    return f"Implementing code (attempt {attempt}/{total})…"
+
+
 def _format_location(filename: str, lineno: int, func_qualname: str) -> str:
     """Short location string: file:line (function)."""
     from os.path import basename
@@ -493,16 +517,43 @@ def print_response_block(content: str) -> None:
 
 
 def print_tool_call(tool_name: str, args_preview: str = "") -> None:
-    """One-line log for a tool call."""
+    """Legacy one-line log (raw preview). Prefer print_tool_intent_line."""
     console = get_console()
     console.print(f"[dim][Tools][/] [cyan]{tool_name}[/] called {args_preview}")
 
 
 def print_tool_result(tool_name: str, result_preview: str, success: bool = True) -> None:
-    """One-line log for a tool result."""
+    """Legacy one-line log. Prefer print_tool_outcome_line."""
     console = get_console()
     style = "green" if success else "red"
     console.print(f"[dim][Tools][/] [cyan]{tool_name}[/] => [{style}]{result_preview}[/]")
+
+
+def print_tool_intent_line(
+    tool_name: str,
+    intent: str,
+    *,
+    console: Optional[Console] = None,
+    show_tool_name: bool = False,
+) -> None:
+    """Human intent for a tool invocation (no raw JSON)."""
+    c = console or get_console()
+    if show_tool_name:
+        c.print(f"[dim]semipy[/]  [cyan]{tool_name}[/]  {intent}")
+    else:
+        c.print(f"[dim]semipy[/]  {intent}")
+
+
+def print_tool_outcome_line(
+    outcome: str,
+    ok: bool,
+    *,
+    console: Optional[Console] = None,
+) -> None:
+    """Structured outcome (not success=True or raw repr)."""
+    c = console or get_console()
+    style = "green" if ok else "red"
+    c.print(f"[dim]semipy[/]  [{style}]{outcome}[/]")
 
 
 def print_gist_execution(success: bool, stdout: str, stderr: str) -> None:
@@ -578,6 +629,22 @@ def cache_hit_panel(
     console.print(Panel(syntax, title="Cached source", border_style="dim"))
 
 
+def print_friendly_exception(exc: BaseException, *, title: str = "Traceback") -> None:
+    """Rich traceback (no locals) for debugging generation failures."""
+    from rich.traceback import Traceback
+
+    console = get_console()
+    w = min(120, console.width) if getattr(console, "width", None) else 120
+    tb = Traceback.from_exception(
+        type(exc),
+        exc,
+        exc.__traceback__,
+        show_locals=False,
+        width=w,
+    )
+    console.print(Panel(tb, title=title, border_style="red"))
+
+
 def validation_error_panel(result: ValidationResult, source_preview: Optional[str] = None) -> None:
     """Print a panel with validation failure details."""
     console = get_console()
@@ -630,8 +697,9 @@ def confirm(
 class GenerationProgress:
     """Updates a single status line and prints one summary when the run finishes."""
 
-    def __init__(self, verbose: bool) -> None:
+    def __init__(self, verbose: bool, use_status_line: bool = True) -> None:
         self._verbose = verbose
+        self._use_status_line = use_status_line
         self._result: Optional[str] = None
         self._cache_hit: Optional[tuple[GenerationSpec, CacheEntry]] = None
         self._cache_dir: Optional[Path] = None
@@ -662,7 +730,7 @@ class GenerationProgress:
         return f"[bold blue]{prefix}{message}[/]"
 
     def update(self, message: str) -> None:
-        if not self._verbose:
+        if not self._verbose or not self._use_status_line:
             return
         console = get_console()
         full = self._status_message(message)
@@ -781,13 +849,14 @@ class GenerationProgress:
 
 
 @contextmanager
-def generation_progress(verbose: bool):
+def generation_progress(verbose: bool, use_status_line: bool = True):
     """
     Context manager for one generate() run. Yields a GenerationProgress that updates
     a single status line; on exit prints one summary (cache hit panel, success line, or failure).
     Use this to avoid stacking many step lines.
+    Set use_status_line=False when Rich Live owns the terminal (timeline + peek).
     """
-    progress = GenerationProgress(verbose)
+    progress = GenerationProgress(verbose, use_status_line=use_status_line)
     try:
         yield progress
     finally:

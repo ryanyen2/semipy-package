@@ -42,6 +42,11 @@ class SemiConfig:
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     resolution_async_verify: bool = False
     session_source: Optional[str] = None
+    # Console UX: normal = formatted tools + peek timeline (terminal); debug = full reasoning panels; quiet = summary only
+    console_verbosity: str = "normal"
+    console_peek_lines: int = 4
+    console_show_elapsed: bool = False
+    console_timeline: bool = True
 
     def configure(
         self,
@@ -74,6 +79,10 @@ class SemiConfig:
         embedding_model: Optional[str] = None,
         resolution_async_verify: Optional[bool] = None,
         session_source: Optional[str] = None,
+        console_verbosity: Optional[str] = None,
+        console_peek_lines: Optional[int] = None,
+        console_show_elapsed: Optional[bool] = None,
+        console_timeline: Optional[bool] = None,
     ) -> None:
         """Update config attributes from the given keyword arguments (only non-None values)."""
         if openrouter_api_key is not None:
@@ -134,6 +143,29 @@ class SemiConfig:
             self.resolution_async_verify = resolution_async_verify
         if session_source is not None:
             self.session_source = session_source
+        if console_verbosity is not None:
+            self.console_verbosity = console_verbosity
+        if console_peek_lines is not None:
+            self.console_peek_lines = console_peek_lines
+        if console_show_elapsed is not None:
+            self.console_show_elapsed = console_show_elapsed
+        if console_timeline is not None:
+            self.console_timeline = console_timeline
+
+
+def effective_stream_display_mode(config: SemiConfig) -> str:
+    """
+    How model streaming is shown: none | peek | full.
+    Derived from stream and console_verbosity when not using legacy overrides.
+    """
+    if not config.stream:
+        return "none"
+    v = (config.console_verbosity or "normal").lower()
+    if v == "debug":
+        return "full"
+    if v == "quiet":
+        return "none"
+    return "peek"
 
 
 _config: Optional[SemiConfig] = None
