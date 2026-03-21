@@ -17,6 +17,7 @@ uv sync
 source .venv/bin/activate
 uv run python examples/use_csv_kit.py
 uv run python examples/use_weather_kit.py
+uv run python examples/use_sponsorship_canonicalizer.py
 uv run python examples/use_contract_intelligence.py
 pytest  # use: uv sync --extra dev first
 ```
@@ -41,9 +42,11 @@ Peek mode uses Rich `Live` with a rolling line deque (see `examples/rich/vertica
 
 Pipeline messages use plain language (e.g. “No reusable implementation; creating a new one.”, “Implementing code…”) instead of “cache miss” / “Calling agent”. If a **downstream API** (e.g. Matplotlib) raises after `semi()` returns, pass `expected_type` so generation validates the shape, or reuse structured outputs from another slot instead of duplicating the same field with a second `semi()`.
 
+**PDF paths as slot inputs:** `execute_slot` calls `materialize_runtime_document_inputs` so existing `.pdf` paths (`Path` or string) on top-level slot kwargs or on attributes of `self` are replaced with extracted text before resolve/generate/call. Tune via `configure(document_pdf_backend="auto"|"liteparse"|"llama_cloud", document_layout_heavy=True)`. Very large PDFs still load whole text into memory (chunking for materialization is not implemented yet); the agent tool `read_document_context` can chunk for model context during generation.
+
 ## Package layout
 
-- **Root** (`semipy/`): `types.py`, `models.py`, `decorator.py`, `template.py`, `semi_fn.py`, `resolver.py`, `store.py`, `documents.py` (`load_document_text`: PDF via liteparse and/or LlamaCloud). Entry point and core types; no subpackage imports for these.
+- **Root** (`semipy/`): `types.py`, `models.py`, `decorator.py`, `template.py`, `semi_fn.py`, `resolver.py`, `store.py`, `documents.py` (internal: `load_document_text`, `materialize_runtime_document_inputs` at slot boundary; agent `read_document_context` uses the same loader). Not exported from `semipy.__init__`.
 - **agents/** (`semipy/agents/`): Agentic pipeline: config, agent, generator, gist, executor, validator, profiler, tools, console_io, console_messages (tool line formatters), console_view (terminal Live timeline + peek), compiler, resolution_advisor (optional cross-slot reuse check). All LLM, tools, validation, and UX live here.
 - **history/** (`semipy/history/`): Version control (Merkle DAG): `version_control.py` with Commit, Branch, Slot, Portal; create_commit, add_commit_to_slot, walk_history, find_branch_by_fingerprint, etc.
 - **reactivity/** (`semipy/reactivity/`): Data flow and reactive invalidation: `reactive.py` (DependencyGraph, SlotRef, add_dependency, is_stale, mark_downstream_stale, persistence); `flow.py` (DataFlow, create_flow, extract_flow, profile_output, `attach_producer_flow` so list outputs can carry `_semi_flow` for downstream slot edges).
@@ -79,7 +82,7 @@ Pipeline messages use plain language (e.g. “No reusable implementation; creati
 | root | `decorator.py` | @semiformal; source inspection and context injection via contextvars |
 | root | `template.py` | AST-based f-string decomposition; structural fingerprint; loop-variant vs constant variables |
 | root | `semi_fn.py` | semi() entry point; call-site identification, portal/resolver/store flow, agent invocation |
-| root | `documents.py` | `load_document_text`: UTF-8 text files; PDFs via liteparse and/or LlamaCloud (`layout_heavy`, `backend`) |
+| root | `documents.py` | UTF-8 text; PDFs via liteparse and/or LlamaCloud; `materialize_runtime_document_inputs` resolves `.pdf` paths on slot kwargs / `self` before generation and execution |
 | root | `resolver.py` | resolve(portal, usage, fingerprint, constants) -> REUSE / ADAPT / GENERATE (ResolutionResult) |
 | root | `store.py` | load_portal, save_portal, write_dispatch_module, load_function_from_dispatch |
 | agents | `config.py` | SemiConfig; get_config() / configure() |
@@ -116,7 +119,7 @@ Pipeline messages use plain language (e.g. “No reusable implementation; creati
 
 ### Public API
 
-Exports from `semipy/__init__.py`: `semiformal`, `semi`, `SemiConfig`, `configure`, `get_config`, `Decision`, `SemiCallError`, `SemiGenerationError`, `register_tool`, `parse_tool_refs`, `GistBuilder`, `Gist`, `GistExecutor`, `ExecutionResult`, `SemiAgentDeps`, `ProfileDataResult`, `GistRunResult`, `OutputValidationResult`, `DependencyGraph`, `SlotRef`, `DataFlow`.
+Exports from `semipy/__init__.py`: `semiformal`, `semi`, `SemiConfig`, `configure`, `get_config`, `Decision`, `SemiCallError`, `SemiGenerationError`, `compute_spec_equivalence_key`, `register_tool`, `parse_tool_refs`, `GistBuilder`, `Gist`, `GistExecutor`, `ExecutionResult`, `SemiAgentDeps`, `ProfileDataResult`, `GistRunResult`, `OutputValidationResult`, `DocumentContextResult`, `DependencyGraph`, `SlotRef`, `DataFlow`, `attach_producer_flow`, and library helpers (`load_library`, `run_sleep_phase`, `AbstractionLibrary`, `LibraryPrimitive`, `ASTPattern`). Document loading and dict-to-dataclass helpers live in `semipy.documents` and `semipy.dataclass_utils` for tests and internal use only.
 
 ## Code conventions
 
@@ -150,3 +153,4 @@ Items below are partially done, naive, or fragile and should be revisited for ge
 - **Agent / generator**: Tool ordering and system prompt are fixed; prompt building from GenerationSpec could be more modular. profile_data_and_flow depends on optional refs (example_glm); no fallback behavior when refs are missing.
 - **Tools**: SEARCH/RAG and custom tools are documented in prompts; injection into system prompt is legacy-style. No formal contract for tool return types used by the agent.
 - **Console I/O**: Rich output and file-link formatting assume a certain terminal/IDE; no headless or log-only mode beyond verbose flag.
+- **PDF materialization**: Full document is loaded into a string for slot execution; no size cap or streaming split at the slot boundary yet.

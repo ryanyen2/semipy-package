@@ -6,7 +6,6 @@ and caches a Python function via an agentic pipeline (OpenRouter + pydantic_ai);
 later runs reuse the cached implementation.
 """
 from semipy.decorator import semiformal
-from semipy.documents import load_document_text
 from semipy.semi_fn import semi
 from semipy.agents.config import SemiConfig, configure, get_config
 from semipy.types import Decision, SemiCallError, SemiGenerationError, compute_spec_equivalence_key
@@ -32,7 +31,6 @@ from semipy.models import (
 __all__ = [
     "semiformal",
     "semi",
-    "load_document_text",
     "SemiConfig",
     "configure",
     "get_config",

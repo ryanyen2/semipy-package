@@ -239,7 +239,12 @@ class GistExecutor:
             err_msg = str(e)
             if not _retrying and "Event loop is closed" in err_msg:
                 self._e2b_sandbox = None
-                return await self._execute_e2b(gist_source, cwd=cwd, _retrying=True)
+                try:
+                    return await self._execute_e2b(gist_source, cwd=cwd, _retrying=True)
+                except Exception as e2:
+                    err_msg = str(e2)
+            if "Event loop is closed" in err_msg:
+                return self._execute_subprocess_sync(gist_source, cwd)
             return ExecutionResult(
                 success=False,
                 stdout="",

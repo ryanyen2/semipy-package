@@ -276,6 +276,10 @@ class SemiAgent:
             slot_block += f"Slot category: {s.expected_category.value}\n"
             if s.free_variables:
                 slot_block += f"Slot inputs (positional arg order): {s.free_variables}\n"
+                slot_block += (
+                    f"The generated function must accept exactly {len(s.free_variables)} "
+                    "positional parameters in this order (names may differ).\n"
+                )
             if s.output_names:
                 slot_block += f"Output names: {s.output_names}\n"
             if s.formal_constraints:

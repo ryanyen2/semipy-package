@@ -47,6 +47,9 @@ class SemiConfig:
     console_peek_lines: int = 4
     console_show_elapsed: bool = False
     console_timeline: bool = True
+    # Internal document materialization for PDF paths passed into slots (see semipy.documents)
+    document_pdf_backend: str = "auto"
+    document_layout_heavy: bool = False
 
     def configure(
         self,
@@ -83,6 +86,8 @@ class SemiConfig:
         console_peek_lines: Optional[int] = None,
         console_show_elapsed: Optional[bool] = None,
         console_timeline: Optional[bool] = None,
+        document_pdf_backend: Optional[str] = None,
+        document_layout_heavy: Optional[bool] = None,
     ) -> None:
         """Update config attributes from the given keyword arguments (only non-None values)."""
         if openrouter_api_key is not None:
@@ -151,6 +156,10 @@ class SemiConfig:
             self.console_show_elapsed = console_show_elapsed
         if console_timeline is not None:
             self.console_timeline = console_timeline
+        if document_pdf_backend is not None:
+            self.document_pdf_backend = document_pdf_backend
+        if document_layout_heavy is not None:
+            self.document_layout_heavy = document_layout_heavy
 
 
 def effective_stream_display_mode(config: SemiConfig) -> str:

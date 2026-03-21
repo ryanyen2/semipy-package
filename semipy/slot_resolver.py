@@ -29,6 +29,7 @@ from semipy.reactivity import (
     update_slot_commit,
 )
 from semipy.resolver import resolve
+from semipy.documents import materialize_runtime_document_inputs
 from semipy.store import (
     function_name_for_commit,
     load_function_from_dispatch_by_slot_id,
@@ -237,6 +238,8 @@ def execute_slot(
     - attach DataFlow to result for downstream inference
     """
     config = get_config()
+    runtime_values = materialize_runtime_document_inputs(dict(runtime_values))
+
     portal_anchor = resolve_portal_anchor(source_file)
     session_id = session_id_from_filename(portal_anchor)
     module_name = session_module_name_from_filename(portal_anchor)

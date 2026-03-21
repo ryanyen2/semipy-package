@@ -362,11 +362,13 @@ def scan_informal_specs(
             start_abs = _relative_to_abs_lineno(first_lineno, rel_lineno)
             end_abs = start_abs
 
-            # Determine free vars: locals defined before plus names loaded in the call.
-            bound_before = _bound_names_before(fn_def, rel_lineno)
-            loaded_in_call = _loaded_names(node)
-            # Exclude the semi() symbol itself; scaffold will replace semi() with __slot_N__.
-            free_var_set = (bound_before | loaded_in_call) - {"semi"} - _BUILTIN_NAMES
+            # Free variables: only names *read inside the prompt expression* (first arg).
+            # Using (bound_before | loaded) for the whole semi() call incorrectly treated
+            # every prior assignment in the function (e.g. parser, args) as slot inputs,
+            # bloating signatures and gist invocations. Keywords like expected_type=str
+            # are outside prompt_expr and must not add spurious parameters.
+            loaded_in_prompt = _loaded_names(prompt_expr)
+            free_var_set = loaded_in_prompt - {"semi"} - _BUILTIN_NAMES
             free_vars = _ordered_vars_from_fn(fn_def, free_var_set)
 
             control_context = _control_context_for_line(fn_def, rel_lineno, func_qualname)

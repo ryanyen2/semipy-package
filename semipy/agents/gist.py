@@ -7,6 +7,7 @@ Reuses patterns from agents/refs/example_glm.py and validator._extract_enclosing
 from __future__ import annotations
 
 import ast
+import inspect
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -110,6 +111,7 @@ class GistBuilder:
 
     def __init__(self, spec: GenerationSpec) -> None:
         self.spec = spec
+        self.last_build_error: Optional[str] = None
 
     def build(self, generated_function_source: str) -> Optional[Gist]:
         """
@@ -118,24 +120,49 @@ class GistBuilder:
         function, and test invocation (sample_input / variable_values from spec).
         Returns None if the generated source cannot be parsed or has no function.
         """
+        self.last_build_error = None
         raw = _extract_function_source(generated_function_source)
         if not raw.strip():
+            self.last_build_error = "empty generated source"
             return None
 
         import_lines, fn_source = _extract_imports_and_function_from_generated(raw)
         if not fn_source.strip():
+            self.last_build_error = "no function definition in generated source"
             return None
 
         try:
             fn_tree = ast.parse(fn_source)
         except SyntaxError:
+            self.last_build_error = "syntax error in generated function"
             return None
         funcs = [n for n in ast.walk(fn_tree) if isinstance(n, ast.FunctionDef)]
         if not funcs:
+            self.last_build_error = "no function definition after parse"
             return None
         gen_fn_name = funcs[0].name
 
         test_invocation = _build_test_invocation(self.spec, gen_fn_name)
+        try:
+            ns: dict[str, Any] = {}
+            exec(compile(fn_source, "<gist_sig>", "exec"), ns)
+            compiled = [v for v in ns.values() if callable(v) and not isinstance(v, type)]
+            if compiled:
+                fn = compiled[0]
+                sample = self.spec.sample_input or {}
+                args = tuple(sample.get("args", ()) or ())
+                kwargs = dict(sample.get("kwargs", {}) or {})
+                inspect.signature(fn).bind(*args, **kwargs)
+        except TypeError as e:
+            self.last_build_error = (
+                "Generated function signature does not accept the slot's sample call "
+                f"(positional arity must match slot inputs). Detail: {e}"
+            )
+            return None
+        except Exception as e:
+            self.last_build_error = f"preflight compile/bind failed: {e}"
+            return None
+
         lines: list[str] = []
         if import_lines:
             lines.extend(import_lines)

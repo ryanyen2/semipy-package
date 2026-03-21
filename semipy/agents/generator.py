@@ -192,7 +192,7 @@ def _create_agent() -> Agent[SemiAgentDeps]:
         layout_heavy: bool = False,
         backend: str = "auto",
     ) -> DocumentContextResult:
-        """Load document text via semipy document I/O: UTF-8 for text files; PDFs use liteparse and/or LlamaCloud (see semipy.documents.load_document_text). Set layout_heavy true for scanned or layout-heavy PDFs. backend is auto, liteparse, or llama_cloud. Large bodies are chunked; increase chunk_index for more."""
+        """Load document text: UTF-8 for text files; PDFs via internal load_document_text (liteparse and/or LlamaCloud). Set layout_heavy for layout-heavy PDFs. backend: auto, liteparse, or llama_cloud. Large bodies are chunked; increase chunk_index for more."""
         try:
             p = Path(file_path).expanduser().resolve()
             if not p.exists():
@@ -249,10 +249,11 @@ def _create_agent() -> Agent[SemiAgentDeps]:
             return GistRunResult(success=False, error="GistBuilder or Executor not in deps")
         gist = gist_builder.build(generated_function_source)
         if not gist:
-            return GistRunResult(
-                success=False,
-                error="Could not build gist (missing user source or AST trace failed).",
-            )
+            detail = getattr(gist_builder, "last_build_error", None) or ""
+            msg = "Could not build gist (missing user source or AST trace failed)."
+            if detail:
+                msg = f"{msg} {detail}"
+            return GistRunResult(success=False, error=msg)
         result = await executor.execute_async(gist.source)
         deps.generated_source = generated_function_source
         deps.tool_calls_log.append("build_and_run_gist")
@@ -363,7 +364,7 @@ Rules:
 - Output only one function. No explanations, no markdown outside the code block.
 - Wrap the function in a ```python code block.
 - The function must be pure Python unless the request clearly suggests external interaction (e.g. fetching data). Use standard library or requests; do not rely on built-in domain-specific tools unless the prompt explicitly asks for them.
-- Parameters: all values described in the prompt are passed as positional arguments. The function MUST accept and use all positional arguments. Do NOT hardcode any constant values from the prompt. The first argument is typically the value that changes per invocation; the rest are fixed context for this call.
+- Parameters: the pipeline passes slot inputs as positional arguments in the exact order listed in the user prompt ("Slot inputs (positional arg order): [...]"). The function MUST have that many positional parameters (use *args only if the prompt explicitly allows variadic input). Parameter names are yours, but arity and order must match. If one slot input is a structured object (e.g. a dataclass row), take that single parameter and read its attributes inside the function; do not split it into extra parameters unless each piece is a separate slot input.
 - Gist sandbox calls may pass None for non-primitive arguments (e.g. a method's `self` placeholder). Do not assume a real instance; use only the primitive parameters you need, or branch on None and still return a valid value for validation.
 - Your function is invoked repeatedly (once per row, per element, or per item). The first argument is one value from a column or collection. Implement so the function works for every possible value in that column/collection, not only the single example you may see in get_runtime_data_context. Do not hardcode the sample value (e.g. one date or one country name).
 - Return type: match exactly what the user needs (bool for conditions, str for text, int/float for numbers, or the described type). Prefer a typed signature when the return type is known (e.g. def f(row, c3) -> bool:). The pipeline preserves type annotations.
@@ -378,7 +379,7 @@ Rules:
 Slot category instructions (from SlotSpec):
 - EXPRESSION: generate def __slot_N__(arg1, arg2, ...) that returns a single value matching expected_type. The returned value replaces the slot call in the scaffold.
 - If the slot has zero inputs (no free variables), the signature must be `def __slot_N__(): ...` with no required positional parameters.
-- STATEMENT_BLOCK: generate def __slot_N__(arg1, arg2, ...) that returns a dict[str, Any] with exactly the keys: output_names. Each key maps to the value that the key name should bind.
+- STATEMENT_BLOCK: generate def __slot_N__(arg1, arg2, ...) that returns a dict[str, Any] with exactly the keys: output_names. Each key maps to the value that the key name should bind. If a value is a list of structured rows and the scaffold defines a matching @dataclass (same field names), each row must be an instance of that class, not a plain dict, so downstream isinstance checks succeed.
 - FUNCTION_BODY: implement the full function body as today; return expected_type.
 - If expected_type is `callable`, your function must return another callable (a factory). If expected_type is a domain class, construct and return an instance of that class.
 - Hard constraints (must preserve): lines provided as formal_constraints MUST appear verbatim in your implementation. Do not remove or modify them.

@@ -1,11 +1,14 @@
 """
-Legal contract processing demo: mostly formal Python (fixed schema, allowed labels,
-control flow), with semipy handling PDF text via ``load_document_text`` and runtime
-inference only where the program cannot be closed over specs (``#>`` slots and
-standalone ``semi()`` calls).
+Contract obligation and risk-style demo (contrasts with the sponsorship canonicalizer).
 
-This is intentionally unlike ``use_visualization_builder.py``: informal regions are
-narrow, typed, and cached as functions — not whole-method vibes.
+**Sponsorship example** (``use_sponsorship_canonicalizer.py``): many small cached
+extractors per agreement and formal assembly into one schema.
+
+**This script**: clause graph from one ``#>`` slot, then per-clause ``semi()`` for
+labels and risk (many LLM calls per document). Use it to show the difference
+between "compiled family-level functions" and "interactive clause loop".
+
+PDF paths on ``self`` are materialized to text inside semipy before slots run.
 
 Run from repo root::
 
@@ -20,7 +23,7 @@ from pathlib import Path
 from typing import Optional
 
 from semipy import configure, semiformal, semi
-from semipy.documents import load_document_text
+from semipy.dataclass_utils import coerce_dataclass_list
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_PDF = (
@@ -63,38 +66,22 @@ class RiskRow:
     jurisdiction_note: Optional[str]
 
 
-def _formal_category(c: ClauseRecord) -> Optional[str]:
-    blob = f"{c.heading}\n{c.body}".casefold()
-    if "governing law" in blob or "choice of law" in blob:
-        return "governing_law"
-    if "confidential" in blob or "confidentiality" in blob:
-        return "confidentiality"
-    if "indemnif" in blob:
-        return "indemnity"
-    if "limitation of liability" in blob or "consequential" in blob:
-        return "liability"
-    if "termination" in blob or "term and termination" in blob:
-        return "termination"
-    if "fee" in blob or "payment" in blob or "compensation" in blob:
-        return "payment"
-    return None
-
-
-def classify_category(c: ClauseRecord) -> str:
-    """Formal rules first; otherwise a single expression slot with a closed label set."""
-    hit = _formal_category(c)
-    if hit is not None:
-        return hit
-    picked = semi(
-        f"Pick exactly one label from this list (copy spelling): {list(ALLOWED_CATEGORIES)}. "
-        f"Heading: {c.heading!r}. Body excerpt: {c.body[:450]!r}.",
-        expected_type=str,
-    )
+def _normalize_category_label(picked: str) -> str:
     normalized = picked.strip().casefold().replace(" ", "_").replace("-", "_")
     for a in ALLOWED_CATEGORIES:
         if normalized == a.casefold():
             return a
     return "miscellaneous"
+
+
+def classify_category(c: ClauseRecord) -> str:
+    """No deterministic keyword router: category always comes from ``semi()``."""
+    picked = semi(
+        f"Pick exactly one label from this list (copy spelling): {list(ALLOWED_CATEGORIES)}. "
+        f"Heading: {c.heading!r}. Body excerpt: {c.body[:450]!r}.",
+        expected_type=str,
+    )
+    return _normalize_category_label(picked)
 
 
 def parse_category_filter(csv: str) -> Optional[frozenset[str]]:
@@ -108,9 +95,10 @@ def parse_category_filter(csv: str) -> Optional[frozenset[str]]:
 
 @semiformal
 class ContractRun:
-    def __init__(self, raw_text: str, jurisdiction: str) -> None:
+    def __init__(self, document_path: Path, jurisdiction: str) -> None:
+        self.document_path = document_path.resolve()
         self.jurisdiction = jurisdiction
-        #> Split raw_text into ClauseRecord rows: clause_id (stable c0001-style),
+        #> Split the agreement text into ClauseRecord rows: clause_id (stable c0001-style),
         #> heading (title line), body (operative text), section_ref (best-effort section label).
         self.clauses = clauses
 
@@ -139,8 +127,9 @@ class ContractRun:
         min_risk: float,
         category_filter: Optional[frozenset[str]],
     ) -> list[RiskRow]:
+        clauses = coerce_dataclass_list(list(self.clauses), ClauseRecord)
         rows: list[RiskRow] = []
-        for c in self.clauses:
+        for c in clauses:
             cat = classify_category(c)
             if category_filter is not None and cat not in category_filter:
                 continue
@@ -153,7 +142,7 @@ class ContractRun:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Formal contract pipeline with semipy PDF I/O and selective inference",
+        description="Clause loop + semi() classification (contrast with sponsorship canonicalizer).",
     )
     parser.add_argument(
         "document",
@@ -166,24 +155,24 @@ def main() -> None:
     parser.add_argument(
         "--layout-heavy",
         action="store_true",
-        help="Prefer LlamaCloud agentic parsing for PDF (figures / scans / layout)",
+        help="Prefer LlamaCloud for layout-heavy PDFs",
     )
     parser.add_argument(
         "--backend",
         choices=("auto", "liteparse", "llama_cloud"),
         default="auto",
-        help="PDF backend (see semipy.documents.load_document_text)",
+        help="PDF backend for internal path materialization",
     )
     parser.add_argument(
         "--min-risk",
         type=float,
         default=None,
-        help="Skip semi() threshold; use this value directly",
+        help="Override semi()-chosen threshold when not using --skip-semi",
     )
     parser.add_argument(
         "--skip-semi",
         action="store_true",
-        help="Skip all standalone semi() calls (fixed defaults for demos without API)",
+        help="Skip standalone semi() calls (fixed defaults for demos without API)",
     )
     args = parser.parse_args()
     doc_path = Path(args.document).resolve()
@@ -195,6 +184,8 @@ def main() -> None:
         console_verbosity="normal",
         console_timeline=True,
         console_show_elapsed=True,
+        document_pdf_backend=args.backend,
+        document_layout_heavy=args.layout_heavy,
     )
 
     jurisdiction = (args.jurisdiction or "Delaware").strip()
@@ -202,7 +193,7 @@ def main() -> None:
     if args.skip_semi:
         min_risk = 3.0 if args.min_risk is None else float(args.min_risk)
         raw_filter = ""
-        headline = "Contract risk run (semi disabled)"
+        headline = "Contract risk run (standalone semi disabled)"
     else:
         min_risk = (
             float(args.min_risk)
@@ -227,17 +218,15 @@ def main() -> None:
     if args.skip_semi:
         filt = None
 
-    text = load_document_text(
-        doc_path,
-        backend=args.backend,
-        layout_heavy=args.layout_heavy,
-    )
-    run = ContractRun(text, jurisdiction)
+    run = ContractRun(doc_path, jurisdiction)
     rows = run.matrix(min_risk, filt)
 
     print(headline if not args.skip_semi else "Contract risk run")
     print(f"Document: {doc_path}")
-    print(f"Jurisdiction={jurisdiction!r} min_risk={min_risk} clauses={len(run.clauses)} shown={len(rows)}")
+    print(
+        f"Jurisdiction={jurisdiction!r} min_risk={min_risk} "
+        f"clauses={len(run.clauses)} shown={len(rows)}"
+    )
     for r in rows[:25]:
         print(f"  [{r.risk_score}] {r.category} | {r.clause_id} | {r.summary}")
     if len(rows) > 25:
