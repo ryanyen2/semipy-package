@@ -103,6 +103,8 @@ def rebuild_spec_from_commit(
         downstream_requirements=None,
         enclosing_function_source=None,
         user_source_code=None,
+        session_input_observations=None,
+        runtime_profile_scalar_only=False,
     )
 
 

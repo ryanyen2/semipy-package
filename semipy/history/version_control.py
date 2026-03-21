@@ -86,6 +86,8 @@ class Slot:
     slot_spec: dict[str, Any] | None = None
     enclosing_function_site_id: str | None = None
     advisor_state: dict[str, Any] = field(default_factory=dict)
+    # Per-parameter distinct string observations across invocations (bounded); used for generation prompts.
+    input_observation_samples: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass

@@ -31,6 +31,7 @@ from semipy.reactivity import (
     update_slot_commit,
 )
 from semipy.resolver import resolve
+from semipy.agents.profiler import _is_collection_like
 from semipy.documents import materialize_runtime_document_inputs
 from semipy.store import (
     function_name_for_commit,
@@ -55,6 +56,55 @@ from semipy.types import (
 )
 
 _dispatch_globals_cache: dict[str, dict[str, Any]] = {}
+
+_OBSERVATION_MAX_PER_KEY = 100
+
+
+def _runtime_value_observation_str(val: Any) -> str:
+    try:
+        if isinstance(val, str):
+            return val
+        return repr(val)
+    except Exception:
+        return ""
+
+
+def _record_slot_input_observations(slot: Any, runtime_values: dict[str, Any]) -> None:
+    """Append current runtime values to per-slot observation lists (bounded, distinct)."""
+    if not hasattr(slot, "input_observation_samples"):
+        slot.input_observation_samples = {}
+    d: dict[str, list[str]] = slot.input_observation_samples
+    for k, v in runtime_values.items():
+        if isinstance(k, str) and k.startswith("_"):
+            continue
+        s = _runtime_value_observation_str(v)
+        if not s:
+            continue
+        lst = d.setdefault(k, [])
+        if s not in lst:
+            lst.append(s)
+        while len(lst) > _OBSERVATION_MAX_PER_KEY:
+            lst.pop(0)
+
+
+def _runtime_profile_is_scalar_only(runtime_values: dict[str, Any]) -> bool:
+    if not runtime_values:
+        return True
+    for v in runtime_values.values():
+        if _is_collection_like(v):
+            return False
+    return True
+
+
+def _slot_session_observations(slot: Any) -> dict[str, list[str]] | None:
+    raw = getattr(slot, "input_observation_samples", None)
+    if not isinstance(raw, dict) or not raw:
+        return None
+    out: dict[str, list[str]] = {}
+    for k, v in raw.items():
+        if isinstance(v, list):
+            out[str(k)] = [str(x) for x in v]
+    return out if out else None
 
 
 def _sanitize_identifier(s: str) -> str:
@@ -182,6 +232,9 @@ def build_generation_spec(
         get_downstream_requirements(dep_graph, current_slot_ref) if dep_graph is not None else None
     )
 
+    slot_obj = portal.slots.get(slot_spec.slot_id)
+    session_obs = _slot_session_observations(slot_obj) if slot_obj else None
+
     return GenerationSpec(
         prompt=slot_spec.spec_text,
         call_site=call_site,
@@ -199,6 +252,8 @@ def build_generation_spec(
         downstream_requirements=downstream_requirements,
         enclosing_function_source=slot_spec.enclosing_function_source,
         user_source_code=None,
+        session_input_observations=session_obs,
+        runtime_profile_scalar_only=_runtime_profile_is_scalar_only(runtime_values),
     )
 
 
@@ -256,6 +311,8 @@ def execute_slot(
 
     portal = load_portal(cache_dir, session_id, portal_anchor, module_name)
     slot = _ensure_slot(portal, slot_spec)
+    _record_slot_input_observations(slot, runtime_values)
+    save_portal(cache_dir, portal)
 
     dep_graph = _get_dep_graph(cache_dir)
     current_slot_ref = SlotRef(session_id=session_id, slot_id=slot_spec.slot_id)

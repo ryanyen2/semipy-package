@@ -185,6 +185,11 @@ class GenerationSpec:
     # kept for agent tooling / gist validation
     user_source_code: Optional[str] = None
 
+    # Distinct values seen for each slot parameter across invocations (from portal); profiling only.
+    session_input_observations: dict[str, list[str]] | None = None
+    # True when current runtime_values contain only non-collection inputs (no DataFrame/Series in scope).
+    runtime_profile_scalar_only: bool = False
+
 
 @dataclass
 class ValidationResult:

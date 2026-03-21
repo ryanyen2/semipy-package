@@ -24,7 +24,6 @@ def effective_stream_display_mode(*, verbose: bool) -> str:
 @dataclass
 class SemiConfig:
     """Global configuration for semi() and the generation agent."""
-
     openrouter_api_key: Optional[str] = field(default_factory=lambda: os.getenv("OPENROUTER_API_KEY"))
     openrouter_model: str = "anthropic/claude-sonnet-4-6"
     validator_model: str = "anthropic/claude-haiku-4-5-20251001"

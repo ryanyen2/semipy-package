@@ -110,6 +110,7 @@ def _slot_to_dict(s: Slot) -> dict[str, Any]:
         "slot_spec": s.slot_spec,
         "enclosing_function_site_id": s.enclosing_function_site_id,
         "advisor_state": dict(getattr(s, "advisor_state", {}) or {}),
+        "input_observation_samples": dict(getattr(s, "input_observation_samples", {}) or {}),
     }
 
 
@@ -132,6 +133,7 @@ def _slot_from_dict(d: dict[str, Any]) -> Slot:
         slot_spec=d.get("slot_spec", None),
         enclosing_function_site_id=d.get("enclosing_function_site_id", None),
         advisor_state=dict(d.get("advisor_state", {}) or {}),
+        input_observation_samples=dict(d.get("input_observation_samples", {}) or {}),
     )
 
 

@@ -9,7 +9,12 @@ from pathlib import Path
 CACHE_DIR = '/Users/r4yen/Desktop/Research/semi-formal/repo/semipy-package/.semiformal-datetime-usecase'
 _SESSION_SOURCE = str((Path(CACHE_DIR).resolve().parent / "examples").resolve())
 
-configure(cache_dir=CACHE_DIR, session_source=_SESSION_SOURCE)
+configure(
+    cache_dir=CACHE_DIR, 
+    session_source=_SESSION_SOURCE,
+    verbose=True,
+    pipeline_trace=True,
+)
 
 @semiformal
 def infer_datetime_formatter(date_str: str) -> str:

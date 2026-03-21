@@ -134,6 +134,14 @@ def _create_agent() -> Agent[SemiAgentDeps]:
                 total_budget=12000,
                 collection_budget=7000,
             )
+            obs = getattr(spec, "session_input_observations", None)
+            if isinstance(obs, dict) and obs:
+                extra = ["\nSession input observations (distinct values seen for this slot):"]
+                for k in sorted(obs.keys()):
+                    v = obs[k]
+                    if isinstance(v, list):
+                        extra.append(f"  {k}: {v}")
+                summary = summary + "\n" + "\n".join(extra)
             return RuntimeDataContextResult(success=True, summary=summary)
         except Exception as e:
             return RuntimeDataContextResult(success=False, error=str(e))
@@ -256,7 +264,6 @@ def _create_agent() -> Agent[SemiAgentDeps]:
             return GistRunResult(success=False, error=msg)
         result = await executor.execute_async(gist.source)
         deps.generated_source = generated_function_source
-        deps.tool_calls_log.append("build_and_run_gist")
         return GistRunResult(
             success=result.success,
             stdout=result.stdout,

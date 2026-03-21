@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import json
+import os
 from typing import Any, Callable, List, Optional
 
 
@@ -82,6 +84,21 @@ def _tool_args_dict(part: Any) -> dict[str, Any]:
     return {}
 
 
+def _pipeline_trace_enabled() -> bool:
+    """Full prompt / tools / reasoning dump; controlled only via env (not SemiConfig)."""
+    return os.getenv("SEMIPY_PIPELINE_TRACE", "").strip().lower() in ("1", "true", "yes")
+
+
+def _trace_tool_result_snippet(content: Any, limit: int = 2000) -> str:
+    try:
+        s = repr(content)
+    except Exception:
+        s = "<unrepr>"
+    if len(s) > limit:
+        return s[: limit - 3] + "..."
+    return s
+
+
 def _handle_stream_event(
     event: Any,
     part_buffers: dict,
@@ -92,6 +109,8 @@ def _handle_stream_event(
     verbose: bool,
     stream_mode: str,
     stream_sink: Optional[Any],
+    deps: Optional[Any] = None,
+    pipeline_trace: bool = False,
 ) -> tuple[Optional[int], Optional[str]]:
     """Dispatch stream event to console; return updated (current_part_index, current_part_type)."""
     from pydantic_ai import (
@@ -104,10 +123,11 @@ def _handle_stream_event(
 
     idx = current_part_index
     ptype = current_part_type
-    show_tool_lines = verbose
-    debug_tools = False
+    show_tool_lines = verbose or pipeline_trace
+    debug_tools = pipeline_trace
     out_console = stream_sink.console if stream_sink is not None else get_console()
-    show_names = debug_tools
+    show_names = pipeline_trace
+    capture_reasoning = verbose or pipeline_trace
 
     if isinstance(event, PartStartEvent):
         if idx is not None and part_buffers.get(idx):
@@ -119,7 +139,7 @@ def _handle_stream_event(
                     elif verbose and stream_mode == "peek" and content:
                         # Peek mode streams a rolling tail; also print completed reasoning parts.
                         print_reasoning_block(content)
-                    if verbose:
+                    if capture_reasoning:
                         reasoning_blocks.append(content)
                 else:
                     if verbose and stream_mode == "full":
@@ -157,7 +177,7 @@ def _handle_stream_event(
                         print_reasoning_block(content)
                     elif verbose and stream_mode == "peek" and content:
                         print_reasoning_block(content)
-                    if verbose:
+                    if capture_reasoning:
                         reasoning_blocks.append(content)
                 else:
                     if verbose and stream_mode == "full":
@@ -170,6 +190,11 @@ def _handle_stream_event(
     elif isinstance(event, FunctionToolCallEvent):
         tool_name = getattr(event.part, "tool_name", "?")
         args = _tool_args_dict(event.part)
+        if deps is not None:
+            try:
+                deps.tool_calls_log.append(f"call:{tool_name} {json.dumps(args, default=str)}")
+            except Exception:
+                deps.tool_calls_log.append(f"call:{tool_name} args=(unserializable)")
         intent = format_tool_call_line(tool_name, args, debug=debug_tools)
         if show_tool_lines:
             print_tool_intent_line(
@@ -184,6 +209,8 @@ def _handle_stream_event(
         tr = event.result
         tool_name = getattr(tr, "tool_name", "?")
         content = getattr(tr, "content", None)
+        if deps is not None and pipeline_trace:
+            deps.tool_calls_log.append(f"result:{tool_name} {_trace_tool_result_snippet(content)}")
         outcome, ok = format_tool_result_line(tool_name, content, debug=debug_tools)
         if show_tool_lines:
             print_tool_outcome_line(outcome, ok, console=out_console)
@@ -224,6 +251,19 @@ class SemiAgent:
             total_budget=12000,
             collection_budget=7000,
         )
+
+    def _describe_session_input_observations(self, spec: GenerationSpec) -> str:
+        obs = getattr(spec, "session_input_observations", None)
+        if not isinstance(obs, dict) or not obs:
+            return ""
+        lines = [
+            "Distinct slot input values observed across this session (bounded list per parameter):",
+        ]
+        for k in sorted(obs.keys()):
+            v = obs[k]
+            if isinstance(v, list):
+                lines.append(f"  - {k}: {v}")
+        return "\n".join(lines)
 
     def _build_user_prompt(self, spec: GenerationSpec) -> str:
         def _expected_str() -> str:
@@ -312,6 +352,19 @@ class SemiAgent:
             parts.append("")
             parts.append(context_block)
 
+        obs_block = self._describe_session_input_observations(spec)
+        if obs_block:
+            parts.append("")
+            parts.append(obs_block)
+
+        if getattr(spec, "runtime_profile_scalar_only", False):
+            parts.append("")
+            parts.append(
+                "The current invocation only exposes scalar slot inputs (no table or collection in scope). "
+                "Assume each invocation may pass a different shape or format; do not hardcode "
+                "behavior to a single sample value."
+            )
+
         if getattr(spec, "downstream_requirements", None):
             reqs = spec.downstream_requirements
             if isinstance(reqs, dict) and reqs:
@@ -378,6 +431,7 @@ class SemiAgent:
     ) -> CacheEntry:
         """Run pydantic_ai agent with streaming; validate and return CacheEntry."""
         config = get_config()
+        pipeline_trace = _pipeline_trace_enabled()
         stream_mode = effective_stream_display_mode(verbose=self.verbose)
         executor = GistExecutor(
             use_e2b=config.use_e2b,
@@ -392,7 +446,7 @@ class SemiAgent:
         prompt = user_prompt_override if user_prompt_override is not None else self._build_user_prompt(spec)
         agent = get_semi_agent()
 
-        if self.verbose and stream_sink is None:
+        if (self.verbose or pipeline_trace) and stream_sink is None:
             decision = spec.decision if spec.decision is not None else Decision.GENERATE
             get_console().print(
                 f"[dim][semipy][/] Invoking LLM | decision=[cyan]{decision.value}[/]"
@@ -415,6 +469,8 @@ class SemiAgent:
                     verbose=self.verbose,
                     stream_mode=stream_mode,
                     stream_sink=stream_sink,
+                    deps=deps,
+                    pipeline_trace=pipeline_trace,
                 )
                 if hasattr(event, "result") and hasattr(event.result, "output"):
                     final_output = getattr(event.result.output, "content", None) or str(event.result.output)
@@ -422,6 +478,23 @@ class SemiAgent:
             executor = getattr(deps, "executor", None)
             if executor is not None and hasattr(executor, "close_async"):
                 await executor.close_async()
+
+        if pipeline_trace:
+            decision = spec.decision if spec.decision is not None else Decision.GENERATE
+            print(f"[semipy.pipeline_trace] decision={decision!r}")
+            print(f"[semipy.pipeline_trace] user_prompt:\n{prompt}")
+            if reasoning_blocks:
+                print(
+                    "[semipy.pipeline_trace] reasoning (first blocks):\n"
+                    + "\n\n".join(reasoning_blocks[:3])
+                )
+            else:
+                print(
+                    "[semipy.pipeline_trace] reasoning: (no thinking/reasoning parts in this stream; "
+                    "depends on provider/model. OpenRouter may expose these as separate message types.)"
+                )
+            if deps.tool_calls_log:
+                print("[semipy.pipeline_trace] tool_calls:\n" + "\n".join(deps.tool_calls_log))
 
         source = getattr(deps, "generated_source", None) or ""
         if not source.strip() and final_output:
