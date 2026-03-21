@@ -1,14 +1,7 @@
 """
-Sponsorship agreement canonicalizer: IR compilation + formal analytics + one ``semi()`` hook.
+Sponsorship agreement canonicalizer
 
-- ``@semiformal`` slots emit **dict / list[dict]** (easier to generate reliably); formal methods
-  validate into dataclasses with Pydantic ``TypeAdapter``.
-- **Formal Python** builds matrices, timelines, gap checks, and optional plots.
-- PDF paths on ``self`` are materialized to text inside semipy before slots run.
-- A **small** ``semi()`` call runs only when comparing multiple PDFs (see ``comparison_focus_line``).
-
-Run (repo root)::
-
+Run (repo root):
   uv run python examples/use_sponsorship_canonicalizer.py --max 2
   uv run python examples/use_sponsorship_canonicalizer.py --max 2 --skip-semi
 """
@@ -17,12 +10,13 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 import pandas as pd
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ValidationError
 
 from semipy import configure, semiformal, semi
+from semipy.type_adapter import type_adapter_for
 
 _REPO = Path(__file__).resolve().parents[1]
 _DEFAULT_GLOB = str(_REPO / "tests" / "pdf" / "contracts" / "*.pdf")
@@ -102,73 +96,8 @@ class Obligation:
     clause_anchor: str
 
 
-_SPONSORSHIP_IR_TA = TypeAdapter(SponsorshipIR)
-_OBL_LIST_TA = TypeAdapter(list[Obligation])
-
-_IR_LIST_KEYS = frozenset(
-    {"parties", "counterparty_roles", "fee_terms", "rights", "restrictions", "remedies"}
-)
-
-
-_FEE_KINDS = frozenset(
-    {"fixed", "installment", "in_kind", "refund", "reduction", "contingent"}
-)
-_RIGHT_KINDS = frozenset(
-    {
-        "signage",
-        "digital",
-        "hospitality",
-        "naming",
-        "booth",
-        "social",
-        "license",
-        "concessions",
-    }
-)
-_REST_KINDS = frozenset(
-    {"approval", "ip_use", "territory", "category_exclusivity", "insurance"}
-)
-_REM_KINDS = frozenset({"cure", "termination", "refund", "proration", "suspension"})
-
-
-def _normalize_ir_payload(raw: dict[str, Any]) -> dict[str, Any]:
-    """
-    Formal coercion: generated dicts sometimes use {} where lists are required.
-    """
-    out = dict(raw)
-    for k in _IR_LIST_KEYS:
-        v = out.get(k)
-        if v is None:
-            out[k] = []
-        elif isinstance(v, list):
-            out[k] = v
-        elif isinstance(v, dict):
-            out[k] = list(v.values()) if v else []
-        else:
-            out[k] = [v]
-    return out
-
-
-def _keep_rows_with_valid_kind(rows: list[Any], allowed: frozenset[str]) -> list[Any]:
-    """Drop list elements whose ``kind`` is missing or not in the closed enum."""
-    out: list[Any] = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        k = row.get("kind")
-        if isinstance(k, str) and k in allowed:
-            out.append(row)
-    return out
-
-
-def _sanitize_ir_enums(raw: dict[str, Any]) -> dict[str, Any]:
-    """Formal: filter slot noise (empty enum strings) before Pydantic."""
-    out = dict(raw)
-    out["fee_terms"] = _keep_rows_with_valid_kind(list(out.get("fee_terms") or []), _FEE_KINDS)
-    out["rights"] = _keep_rows_with_valid_kind(list(out.get("rights") or []), _RIGHT_KINDS)
-    out["restrictions"] = _keep_rows_with_valid_kind(list(out.get("restrictions") or []), _REST_KINDS)
-    out["remedies"] = _keep_rows_with_valid_kind(list(out.get("remedies") or []), _REM_KINDS)
-    return out
+_SPONSORSHIP_IR_TA = type_adapter_for(SponsorshipIR)
+_OBL_LIST_TA = type_adapter_for(list[Obligation])
 
 
 @semiformal
@@ -197,32 +126,27 @@ class SponsorshipAgreement:
         tagged = sum(1 for r in ir.rights if (r.exclusivity_category or "").strip())
         return tagged / len(ir.rights)
 
-    def raw_ir_as_dict(self) -> dict[str, Any]:
+    def raw_ir(self) -> SponsorshipIR:
         #> Read the agreement from self.agreement_text (a Python str: full PDF body, not a file path).
-        #> Assign to ``payload`` a dict with keys: parties, counterparty_roles, term_start, term_end,
-        #> governing_law, dispute_mode, fee_terms, rights, restrictions, remedies.
-        #> Each of fee_terms, rights, restrictions, remedies must be a list of dicts whose fields
-        #> match the dataclasses FeeTerm, RightGrant, Restriction, Remedy. Use only document facts;
-        #> use [] or "" where silent. Do not set payload to None.
-        return payload  # type: ignore[name-defined]
+        #> Build ``ir`` as structured data for SponsorshipIR: parties, counterparty_roles, term_start,
+        #> term_end, governing_law, dispute_mode, fee_terms, rights, restrictions, remedies.
+        #> Lists must be Python lists (not dicts). Nested rows must use the field names of FeeTerm,
+        #> RightGrant, Restriction, Remedy. Use only document facts; use [] or "" where silent.
+        return ir  # type: ignore[name-defined]
 
     def compile_ir(self) -> SponsorshipIR:
-        """Formal: normalize and validate slot output into ``SponsorshipIR``."""
-        raw = self.raw_ir_as_dict()
-        return _SPONSORSHIP_IR_TA.validate_python(
-            _sanitize_ir_enums(_normalize_ir_payload(raw))
-        )
+        """Formal: coerce slot output to ``SponsorshipIR`` (dict payloads from cache validate here)."""
+        return _SPONSORSHIP_IR_TA.validate_python(self.raw_ir())
 
-    def raw_obligations(self, ir: SponsorshipIR) -> list[dict[str, Any]]:
-        #> Given canonical IR as ``ir``, build a list of dicts matching Obligation fields:
+    def raw_obligations(self, ir: SponsorshipIR) -> list[Obligation]:
+        #> Given canonical IR as ``ir``, build ``rows``: a list matching Obligation fields:
         #> party, action_type, trigger, due_text, cure_text, consequence, clause_anchor.
-        #> Assign the list to ``rows``. Ground rows in the IR; do not invent obligations.
+        #> Ground rows in the IR; do not invent obligations.
         return rows  # type: ignore[name-defined]
 
     def infer_obligations(self, ir: SponsorshipIR) -> list[Obligation]:
-        """Formal: validate slot rows into ``list[Obligation]``."""
-        raw = self.raw_obligations(ir)
-        return _OBL_LIST_TA.validate_python(raw)
+        """Formal: coerce slot output to ``list[Obligation]``."""
+        return _OBL_LIST_TA.validate_python(self.raw_obligations(ir))
 
 
 def build_rights_matrix(labeled: list[tuple[str, SponsorshipIR]]) -> pd.DataFrame:
@@ -346,7 +270,8 @@ def main() -> None:
         session_source=SESSION_SOURCE,
         resolution_async_verify=False,
         stream=True,
-        console_verbosity="normal",
+        console_verbosity="debug",
+        verbose=True,
         console_timeline=True,
         console_show_elapsed=True,
         document_pdf_backend=args.backend,
@@ -437,7 +362,7 @@ def main() -> None:
 
     print(
         f"\nDone: {len(paths)} agreement(s); "
-        "slots = raw_ir_as_dict + raw_obligations per document; "
+        "slots = raw_ir + raw_obligations per document; "
         "formal layer validates and builds tables."
     )
 

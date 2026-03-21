@@ -3,9 +3,37 @@ from __future__ import annotations
 import ast
 import inspect
 import traceback
-from typing import Any, Optional
+from typing import Any, Optional, get_origin
 
+from semipy.type_adapter import type_adapter_for as _type_adapter_for
 from semipy.types import GenerationSpec, SlotCategory, ValidationResult
+
+
+def _should_use_typeadapter_for_expected_type(expected_type: Any) -> bool:
+    """
+    When True, validate slot results with pydantic TypeAdapter(expected_type).
+
+    Skip loose containers that would accept any dict/list without checking structure
+    (the historical gap that let ``dict[str, Any]`` slots commit garbage payloads).
+    """
+    if expected_type is None or expected_type is type(None):
+        return False
+    if expected_type is Any:
+        return False
+    if expected_type in (dict, list, set, frozenset):
+        return False
+    origin = get_origin(expected_type)
+    if origin in (dict,):
+        return False
+    return True
+
+
+def _validate_value_with_typeadapter(value: Any, expected_type: Any) -> tuple[bool, str]:
+    try:
+        _type_adapter_for(expected_type).validate_python(value)
+    except Exception as e:
+        return False, f"TypeAdapter validation failed for {expected_type!r}: {e}"
+    return True, ""
 
 
 def _extract_function_source(raw: str) -> str:
@@ -114,6 +142,18 @@ def _validate_basic_execution(
                     error_message=f"STATEMENT_BLOCK with no output_names must return None; got {type(result).__name__}",
                 )
 
+    # Value to type-check: for STATEMENT_BLOCK with one named output, validate the inner value.
+    value_for_typecheck: Any = result
+    if (
+        slot_category == SlotCategory.STATEMENT_BLOCK
+        and output_names
+        and len(output_names) == 1
+        and isinstance(result, dict)
+    ):
+        key = output_names[0]
+        if key in result:
+            value_for_typecheck = result[key]
+
     # Return type checks.
     if expected_type is type(None):
         # Unknown type: accept any.
@@ -126,13 +166,13 @@ def _validate_basic_execution(
         )
 
     if expected_type is callable:
-        if not _validate_callable_shape(result):
+        if not _validate_callable_shape(value_for_typecheck):
             return ValidationResult(
                 passed=False,
                 ast_valid=True,
                 type_correct=False,
                 execution_ok=True,
-                error_message=f"Expected a callable result; got {type(result).__name__}",
+                error_message=f"Expected a callable result; got {type(value_for_typecheck).__name__}",
             )
         return ValidationResult(
             passed=True,
@@ -142,15 +182,35 @@ def _validate_basic_execution(
             error_message="",
         )
 
-    # Domain classes and plain Python types.
-    if isinstance(expected_type, type):
-        if not isinstance(result, expected_type):
+    if _should_use_typeadapter_for_expected_type(expected_type):
+        ok, err = _validate_value_with_typeadapter(value_for_typecheck, expected_type)
+        if not ok:
             return ValidationResult(
                 passed=False,
                 ast_valid=True,
                 type_correct=False,
                 execution_ok=True,
-                error_message=f"Returned {type(result).__name__}, expected {expected_type.__name__}",
+                error_message=err,
+            )
+        return ValidationResult(
+            passed=True,
+            ast_valid=True,
+            type_correct=True,
+            execution_ok=True,
+            error_message="",
+        )
+
+    # Domain classes and plain Python types (no pydantic / no generic origin).
+    if isinstance(expected_type, type):
+        if not isinstance(value_for_typecheck, expected_type):
+            return ValidationResult(
+                passed=False,
+                ast_valid=True,
+                type_correct=False,
+                execution_ok=True,
+                error_message=(
+                    f"Returned {type(value_for_typecheck).__name__}, expected {expected_type.__name__}"
+                ),
             )
         return ValidationResult(
             passed=True,

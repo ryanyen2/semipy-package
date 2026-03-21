@@ -76,7 +76,7 @@ def test_pipeline_messages_human() -> None:
     [
         (False, "normal", "none"),
         (True, "quiet", "none"),
-        (True, "debug", "full"),
+        (True, "debug", "peek"),
         (True, "normal", "peek"),
     ],
 )

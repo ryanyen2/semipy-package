@@ -23,6 +23,7 @@ dependencies = [
     "pretty-little-summary>=0.1.1",
     "pydantic-ai[examples]>=1.63.0",
     "rich[jupyter]>=14.3.2",
+    "seaborn>=0.13.2",
     "textual>=8.1.1",
 ]
 

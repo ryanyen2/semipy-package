@@ -7,12 +7,26 @@ import functools
 import inspect
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Optional, Union, get_type_hints
 
 from semipy.lowering import lower_to_scaffold, scan_informal_specs
 from semipy.slot_resolver import _make_slot_proxy
 from semipy.types import SemiformalContext, SlotCategory, SlotSpec, compute_spec_equivalence_key
 from semipy.agents.config import get_config
+
+
+def _type_hints_for_lowering(fn: Callable[..., Any]) -> dict[str, Any]:
+    """
+    Resolve postponed annotations (``from __future__ import annotations``) so lowering
+    sees real types for ``SlotSpec.expected_type``, not strings like ``'SponsorshipIR'``.
+    Without this, validation uses ``TypeAdapter('SponsorshipIR')`` and pydantic cannot
+    build a complete schema (class-not-fully-defined).
+    """
+    try:
+        return get_type_hints(fn, globalns=fn.__globals__, localns={})
+    except Exception:
+        raw = getattr(fn, "__annotations__", None) or {}
+        return dict(raw) if raw else {}
 
 _semiformal_context_var: ContextVar[Optional[SemiformalContext]] = ContextVar(
     "semiformal_context", default=None
@@ -80,6 +94,7 @@ def _decorated_fn_source(
 def _wrap_function(fn: Callable[..., Any], description: Optional[str] = None, filename: Optional[str] = None) -> Callable[..., Any]:
     source, resolved_filename, first_lineno, func_qualname, type_hints = _decorated_fn_source(fn)
     resolved_filename = filename or resolved_filename
+    resolved_for_slots = _type_hints_for_lowering(fn)
     # Important: cache_dir may be configured after module import via `semipy.configure(...)`.
     # Slot proxies therefore read the effective cache_dir dynamically at call time.
     cache_dir: Optional[Path] = None
@@ -89,7 +104,7 @@ def _wrap_function(fn: Callable[..., Any], description: Optional[str] = None, fi
         filename=resolved_filename,
         func_qualname=func_qualname,
         first_lineno=first_lineno,
-        type_hints=getattr(fn, "__annotations__", None) or type_hints,
+        type_hints=resolved_for_slots or type_hints,
         globals_ns=getattr(fn, "__globals__", None) or {},
     )
     scaffold_src = lower_to_scaffold(source, slot_specs, slot_index_offset=0)
@@ -97,7 +112,7 @@ def _wrap_function(fn: Callable[..., Any], description: Optional[str] = None, fi
     ctx = SemiformalContext(
         func_name=func_qualname,
         source_code=source,
-        type_hints=type_hints,
+        type_hints=resolved_for_slots or type_hints,
         first_lineno=first_lineno,
         slot_specs=slot_specs,
         scaffold_source=scaffold_src,
@@ -112,11 +127,9 @@ def _wrap_function(fn: Callable[..., Any], description: Optional[str] = None, fi
     except Exception:
         # Structural error in scaffolding: fall back to executing the whole function as one slot.
         # This is the only structural fallback allowed by the plan.
-        import typing
-
         sig = inspect.signature(fn)
         param_names = list(sig.parameters.keys())
-        expected_type = typing.get_type_hints(fn).get("return", type(None))
+        expected_type = _type_hints_for_lowering(fn).get("return", type(None))
         spec_text = source
         spec_hash = __import__("hashlib").sha256(spec_text.encode()).hexdigest()[:16]
         slot_id = __import__("hashlib").sha256(f"{resolved_filename}:{func_qualname}:{first_lineno}:{spec_text}".encode()).hexdigest()[:16]

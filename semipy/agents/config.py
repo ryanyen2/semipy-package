@@ -42,7 +42,7 @@ class SemiConfig:
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     resolution_async_verify: bool = False
     session_source: Optional[str] = None
-    # Console UX: normal = formatted tools + peek timeline (terminal); debug = full reasoning panels; quiet = summary only
+    # Console UX: normal = tools + peek rolling tail; debug = same stream UI + verbose tool lines; quiet = summary only
     console_verbosity: str = "normal"
     console_peek_lines: int = 4
     console_show_elapsed: bool = False
@@ -165,13 +165,17 @@ class SemiConfig:
 def effective_stream_display_mode(config: SemiConfig) -> str:
     """
     How model streaming is shown: none | peek | full.
-    Derived from stream and console_verbosity when not using legacy overrides.
+
+    ``debug`` verbosity uses **peek** (rolling tail + timeline), not ``full`` panels, so
+    reasoning/thinking deltas stream during generation. Mapping ``debug`` to ``full`` left
+    no peek sink and only flushed reasoning at part boundaries, which looked hung on long
+    thinking streams. Tool-line verbosity still comes from ``console_verbosity == "debug"``.
     """
     if not config.stream:
         return "none"
     v = (config.console_verbosity or "normal").lower()
     if v == "debug":
-        return "full"
+        return "peek"
     if v == "quiet":
         return "none"
     return "peek"

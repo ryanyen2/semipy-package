@@ -56,10 +56,15 @@ from semipy.types import (
     GenerationSpec,
     SemiGenerationError,
     SemiTool,
+    SlotCategory,
     ValidationResult,
 )
 from semipy.agents.profiler import profile_runtime_context, profile_value
-from semipy.agents.validator import validate, _extract_function_source
+from semipy.agents.validator import (
+    _extract_function_source,
+    _should_use_typeadapter_for_expected_type,
+    validate,
+)
 
 
 def _tool_args_dict(part: Any) -> dict[str, Any]:
@@ -293,6 +298,21 @@ class SemiAgent:
         if slot_block:
             parts.append("")
             parts.append(slot_block.rstrip())
+
+        if (
+            spec.slot_spec
+            and spec.slot_spec.expected_category == SlotCategory.STATEMENT_BLOCK
+            and spec.slot_spec.output_names
+            and len(spec.slot_spec.output_names) == 1
+            and _should_use_typeadapter_for_expected_type(spec.expected_type)
+        ):
+            parts.append("")
+            parts.append(
+                "STATEMENT_BLOCK contract: return a dict with exactly one key "
+                f"{spec.slot_spec.output_names[0]!r}. Its value must validate as "
+                f"{spec.expected_type!r} (pydantic TypeAdapter): use the real field names for that "
+                "type, including nested list elements and enums."
+            )
 
         context_block = self._describe_context(spec)
         if context_block:
