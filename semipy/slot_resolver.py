@@ -377,7 +377,7 @@ def execute_slot(
     portal = load_portal(cache_dir, session_id, portal_anchor, module_name)
     slot = _ensure_slot(portal, slot_spec)
     _record_slot_input_observations(slot, runtime_values)
-    if not slot.commits and _runtime_profile_is_scalar_only(runtime_values):
+    if _runtime_profile_is_scalar_only(runtime_values):
         _harvest_caller_series_samples(runtime_values, slot)
     save_portal(cache_dir, portal)
 

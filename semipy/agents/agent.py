@@ -133,7 +133,6 @@ def _handle_stream_event(
         if idx is not None and part_buffers.get(idx):
             content = part_buffers[idx].strip()
             if content:
-                print(f'ptype: {ptype}')
                 if ptype == "thinking" or ptype == "reasoning":
                     if verbose and stream_mode == "full":
                         print_reasoning_block(content)

@@ -9,7 +9,7 @@ from __future__ import annotations
 import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 from rich.console import Console, Group
 from rich.live import Live
@@ -197,8 +197,11 @@ class GenerationStreamView:
 
 class JupyterStreamPeek:
     """
-    Throttled peek for Jupyter when Rich Live is disabled: prints rolling Panel updates
-    without flooding the cell (same deque + Syntax idea, fewer redraws).
+    Throttled peek for Jupyter when Rich Live is unavailable: same deque + Syntax as
+    ``GenerationStreamView``, but redraws **in place** via ``ipywidgets.Output`` +
+    ``clear_output`` so the cell does not accumulate one Panel per token chunk.
+
+    Without ipywidgets, falls back to printing to the shared Rich console (may append).
     """
 
     def __init__(self, console: Console, peek_lines: int) -> None:
@@ -208,13 +211,35 @@ class JupyterStreamPeek:
         self._stream_kind = "output"
         self._last_emit = 0.0
         self._chars = 0
+        self._peek_out: Optional[Any] = None
 
     @property
     def console(self) -> Console:
         return self._console
 
     def set_active_phase(self, _name: str) -> None:
-        """Phase strip is terminal-only; Jupyter uses throttled stream panels."""
+        """Phase strip is terminal-only; Jupyter uses the stream panel only."""
+
+    def _emit_panel(self) -> None:
+        visible = _peek_visible_lines(self._line_deque, self._peek_lines)
+        lexer = _guess_lexer("\n".join(visible))
+        body = _render_peek_body(visible, lexer=lexer)
+        subtitle = f"{self._stream_kind} — last {self._peek_lines} lines (Jupyter)"
+        panel = Panel(
+            body,
+            title="Stream",
+            subtitle=subtitle,
+            border_style="cyan",
+            padding=(0, 1),
+        )
+        if self._peek_out is not None:
+            from IPython.display import clear_output
+
+            with self._peek_out:
+                clear_output(wait=True)
+                self._console.print(panel)
+        else:
+            self._console.print(panel)
 
     def append_stream_delta(self, delta: str, *, kind: str = "output") -> None:
         if not delta:
@@ -227,26 +252,31 @@ class JupyterStreamPeek:
             return
         self._chars = 0
         self._last_emit = now
-        visible = _peek_visible_lines(self._line_deque, self._peek_lines)
-        lexer = _guess_lexer("\n".join(visible))
-        body = _render_peek_body(visible, lexer=lexer)
-        subtitle = f"{self._stream_kind} — last {self._peek_lines} lines (Jupyter)"
-        self._console.print(
-            Panel(
-                body,
-                title="Stream",
-                subtitle=subtitle,
-                border_style="cyan",
-                padding=(0, 1),
-            )
-        )
+        self._emit_panel()
 
     def clear_stream_buffer(self) -> None:
         self._line_deque = deque([""], maxlen=max(8, self._peek_lines * 2))
         self._stream_kind = "output"
+        self._chars = 0
+        if self._peek_out is not None:
+            from IPython.display import clear_output
+
+            with self._peek_out:
+                clear_output(wait=True)
 
     def __enter__(self) -> JupyterStreamPeek:
+        try:
+            import ipywidgets as ipw
+            from IPython.display import display
+
+            self._peek_out = ipw.Output()
+            display(self._peek_out)
+        except Exception:
+            self._peek_out = None
         return self
 
     def __exit__(self, *args: object) -> None:
+        if self._chars > 0:
+            self._chars = 0
+            self._emit_panel()
         return None

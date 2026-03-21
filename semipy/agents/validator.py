@@ -68,6 +68,39 @@ def _validate_callable_shape(result: Any) -> bool:
     return callable(result)
 
 
+def _str_identity_passthrough_failure(
+    *,
+    slot_category: SlotCategory | None,
+    expected_type: Any,
+    sample_input: dict[str, Any],
+    value_for_typecheck: Any,
+) -> bool:
+    """
+    Detect ``return input`` style failure (common when strptime fails but code returns the
+    original string). Same structural role as empty-string failure; forces ADAPT on REUSE
+    when new rows appear without re-generation.
+    """
+    if slot_category not in (
+        SlotCategory.FUNCTION_BODY,
+        SlotCategory.EXPRESSION,
+        SlotCategory.EXPRESSION_STANDALONE,
+    ):
+        return False
+    if expected_type is not str or not isinstance(value_for_typecheck, str):
+        return False
+    args = sample_input.get("args", ()) or ()
+    kwargs = sample_input.get("kwargs", {}) or {}
+    str_inputs = [x for x in (*args, *kwargs.values()) if isinstance(x, str)]
+    if len(str_inputs) != 1:
+        return False
+    sin = str_inputs[0].strip()
+    out = value_for_typecheck.strip()
+    if not sin or out != sin:
+        return False
+    # Avoid false positives on short canonical outputs (e.g. "Mar 2025" is 8 chars).
+    return len(sin) >= 9
+
+
 def _validate_basic_execution(
     *,
     fn: Any,
@@ -168,6 +201,22 @@ def _validate_basic_execution(
             error_message=(
                 "Empty string result for non-empty string input; "
                 "expected a non-empty conversion or a raised error."
+            ),
+        )
+
+    if _str_identity_passthrough_failure(
+        slot_category=slot_category,
+        expected_type=expected_type,
+        sample_input=sample_input,
+        value_for_typecheck=value_for_typecheck,
+    ):
+        return ValidationResult(
+            passed=False,
+            ast_valid=True,
+            type_correct=False,
+            execution_ok=True,
+            error_message=(
+                "Result equals non-empty input string; expected a transformed value or a raised error."
             ),
         )
 

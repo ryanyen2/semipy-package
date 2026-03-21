@@ -10,10 +10,9 @@ CACHE_DIR = '/Users/r4yen/Desktop/Research/semi-formal/repo/semipy-package/.semi
 _SESSION_SOURCE = str((Path(CACHE_DIR).resolve().parent / "examples").resolve())
 
 configure(
-    cache_dir=CACHE_DIR, 
+    cache_dir=CACHE_DIR,
     session_source=_SESSION_SOURCE,
     verbose=True,
-    pipeline_trace=True,
 )
 
 @semiformal
@@ -38,7 +37,8 @@ data = pd.DataFrame(
             "June 21 2025",
             "July 09 2026",
             "Aug 2026",
-            "09:30:00"
+            "09:30:00",
+            "04/21/2025",
         ]
     }
 )
