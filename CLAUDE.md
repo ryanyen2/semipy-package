@@ -8,7 +8,11 @@ A runtime semiformal system. The `@semiformal` decorator and `semi()` let users 
 
 **Slot identity vs reuse:** `slot_id` stays unique per source line (and spec text), but `spec_equivalence_key` (in `SlotSpec`) fingerprints the durable meaning: template text, free-variable names/order, expected return type, slot category, and output names. If a new call site has no commits yet, `resolver.resolve` can **REUSE** another slot’s compiled implementation from the dispatch module when the equivalence key matches (e.g. the same `semi(f"...")` template in another notebook cell).
 
-**REUSE vs data changes:** `spec_equivalence_key` ignores runtime values, so the same template with new inputs still resolves to **REUSE**. After REUSE, `execute_slot` runs `verify_runtime_execution` unless `runtime_input_fingerprint` on the commit matches current inputs (fingerprint is set at commit creation; it is not rewritten on each reuse, to avoid portal churn on per-row `apply`). On verify failure, resolution falls through to **ADAPT**. Verify **failures** log when `verbose` is on. Open-ended NL can still pass execution checks but be wrong semantically; use `expected_type` or explicit checks where needed.
+**REUSE vs data changes:** `spec_equivalence_key` ignores runtime values, so the same template with new inputs still resolves to **REUSE**. After REUSE, `execute_slot` runs `verify_runtime_execution` unless `runtime_input_fingerprint` on the commit matches current inputs (fingerprint is set at commit creation; it is not rewritten on each reuse, to avoid portal churn on per-row `apply`). On verify failure, resolution falls through to **ADAPT**. Verify **failures** log when `verbose` is on. A data-agnostic guard catches empty-string returns from non-empty string inputs (before the TypeAdapter branch) to force ADAPT when a reused implementation silently fails for a new input format. Open-ended NL can still pass execution checks but be wrong semantically; use `expected_type` or explicit checks where needed.
+
+**Observation harvesting:** On the first GENERATE for a slot with scalar inputs, `_harvest_caller_series_samples` walks the call stack to find a Series or list that contains the current value. When found (e.g. from a `DataFrame.apply()` call), it pre-seeds `slot.input_observation_samples` with all unique values so the generation prompt sees input variety, not just the first row. Subsequent observations accumulate per-call via `_record_slot_input_observations`.
+
+**Branch-head resolution:** `_head_commit` (resolver) and `_get_active_commit` (store/dispatch) both use `most_recent_branch_head` from `semipy.history` to pick the newest branch head across all branches, not only `default_branch`. This ensures ADAPT commits (which go to a new branch) are used as the parent source for subsequent ADAPTs and are written to the dispatch module.
 
 **Jupyter / IPython:** Code runs from a temp file whose basename changes every kernel restart (`.../ipykernel_*/NNNNNNNN.py`), which used to produce a new portal each time. `execute_slot` now resolves the portal anchor with `session_anchor.resolve_portal_anchor`: for paths containing `ipykernel`, the anchor is `os.getcwd()` (so the same working directory shares one portal and dispatch module). Override with `configure(session_source="/path/to/notebook.ipynb")` or env `SEMIPY_SESSION_SOURCE` when multiple notebooks share one cwd and need separate caches.
 
@@ -23,6 +27,7 @@ source .venv/bin/activate
 
 - **OPENROUTER_API_KEY** in `.env` or environment (required for generation).
 - Optional: **E2B_API_KEY** for sandboxed gist execution (otherwise subprocess fallback).
+- Optional: **SEMIPY_PIPELINE_TRACE** (`1`/`true`/`yes`) for full prompt, decision, reasoning, and tool-call dumps after each generation (env-only, not in SemiConfig).
 - Python >= 3.10. Uses `uv` for dependency and environment management.
 
 ## Console UX

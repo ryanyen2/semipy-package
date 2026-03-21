@@ -154,6 +154,23 @@ def _validate_basic_execution(
         if key in result:
             value_for_typecheck = result[key]
 
+    if (
+        expected_type is not type(None)
+        and isinstance(value_for_typecheck, str)
+        and value_for_typecheck == ""
+        and any(isinstance(a, str) and a.strip() for a in (*args, *kwargs.values()))
+    ):
+        return ValidationResult(
+            passed=False,
+            ast_valid=True,
+            type_correct=False,
+            execution_ok=True,
+            error_message=(
+                "Empty string result for non-empty string input; "
+                "expected a non-empty conversion or a raised error."
+            ),
+        )
+
     # Return type checks.
     if expected_type is type(None):
         # Unknown type: accept any.
@@ -212,21 +229,6 @@ def _validate_basic_execution(
                     f"Returned {type(value_for_typecheck).__name__}, expected {expected_type.__name__}"
                 ),
             )
-        # Data-agnostic guard: silent "" on non-empty str input often means "could not handle this input"
-        # while still satisfying isinstance(..., str). Forces ADAPT/regenerate on REUSE when formats change.
-        if expected_type is str and isinstance(value_for_typecheck, str) and value_for_typecheck == "":
-            for a in list(args) + list(kwargs.values()):
-                if isinstance(a, str) and a.strip():
-                    return ValidationResult(
-                        passed=False,
-                        ast_valid=True,
-                        type_correct=False,
-                        execution_ok=True,
-                        error_message=(
-                            "Empty string result for non-empty string input; "
-                            "expected a non-empty conversion or a raised error."
-                        ),
-                    )
         return ValidationResult(
             passed=True,
             ast_valid=True,

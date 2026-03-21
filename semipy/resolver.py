@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from semipy.history import Commit, Slot, walk_history
+from semipy.history import Commit, Slot, most_recent_branch_head, walk_history
 from semipy.types import Decision, SlotSpec, equivalence_key_from_stored_snapshot
 
 
@@ -22,11 +22,9 @@ class ResolutionResult:
 
 
 def _head_commit(slot: Slot) -> Optional[Commit]:
-    branch = slot.branches.get(slot.default_branch)
-    if branch is not None:
-        c = slot.commits.get(branch.head)
-        if c is not None:
-            return c
+    c = most_recent_branch_head(slot)
+    if c is not None:
+        return c
     if not slot.commits:
         return None
     return max(slot.commits.values(), key=lambda c: c.timestamp)

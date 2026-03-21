@@ -31,6 +31,8 @@ from semipy.reactivity import (
     update_slot_commit,
 )
 from semipy.resolver import resolve
+import inspect as _inspect
+
 from semipy.agents.profiler import _is_collection_like
 from semipy.documents import materialize_runtime_document_inputs
 from semipy.store import (
@@ -94,6 +96,69 @@ def _runtime_profile_is_scalar_only(runtime_values: dict[str, Any]) -> bool:
         if _is_collection_like(v):
             return False
     return True
+
+
+def _absorb_samples(slot: Any, key: str, raw_values: list) -> None:
+    """Record distinct observation strings into the slot for one parameter key."""
+    obs = slot.input_observation_samples.setdefault(key, [])
+    for rv in raw_values:
+        s = _runtime_value_observation_str(rv)
+        if s and s not in obs and len(obs) < _OBSERVATION_MAX_PER_KEY:
+            obs.append(s)
+
+
+def _harvest_caller_series_samples(
+    runtime_values: dict[str, Any],
+    slot: Any,
+    *,
+    max_samples: int = 50,
+    stack_depth: int = 12,
+) -> None:
+    """Walk up the call stack looking for a Series/list from which the current scalar came.
+
+    When found, record a sample of its unique values into the slot's observation list
+    so the first GENERATE prompt already knows about input variety.
+    """
+    if not runtime_values:
+        return
+    scalar_keys = [
+        k for k, v in runtime_values.items()
+        if isinstance(v, (str, int, float, bool)) and not isinstance(v, type)
+    ]
+    if not scalar_keys:
+        return
+
+    _SKIP_INTERNAL_FRAMES = 3
+    frame = _inspect.currentframe()
+    try:
+        f = frame
+        for _ in range(_SKIP_INTERNAL_FRAMES):
+            if f is None or f.f_back is None:
+                break
+            f = f.f_back
+        for _ in range(stack_depth):
+            if f is None:
+                break
+            loc = f.f_locals
+            for k in scalar_keys:
+                cur_val = runtime_values[k]
+                for _vname, v in loc.items():
+                    if _vname.startswith("_"):
+                        continue
+                    try:
+                        if hasattr(v, "unique") and callable(v.unique) and not isinstance(v, (str, bytes)):
+                            _absorb_samples(slot, k, list(v.unique())[:max_samples])
+                            return
+                        if isinstance(v, list) and len(v) > 1 and any(isinstance(x, type(cur_val)) for x in v[:5]):
+                            _absorb_samples(slot, k, v[:max_samples])
+                            return
+                    except Exception:
+                        continue
+            f = f.f_back
+    except Exception:
+        pass
+    finally:
+        del frame
 
 
 def _slot_session_observations(slot: Any) -> dict[str, list[str]] | None:
@@ -312,6 +377,8 @@ def execute_slot(
     portal = load_portal(cache_dir, session_id, portal_anchor, module_name)
     slot = _ensure_slot(portal, slot_spec)
     _record_slot_input_observations(slot, runtime_values)
+    if not slot.commits and _runtime_profile_is_scalar_only(runtime_values):
+        _harvest_caller_series_samples(runtime_values, slot)
     save_portal(cache_dir, portal)
 
     dep_graph = _get_dep_graph(cache_dir)

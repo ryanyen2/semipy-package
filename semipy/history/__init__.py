@@ -13,6 +13,7 @@ from semipy.history.version_control import (
     find_commit_by_operation_signature,
     freeze_constants,
     compute_operation_signature,
+    most_recent_branch_head,
     walk_history,
 )
 
@@ -28,5 +29,6 @@ __all__ = [
     "find_commit_by_operation_signature",
     "freeze_constants",
     "compute_operation_signature",
+    "most_recent_branch_head",
     "walk_history",
 ]

@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from semipy.history import Branch, Commit, Portal, Slot
+from semipy.history import Branch, Commit, Portal, Slot, most_recent_branch_head
 
 
 def _source_with_function_name(source: str, fn_name: str) -> str:
@@ -205,13 +205,10 @@ def function_name_for_commit(slot: Slot, commit: Commit) -> str:
 
 
 def _get_active_commit(slot: Slot) -> Optional[Commit]:
-    """Return the active commit for the slot: head of default_branch, or most recent ref'd commit."""
-    default = slot.default_branch
-    branch = slot.branches.get(default)
-    if branch is not None:
-        commit = slot.commits.get(branch.head)
-        if commit is not None:
-            return commit
+    """Return the active commit for the slot: most recent branch head, falling back to most recent ref'd commit."""
+    c = most_recent_branch_head(slot)
+    if c is not None:
+        return c
     if slot.refs:
         commit_ids = set(slot.refs.values())
         candidates = [slot.commits[cid] for cid in commit_ids if slot.commits.get(cid)]

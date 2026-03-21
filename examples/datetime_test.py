@@ -70,3 +70,5 @@ new_data = pd.DataFrame(
 
 new_data["formatted_signup_date"] = new_data["signup_date"].apply(infer_datetime_formatter)
 print(new_data["formatted_signup_date"].value_counts())
+
+

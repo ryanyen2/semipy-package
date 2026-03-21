@@ -208,6 +208,17 @@ def find_branch_by_fingerprint(slot: Slot, template_fingerprint: str) -> tuple[s
     return candidates[0]
 
 
+def most_recent_branch_head(slot: Slot) -> Commit | None:
+    """Return the most recent branch-head commit across all branches in the slot."""
+    from typing import Optional
+    best: Optional[Commit] = None
+    for branch in slot.branches.values():
+        c = slot.commits.get(branch.head)
+        if c is not None and (best is None or c.timestamp > best.timestamp):
+            best = c
+    return best
+
+
 def walk_history(slot: Slot, commit_id: str) -> list[Commit]:
     """Topological ancestor walk from commit_id (commit first, then parents)."""
     result: list[Commit] = []

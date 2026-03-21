@@ -133,7 +133,8 @@ def _handle_stream_event(
         if idx is not None and part_buffers.get(idx):
             content = part_buffers[idx].strip()
             if content:
-                if ptype == "thinking":
+                print(f'ptype: {ptype}')
+                if ptype == "thinking" or ptype == "reasoning":
                     if verbose and stream_mode == "full":
                         print_reasoning_block(content)
                     elif verbose and stream_mode == "peek" and content:
@@ -300,7 +301,12 @@ class SemiAgent:
 
         if spec.decision == Decision.ADAPT and spec.parent_sources:
             parts.append("")
-            parts.append("Adapt from this previous implementation (same structure, new parameters):")
+            parts.append(
+                "The previous implementation below FAILED for the current input. "
+                "Adapt it: keep all existing format/branch handling that works, "
+                "and add or fix only what is needed for the failing input. "
+                "Do not remove branches that handle other formats."
+            )
             parts.append("```python")
             parts.append(spec.parent_sources[0].strip())
             parts.append("```")

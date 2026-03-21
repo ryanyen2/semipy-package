@@ -41,7 +41,8 @@ def _create_openai_model(config: Any) -> Any:
     settings = OpenAIResponsesModelSettings(
         openai_reasoning_effort='low',
         openai_text_verbosity='low',
-        openai_reasoning_summary='concise',
+        openai_reasoning_summary='auto',
+        openai_send_reasoning_ids=True,
     )
     return model, settings
 
