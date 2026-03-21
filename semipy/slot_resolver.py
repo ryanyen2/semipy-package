@@ -6,6 +6,8 @@ from typing import Any, Callable
 
 from semipy.agents.agent import SemiAgent
 from semipy.agents.config import get_config
+from semipy.agents.console_io import print_pipeline_log
+from semipy.agents.validator import verify_runtime_execution
 from semipy.history.version_control import (
     Slot,
     add_commit_to_slot,
@@ -39,6 +41,7 @@ from semipy.store import (
     write_dispatch_module,
     _dispatch_module_path,
 )
+from semipy.runtime_fingerprint import compute_runtime_input_fingerprint
 from semipy.types import (
     Decision,
     GenerationSpec,
@@ -199,6 +202,13 @@ def build_generation_spec(
     )
 
 
+def _runtime_sample_input(slot_spec: SlotSpec, runtime_values: dict[str, Any]) -> dict[str, Any]:
+    if runtime_values:
+        args = [runtime_values.get(n) for n in slot_spec.free_variables]
+        return {"args": tuple(args), "kwargs": {}, "runtime_values": dict(runtime_values)}
+    return {"args": tuple(), "kwargs": {}, "runtime_values": {}}
+
+
 def _call_generated_fn(
     *,
     fn: Callable[..., Any],
@@ -247,7 +257,7 @@ def execute_slot(
     portal = load_portal(cache_dir, session_id, portal_anchor, module_name)
     slot = _ensure_slot(portal, slot_spec)
 
-    dep_graph = _get_dep_graph(cache_dir) if getattr(config, "reactive", True) else None
+    dep_graph = _get_dep_graph(cache_dir)
     current_slot_ref = SlotRef(session_id=session_id, slot_id=slot_spec.slot_id)
 
     # Register observed cross-slot dependency edges.
@@ -306,57 +316,74 @@ def execute_slot(
                 # Force regeneration so we rewrite dispatch with the current naming/sanitization.
                 force_regenerate = True
             else:
-                result = _call_generated_fn(
-                    fn=fn,
-                    slot_spec=slot_spec,
-                    runtime_values=runtime_values,
-                    prompt_preview=slot_spec.spec_text,
-                    generated_path=str(dispatch_path),
-                )
+                call_site = _call_site_from_slot(slot_spec)
+                current_fp = compute_runtime_input_fingerprint(runtime_values)
+                do_verify = True
+                stored_fp = getattr(commit, "runtime_input_fingerprint", "") or ""
+                skip_verify = bool(stored_fp) and stored_fp == current_fp
 
-                if dep_graph is not None:
-                    upstream_chain: list[SlotRef] = []
-                    for val in runtime_values.values():
-                        flow = extract_flow(val)
-                        if flow is not None:
-                            upstream_chain.append(flow.producing_slot)
-                    result = attach_producer_flow(
-                        result,
-                        create_flow(
-                            session_id=session_id,
-                            slot_id=slot_spec.slot_id,
-                            commit_id=commit.commit_id,
-                            upstream_chain=upstream_chain,
-                            output_profile=profile_output(result),
-                        ),
+                if do_verify and not skip_verify:
+                    sample_in = _runtime_sample_input(slot_spec, runtime_values)
+                    vr = verify_runtime_execution(
+                        fn=fn,
+                        expected_type=slot_spec.expected_type,
+                        sample_input=sample_in,
+                        slot_category=slot_spec.expected_category,
+                        output_names=list(slot_spec.output_names or []),
+                        enable_execution=True,
                     )
-                    update_slot_commit(dep_graph, current_slot_ref, commit.commit_id)
-                    clear_stale(dep_graph, current_slot_ref)
-                    save_dependency_graph(cache_dir, dep_graph)
-                if resolution.reuse_dispatch_slot_id:
-                    from semipy.agents.resolution_advisor import schedule_cross_slot_reuse_verification
-                    from semipy.resolver import list_equivalence_donors
+                    if not vr.passed:
+                        if config.verbose:
+                            err = (vr.error_message or "").strip().replace("\n", " ")
+                            if len(err) > 160:
+                                err = err[:157] + "..."
+                            print_pipeline_log(
+                                call_site,
+                                "reuse_verify",
+                                f"Runtime check failed; adapting. {err}",
+                            )
+                        force_regenerate = True
 
-                    donors = list_equivalence_donors(portal, slot_spec, slot_spec.slot_id)
-                    summaries: list[str] = []
-                    for s, c in donors[:12]:
-                        ci = s.call_site_info or {}
-                        summaries.append(
-                            f"commit_id={c.commit_id} slot_id={s.slot_id} "
-                            f"file={ci.get('filename', '')} line={ci.get('lineno', 0)}"
-                        )
-                    schedule_cross_slot_reuse_verification(
-                        cache_dir=cache_dir,
-                        session_id=session_id,
-                        source_file=source_file,
-                        module_name=module_name,
+                if not force_regenerate:
+                    result = _call_generated_fn(
+                        fn=fn,
                         slot_spec=slot_spec,
-                        donor_slot_id=resolution.reuse_dispatch_slot_id,
-                        donor_commit_id=commit.commit_id,
-                        candidate_summaries=summaries,
-                        chosen_source_excerpt=commit.generated_source,
+                        runtime_values=runtime_values,
+                        prompt_preview=slot_spec.spec_text,
+                        generated_path=str(dispatch_path),
                     )
-                return result
+
+                    if dep_graph is not None:
+                        upstream_chain = []
+                        for val in runtime_values.values():
+                            flow = extract_flow(val)
+                            if flow is not None:
+                                upstream_chain.append(flow.producing_slot)
+                        result = attach_producer_flow(
+                            result,
+                            create_flow(
+                                session_id=session_id,
+                                slot_id=slot_spec.slot_id,
+                                commit_id=commit.commit_id,
+                                upstream_chain=upstream_chain,
+                                output_profile=profile_output(result),
+                            ),
+                        )
+                        update_slot_commit(dep_graph, current_slot_ref, commit.commit_id)
+                        clear_stale(dep_graph, current_slot_ref)
+                        save_dependency_graph(cache_dir, dep_graph)
+                    if resolution.reuse_dispatch_slot_id:
+                        from semipy.resolver import list_equivalence_donors
+
+                        donors = list_equivalence_donors(portal, slot_spec, slot_spec.slot_id)
+                        summaries: list[str] = []
+                        for s, c in donors[:12]:
+                            ci = s.call_site_info or {}
+                            summaries.append(
+                                f"commit_id={c.commit_id} slot_id={s.slot_id} "
+                                f"file={ci.get('filename', '')} line={ci.get('lineno', 0)}"
+                            )
+                    return result
 
         if force_regenerate:
             resolution = resolve(portal, slot_spec, force_regenerate=True)
@@ -390,6 +417,7 @@ def execute_slot(
         slot_spec.spec_text,
         decision_str,
         usage_id=slot_spec.slot_id,
+        runtime_input_fingerprint=compute_runtime_input_fingerprint(runtime_values),
     )
     add_commit_to_slot(slot, commit, branch_name, usage_id=slot_spec.slot_id)
 

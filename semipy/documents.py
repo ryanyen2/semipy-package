@@ -148,6 +148,16 @@ def _normalize_document_backend(name: str) -> Backend:
     return "auto"
 
 
+def _document_backend_from_env() -> Backend:
+    raw = (os.environ.get("SEMIPY_DOCUMENT_PDF_BACKEND") or "auto").strip() or "auto"
+    return _normalize_document_backend(raw)
+
+
+def _document_layout_heavy_from_env() -> bool:
+    v = (os.environ.get("SEMIPY_DOCUMENT_LAYOUT_HEAVY") or "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
 def materialize_value_if_document_path(
     val: Any,
     *,
@@ -158,17 +168,8 @@ def materialize_value_if_document_path(
     If *val* is a ``Path`` or a string path to an existing ``.pdf`` file, return
     extracted text via ``load_document_text``; otherwise return *val* unchanged.
     """
-    from semipy.agents.config import get_config
-
-    cfg = get_config()
-    bk: Backend = backend if backend is not None else _normalize_document_backend(
-        str(getattr(cfg, "document_pdf_backend", "auto"))
-    )
-    lh = (
-        layout_heavy
-        if layout_heavy is not None
-        else bool(getattr(cfg, "document_layout_heavy", False))
-    )
+    bk: Backend = backend if backend is not None else _document_backend_from_env()
+    lh = layout_heavy if layout_heavy is not None else _document_layout_heavy_from_env()
 
     p: Path | None = None
     if isinstance(val, Path):
@@ -238,11 +239,8 @@ def materialize_runtime_document_inputs(runtime_values: dict[str, Any]) -> dict[
     with extracted text so generated slots see agreement text without calling
     ``load_document_text`` in user code.
     """
-    from semipy.agents.config import get_config
-
-    cfg = get_config()
-    bk = _normalize_document_backend(str(getattr(cfg, "document_pdf_backend", "auto")))
-    lh = bool(getattr(cfg, "document_layout_heavy", False))
+    bk = _document_backend_from_env()
+    lh = _document_layout_heavy_from_env()
     seen: set[int] = set()
     out = dict(runtime_values)
     if out.get("self") is not None:

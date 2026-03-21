@@ -335,3 +335,35 @@ def validate(
         output_names=output_names,
     )
 
+
+def verify_runtime_execution(
+    *,
+    fn: Any,
+    expected_type: Any,
+    sample_input: Optional[dict[str, Any]],
+    slot_category: SlotCategory | None,
+    output_names: list[str],
+    enable_execution: bool = True,
+) -> ValidationResult:
+    """
+    Run execution + type checks for an already-loaded dispatch function (REUSE path).
+
+    Skips AST/source parsing and formal-constraint checks; mirrors ``validate`` execution
+    behavior for the given ``sample_input``.
+    """
+    if not enable_execution:
+        return ValidationResult(
+            passed=True,
+            ast_valid=True,
+            type_correct=True,
+            execution_ok=True,
+            error_message="",
+        )
+    return _validate_basic_execution(
+        fn=fn,
+        expected_type=expected_type,
+        sample_input=sample_input,
+        slot_category=slot_category,
+        output_names=output_names,
+    )
+

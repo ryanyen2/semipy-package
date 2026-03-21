@@ -8,6 +8,7 @@ Run (repo root):
 from __future__ import annotations
 
 import argparse
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -266,17 +267,10 @@ def main() -> None:
     parser.add_argument("--skip-semi", action="store_true")
     args = parser.parse_args()
 
-    configure(
-        session_source=SESSION_SOURCE,
-        resolution_async_verify=False,
-        stream=True,
-        console_verbosity="debug",
-        verbose=True,
-        console_timeline=True,
-        console_show_elapsed=True,
-        document_pdf_backend=args.backend,
-        document_layout_heavy=args.layout_heavy,
-    )
+    os.environ["SEMIPY_DOCUMENT_PDF_BACKEND"] = args.backend
+    os.environ["SEMIPY_DOCUMENT_LAYOUT_HEAVY"] = "1" if args.layout_heavy else "0"
+
+    configure(session_source=SESSION_SOURCE, verbose=True)
 
     from glob import glob as stdglob
 

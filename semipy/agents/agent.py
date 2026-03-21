@@ -26,12 +26,17 @@ def _run_async(coro: Any) -> Any:
         return future.result()
 
 from semipy.agents.compiler import _compile_source
-from semipy.agents.config import effective_stream_display_mode, get_config
+from semipy.agents.config import (
+    STREAM_PEEK_LINES,
+    STREAM_SHOW_ELAPSED,
+    STREAM_TIMELINE,
+    effective_stream_display_mode,
+    get_config,
+)
 from semipy.agents.console_messages import format_tool_call_line, format_tool_result_line
 from semipy.agents.console_view import GenerationStreamView, JupyterStreamPeek
 from semipy.agents.console_io import (
     _is_jupyter,
-    confirm,
     generation_progress,
     get_console,
     jupyter_capture_console,
@@ -86,7 +91,6 @@ def _handle_stream_event(
     *,
     verbose: bool,
     stream_mode: str,
-    console_verbosity: str,
     stream_sink: Optional[Any],
 ) -> tuple[Optional[int], Optional[str]]:
     """Dispatch stream event to console; return updated (current_part_index, current_part_type)."""
@@ -100,8 +104,8 @@ def _handle_stream_event(
 
     idx = current_part_index
     ptype = current_part_type
-    show_tool_lines = verbose and console_verbosity != "quiet"
-    debug_tools = console_verbosity == "debug"
+    show_tool_lines = verbose
+    debug_tools = False
     out_console = stream_sink.console if stream_sink is not None else get_console()
     show_names = debug_tools
 
@@ -111,6 +115,9 @@ def _handle_stream_event(
             if content:
                 if ptype == "thinking":
                     if verbose and stream_mode == "full":
+                        print_reasoning_block(content)
+                    elif verbose and stream_mode == "peek" and content:
+                        # Peek mode streams a rolling tail; also print completed reasoning parts.
                         print_reasoning_block(content)
                     if verbose:
                         reasoning_blocks.append(content)
@@ -147,6 +154,8 @@ def _handle_stream_event(
             if content:
                 if ptype == "thinking":
                     if verbose and stream_mode == "full":
+                        print_reasoning_block(content)
+                    elif verbose and stream_mode == "peek" and content:
                         print_reasoning_block(content)
                     if verbose:
                         reasoning_blocks.append(content)
@@ -190,28 +199,12 @@ class SemiAgent:
     def __init__(
         self,
         max_retries: Optional[int] = None,
-        enable_execution_test: Optional[bool] = None,
         verbose: Optional[bool] = None,
-        stream: Optional[bool] = None,
-        confirm_on_failure: Optional[bool] = None,
-        confirm_on_external_tools: Optional[bool] = None,
         tools: Optional[List[SemiTool]] = None,
     ):
         config = get_config()
         self.max_retries = max_retries if max_retries is not None else config.max_retries
-        self.enable_execution_test = (
-            enable_execution_test if enable_execution_test is not None else config.enable_execution_test
-        )
         self.verbose = verbose if verbose is not None else config.verbose
-        self.stream = stream if stream is not None else config.stream
-        self.confirm_on_failure = (
-            confirm_on_failure if confirm_on_failure is not None else config.confirm_on_failure
-        )
-        self.confirm_on_external_tools = (
-            confirm_on_external_tools
-            if confirm_on_external_tools is not None
-            else config.confirm_on_external_tools
-        )
         self.tools: List[SemiTool] = list(tools) if tools is not None else []
 
     def _describe_value(self, name: str, value: Any) -> str:
@@ -343,18 +336,17 @@ class SemiAgent:
         self,
     ) -> Optional[GenerationStreamView | JupyterStreamPeek]:
         """Peek UI: Rich Live + timeline in terminal; throttled panels in Jupyter."""
-        cfg = get_config()
-        if not (self.verbose and effective_stream_display_mode(cfg) == "peek"):
+        if not (self.verbose and effective_stream_display_mode(verbose=self.verbose) == "peek"):
             return None
         if _is_jupyter():
-            return JupyterStreamPeek(get_console(), cfg.console_peek_lines)
+            return JupyterStreamPeek(get_console(), STREAM_PEEK_LINES)
         view = GenerationStreamView(
             get_console(),
-            cfg.console_peek_lines,
+            STREAM_PEEK_LINES,
             enabled=True,
-            show_timeline=cfg.console_timeline,
+            show_timeline=STREAM_TIMELINE,
         )
-        view.set_show_elapsed(cfg.console_show_elapsed)
+        view.set_show_elapsed(STREAM_SHOW_ELAPSED)
         return view
 
     def _build_retry_prompt(
@@ -386,8 +378,7 @@ class SemiAgent:
     ) -> CacheEntry:
         """Run pydantic_ai agent with streaming; validate and return CacheEntry."""
         config = get_config()
-        stream_mode = effective_stream_display_mode(config)
-        console_verbosity = (config.console_verbosity or "normal").lower()
+        stream_mode = effective_stream_display_mode(verbose=self.verbose)
         executor = GistExecutor(
             use_e2b=config.use_e2b,
             timeout=config.gist_timeout,
@@ -423,7 +414,6 @@ class SemiAgent:
                     reasoning_blocks,
                     verbose=self.verbose,
                     stream_mode=stream_mode,
-                    console_verbosity=console_verbosity,
                     stream_sink=stream_sink,
                 )
                 if hasattr(event, "result") and hasattr(event.result, "output"):
@@ -447,7 +437,7 @@ class SemiAgent:
             source,
             expected_type=spec.expected_type,
             sample_input=spec.sample_input,
-            enable_execution=self.enable_execution_test,
+            enable_execution=True,
             usage_hint=getattr(spec, "usage_hint", ""),
             spec=spec,
         )
@@ -475,8 +465,7 @@ class SemiAgent:
         """Synchronous wrapper: run generate_async in a new event loop."""
         total_attempts = self.max_retries + 1
         decision = spec.decision if spec.decision is not None else Decision.GENERATE
-        cfg = get_config()
-        use_peek_sink = self.verbose and effective_stream_display_mode(cfg) == "peek"
+        use_peek_sink = self.verbose and effective_stream_display_mode(verbose=self.verbose) == "peek"
 
         with jupyter_capture_console(), generation_progress(
             self.verbose,
@@ -488,17 +477,6 @@ class SemiAgent:
             print_pipeline_log(spec.call_site, "resolve", pipeline_resolution_message(decision))
             progress.set_stage("generate")
             progress.update(pipeline_resolution_message(decision))
-            if self.confirm_on_external_tools and getattr(spec, "require_external_tools", False):
-                config = get_config()
-                if not confirm(
-                    "This may require external tools (web/PDF/image). Continue with current setup?",
-                    default_no=True,
-                    confirm_callback=config.confirm_callback,
-                ):
-                    raise SemiGenerationError(
-                        "User declined to continue without external tools (require_external_tools=True, confirm_on_external_tools=True)."
-                    )
-
             last_source = ""
             last_result: Optional[ValidationResult] = None
 
@@ -539,7 +517,7 @@ class SemiAgent:
                     last_result = getattr(e, "last_result", None)
                     if attempt + 1 >= total_attempts:
                         progress.record_failure(str(e), validation_result=last_result, source=last_source, call_site=spec.call_site)
-                        if (get_config().console_verbosity or "").lower() == "debug":
+                        if self.verbose:
                             print_friendly_exception(e, title="Generation failed")
                         raise
                     continue

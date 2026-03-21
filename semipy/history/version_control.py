@@ -62,6 +62,8 @@ class Commit:
     message: str
     decision: str
     usage_id: str = ""
+    # SHA256[:16] of normalized runtime_values from the last successful verify or generation.
+    runtime_input_fingerprint: str = ""
 
 
 @dataclass
@@ -104,6 +106,8 @@ def create_commit(
     prompt_snapshot: str,
     decision: str,
     usage_id: str = "",
+    *,
+    runtime_input_fingerprint: str = "",
 ) -> Commit:
     """Build a new Commit and compute its id, source_hash, and operation_signature."""
     source_hash = compute_source_hash(generated_source)
@@ -123,6 +127,7 @@ def create_commit(
         message=message,
         decision=decision,
         usage_id=usage_id,
+        runtime_input_fingerprint=runtime_input_fingerprint or "",
     )
 
 

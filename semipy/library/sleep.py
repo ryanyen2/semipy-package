@@ -52,7 +52,7 @@ async def run_sleep_phase_async(
     if len(new_commits) < min_new_commits:
         return library
     commit_sources = [(cid, src) for _s, _slot, cid, src in new_commits]
-    min_freq = getattr(config, "min_pattern_frequency", 3)
+    min_freq = 3
     pattern_groups = mine_patterns(
         commit_sources,
         min_pattern_frequency=min_freq,

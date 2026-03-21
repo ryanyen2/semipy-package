@@ -40,7 +40,7 @@ uv run python examples/use_csv_kit.py
 
 - Set **OPENROUTER_API_KEY** in the environment or in a `.env` file in the project root (required for generation).
 - Optional: **E2B_API_KEY** for sandboxed gist execution; without it, a subprocess fallback is used.
-- Optional: `semipy.configure(...)` to set `openrouter_model`, `validator_model`, `cache_dir`, `max_retries`, `use_e2b`, `gist_timeout`, `enable_execution_test`, `verbose`, `stream`, etc.
+- Optional: `semipy.configure(...)` to set `openrouter_model`, `validator_model`, `cache_dir`, `max_retries`, `use_e2b`, `gist_timeout`, `verbose`, `session_source`, etc. Unknown keys are ignored.
 
 ## Usage
 
