@@ -8,11 +8,132 @@ from __future__ import annotations
 
 import ast
 import inspect
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, get_args, get_origin
 
+from semipy.agents.slot_call import bind_slot_arguments
 from semipy.types import GenerationSpec
+
+
+def _collect_referenced_types(spec: GenerationSpec) -> list[type]:
+    """Types from expected_type and sample values that may need to be bound in an isolated gist."""
+    seen: set[int] = set()
+    out: list[type] = []
+
+    def add_obj(o: Any) -> None:
+        if isinstance(o, type):
+            oid = id(o)
+            if oid not in seen:
+                seen.add(oid)
+                out.append(o)
+
+    def walk(t: Any) -> None:
+        if isinstance(t, type):
+            add_obj(t)
+            return
+        if get_origin(t) is not None:
+            for a in get_args(t) or ():
+                walk(a)
+
+    walk(spec.expected_type)
+    sample = spec.sample_input or {}
+    for a in sample.get("args") or ():
+        if isinstance(a, type):
+            walk(a)
+        else:
+            add_obj(type(a))
+    for v in (sample.get("kwargs") or {}).values():
+        if isinstance(v, type):
+            walk(v)
+        else:
+            add_obj(type(v))
+    return out
+
+
+def _type_defined_at_source_path(typ: type, abs_path: str) -> bool:
+    try:
+        tpath = os.path.abspath(os.path.normpath(inspect.getfile(typ)))
+        return os.path.normcase(tpath) == os.path.normcase(os.path.abspath(abs_path))
+    except Exception:
+        return False
+
+
+def _resolved_user_source_path(spec: GenerationSpec) -> str:
+    """
+    Absolute path to the user's module for ``importlib`` loading in gist subprocesses.
+
+    Prefer ``execution_namespace['__file__']`` (reliable for ``python script.py``); fall
+    back to ``call_site.filename`` and cwd-relative resolution.
+    """
+    ns = spec.execution_namespace or {}
+    ef = ns.get("__file__")
+    if isinstance(ef, str):
+        try:
+            ap = os.path.abspath(os.path.normpath(ef))
+            if os.path.isfile(ap):
+                return ap
+        except Exception:
+            pass
+    path = spec.call_site.filename
+    if not path or path == "<unknown>":
+        return ""
+    try:
+        p = Path(path).expanduser()
+        if p.is_file():
+            return str(p.resolve())
+        cand = Path.cwd() / p
+        if cand.is_file():
+            return str(cand.resolve())
+    except Exception:
+        pass
+    try:
+        ap = os.path.abspath(os.path.normpath(path))
+        if os.path.isfile(ap):
+            return ap
+    except Exception:
+        pass
+    return ""
+
+
+def _gist_user_types_preamble(spec: GenerationSpec) -> tuple[str, Optional[str]]:
+    """
+    Load the call-site module so gist subprocesses expose user-defined classes.
+
+    Path is not embedded in source (avoids repr/quoting edge cases). The executor sets
+    ``SEMIPY_GIST_USER_SOURCE`` on the subprocess environment to the absolute path.
+    """
+    abs_path = _resolved_user_source_path(spec)
+    if not abs_path:
+        return "", None
+    names: list[str] = []
+    for t in _collect_referenced_types(spec):
+        if not isinstance(t, type):
+            continue
+        if not _type_defined_at_source_path(t, abs_path):
+            continue
+        n = getattr(t, "__name__", None)
+        if isinstance(n, str) and n.isidentifier():
+            names.append(n)
+    names = sorted(set(names))
+    if not names:
+        return "", None
+    lines = [
+        "import importlib.util",
+        "import os",
+        "import pathlib",
+        "_semipy_p = (os.environ.get('SEMIPY_GIST_USER_SOURCE') or '').strip()",
+        "if _semipy_p and pathlib.Path(_semipy_p).is_file():",
+        "    _semipy_spec = importlib.util.spec_from_file_location('_semipy_user_slot', _semipy_p)",
+        "    _semipy_user_mod = importlib.util.module_from_spec(_semipy_spec)",
+        "    _semipy_spec.loader.exec_module(_semipy_user_mod)",
+        "else:",
+        "    _semipy_user_mod = None",
+    ]
+    for n in names:
+        lines.append(f"{n} = getattr(_semipy_user_mod, {repr(n)}, None)")
+    return "\n".join(lines) + "\n\n", abs_path
 
 
 def _expr_for_gist_invocation(value: Any) -> str:
@@ -98,6 +219,7 @@ class Gist:
     test_invocation: str
     upstream_deps: list[str] = field(default_factory=list)
     mocked_externals: list[str] = field(default_factory=list)
+    user_source_path: Optional[str] = None
 
 
 class GistBuilder:
@@ -136,23 +258,37 @@ class GistBuilder:
         except SyntaxError:
             self.last_build_error = "syntax error in generated function"
             return None
-        funcs = [n for n in ast.walk(fn_tree) if isinstance(n, ast.FunctionDef)]
-        if not funcs:
+        gen_fn_name: str | None = None
+        if isinstance(fn_tree, ast.Module):
+            for node in fn_tree.body:
+                if isinstance(node, ast.FunctionDef):
+                    gen_fn_name = node.name
+                    break
+        if gen_fn_name is None:
+            for n in ast.walk(fn_tree):
+                if isinstance(n, ast.FunctionDef):
+                    gen_fn_name = n.name
+                    break
+        if not gen_fn_name:
             self.last_build_error = "no function definition after parse"
             return None
-        gen_fn_name = funcs[0].name
 
-        test_invocation = _build_test_invocation(self.spec, gen_fn_name)
         try:
             ns: dict[str, Any] = {}
             exec(compile(fn_source, "<gist_sig>", "exec"), ns)
-            compiled = [v for v in ns.values() if callable(v) and not isinstance(v, type)]
-            if compiled:
-                fn = compiled[0]
-                sample = self.spec.sample_input or {}
-                args = tuple(sample.get("args", ()) or ())
-                kwargs = dict(sample.get("kwargs", {}) or {})
+            fn = ns.get(gen_fn_name)
+            if fn is None or not callable(fn) or isinstance(fn, type):
+                self.last_build_error = f"no callable named {gen_fn_name!r} in compiled gist source"
+                return None
+            sample = self.spec.sample_input or {}
+            args = tuple(sample.get("args", ()) or ())
+            kwargs = dict(sample.get("kwargs", {}) or {})
+            fv = list(self.spec.slot_spec.free_variables) if self.spec.slot_spec else []
+            if fv and len(fv) == len(args) and not kwargs:
+                bind_slot_arguments(fn, fv, args)
+            else:
                 inspect.signature(fn).bind(*args, **kwargs)
+            test_invocation = _build_test_invocation(self.spec, gen_fn_name, fn)
         except TypeError as e:
             self.last_build_error = (
                 "Generated function signature does not accept the slot's sample call "
@@ -164,6 +300,10 @@ class GistBuilder:
             return None
 
         lines: list[str] = []
+        preamble, user_path_for_env = _gist_user_types_preamble(self.spec)
+        if preamble.strip():
+            lines.append(preamble.rstrip())
+            lines.append("")
         if import_lines:
             lines.extend(import_lines)
             lines.append("")
@@ -177,6 +317,7 @@ class GistBuilder:
             test_invocation=test_invocation,
             upstream_deps=[],
             mocked_externals=[],
+            user_source_path=user_path_for_env,
         )
 
 
@@ -297,17 +438,43 @@ def _collect_upstream_snippets(
     return snippets
 
 
-def _build_test_invocation(spec: GenerationSpec, fn_name: str) -> str:
+def _build_test_invocation(
+    spec: GenerationSpec,
+    fn_name: str,
+    fn: Any | None = None,
+) -> str:
     """Build the test invocation line(s) from spec.sample_input or spec.variable_values."""
     marker = "__GIST_RESULT__"
     sample = spec.sample_input
     if sample and isinstance(sample, dict):
-        args = sample.get("args", ())
-        kwargs = sample.get("kwargs", {})
+        args = tuple(sample.get("args", ()) or ())
+        kwargs = dict(sample.get("kwargs", {}) or {})
         if args or kwargs:
-            args_str = ", ".join(_expr_for_gist_invocation(a) for a in args)
-            if kwargs:
-                args_str += ", " + ", ".join(f"{k}={_expr_for_gist_invocation(v)}" for k, v in kwargs.items())
+            fv = list(spec.slot_spec.free_variables) if spec.slot_spec else []
+            if (
+                fn is not None
+                and fv
+                and len(fv) == len(args)
+                and not kwargs
+            ):
+                by_name = dict(zip(fv, args))
+                sig = inspect.signature(fn)
+                parts = [
+                    f"{name}={_expr_for_gist_invocation(by_name[name])}"
+                    for name in sig.parameters
+                    if name in by_name
+                ]
+                args_str = ", ".join(parts)
+            elif fv and len(fv) == len(args) and not kwargs:
+                args_str = ", ".join(
+                    f"{k}={_expr_for_gist_invocation(v)}" for k, v in zip(fv, args)
+                )
+            else:
+                args_str = ", ".join(_expr_for_gist_invocation(a) for a in args)
+                if kwargs:
+                    args_str += ", " + ", ".join(
+                        f"{k}={_expr_for_gist_invocation(v)}" for k, v in kwargs.items()
+                    )
             return f"{marker} = {fn_name}({args_str})\nprint({repr(marker)}, repr({marker}), flush=True)"
     variable_values = getattr(spec, "variable_values", None) or {}
     if variable_values:

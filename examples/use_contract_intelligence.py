@@ -126,14 +126,11 @@ class ContractRun:
     def matrix(
         self,
         min_risk: float,
-        category_filter: Optional[frozenset[str]],
     ) -> list[RiskRow]:
         clauses = coerce_dataclass_list(list(self.clauses), ClauseRecord)
         rows: list[RiskRow] = []
         for c in clauses:
             cat = classify_category(c)
-            if category_filter is not None and cat not in category_filter:
-                continue
             row = self.score(c, cat)
             if row.risk_score >= min_risk:
                 rows.append(row)
@@ -154,69 +151,32 @@ def main() -> None:
     )
     parser.add_argument("--jurisdiction", default="Delaware")
     parser.add_argument(
-        "--layout-heavy",
-        action="store_true",
-        help="Prefer LlamaCloud for layout-heavy PDFs",
-    )
-    parser.add_argument(
-        "--backend",
-        choices=("auto", "liteparse", "llama_cloud"),
-        default="auto",
-        help="PDF backend for internal path materialization",
-    )
-    parser.add_argument(
         "--min-risk",
         type=float,
         default=None,
-        help="Override semi()-chosen threshold when not using --skip-semi",
+        help="Override semi()-chosen threshold",
     )
-    parser.add_argument(
-        "--skip-semi",
-        action="store_true",
-        help="Skip standalone semi() calls (fixed defaults for demos without API)",
-    )
+
     args = parser.parse_args()
     doc_path = Path(args.document).resolve()
-
-    os.environ["SEMIPY_DOCUMENT_PDF_BACKEND"] = args.backend
-    os.environ["SEMIPY_DOCUMENT_LAYOUT_HEAVY"] = "1" if args.layout_heavy else "0"
 
     configure(session_source=SESSION_SOURCE)
 
     jurisdiction = (args.jurisdiction or "Delaware").strip()
 
-    if args.skip_semi:
-        min_risk = 3.0 if args.min_risk is None else float(args.min_risk)
-        raw_filter = ""
-        headline = "Contract risk run (standalone semi disabled)"
-    else:
-        min_risk = (
-            float(args.min_risk)
-            if args.min_risk is not None
-            else semi(
-                f"Minimum risk_score in [1.0, 5.0] for this executive summary "
-                f"(jurisdiction context {jurisdiction!r}). Return float.",
-                expected_type=float,
-            )
+    min_risk = (
+        float(args.min_risk)
+        if args.min_risk is not None
+        else semi(
+            f"Minimum risk_score in [1.0, 5.0] for this executive summary "
+            f"(jurisdiction context {jurisdiction!r}). Return float.",
+            expected_type=float,
         )
-        raw_filter = semi(
-            f"Comma-separated subset of {list(ALLOWED_CATEGORIES)} to include, or empty for all. "
-            f"Jurisdiction {jurisdiction!r}.",
-            expected_type=str,
-        )
-        headline = semi(
-            f"One line (max 100 chars) describing this run for {doc_path.name!r}.",
-            expected_type=str,
-        )
-
-    filt = parse_category_filter(raw_filter) if not args.skip_semi else None
-    if args.skip_semi:
-        filt = None
+    )
 
     run = ContractRun(doc_path, jurisdiction)
-    rows = run.matrix(min_risk, filt)
+    rows = run.matrix(min_risk)
 
-    print(headline if not args.skip_semi else "Contract risk run")
     print(f"Document: {doc_path}")
     print(
         f"Jurisdiction={jurisdiction!r} min_risk={min_risk} "
@@ -230,3 +190,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    # example command:
+    # uv run python examples/use_contract_intelligence.py --jurisdiction "Delaware" --min-risk 3.0

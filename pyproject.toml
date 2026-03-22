@@ -20,6 +20,7 @@ dependencies = [
     "llama-cloud>=1.6.0",
     "openrouter>=0.7.11",
     "pandas>=2.3.3",
+    "polars>=1.39.3",
     "pretty-little-summary>=0.1.1",
     "pydantic-ai[examples]>=1.63.0",
     "rich[jupyter]>=14.3.2",

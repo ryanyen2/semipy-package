@@ -144,6 +144,10 @@ def _infer_expected_type_for_output_names(
     # Prefer function return type when output is returned.
     if not output_names:
         return type(None)
+    if len(output_names) != 1:
+        # Multiple named locals; the slot returns a dict-shaped payload, not the enclosing
+        # return type (e.g. RiskRow) as a single value.
+        return Any
     if type_hints and "return" in type_hints:
         return_type = type_hints.get("return")
     else:
@@ -214,6 +218,16 @@ def _extract_formal_constraint_lines(
     return formal
 
 
+def _call_target_names_in_stmts(stmts: list[ast.stmt]) -> set[str]:
+    """Names used as the callable in ``Name(...)`` calls (constructors, helpers), not slot outputs."""
+    out: set[str] = set()
+    for stmt in stmts:
+        for n in ast.walk(stmt):
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name):
+                out.add(n.func.id)
+    return out
+
+
 def _infer_output_names_for_statement_block(
     fn_def: ast.FunctionDef | ast.AsyncFunctionDef,
     block_end_rel_lineno: int,
@@ -234,6 +248,7 @@ def _infer_output_names_for_statement_block(
     for stmt in region:
         loaded |= _loaded_names(stmt)
         assigned |= _assigned_names(stmt)
+    loaded -= _call_target_names_in_stmts(region)
     # Names assigned inside the region are not outputs of the #> block; they
     # are produced by subsequent formal code statements.
     out = sorted(loaded - names_defined_before - assigned)

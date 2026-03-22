@@ -263,7 +263,7 @@ def _create_agent() -> Agent[SemiAgentDeps]:
             if detail:
                 msg = f"{msg} {detail}"
             return GistRunResult(success=False, error=msg)
-        result = await executor.execute_async(gist.source)
+        result = await executor.execute_async(gist.source, user_source_path=gist.user_source_path)
         deps.generated_source = generated_function_source
         return GistRunResult(
             success=result.success,

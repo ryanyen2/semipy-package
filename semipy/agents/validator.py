@@ -5,6 +5,7 @@ import inspect
 import traceback
 from typing import Any, Optional, get_origin
 
+from semipy.agents.slot_call import invoke_slot
 from semipy.type_adapter import type_adapter_for as _type_adapter_for
 from semipy.types import GenerationSpec, SlotCategory, ValidationResult
 
@@ -28,9 +29,17 @@ def _should_use_typeadapter_for_expected_type(expected_type: Any) -> bool:
     return True
 
 
-def _validate_value_with_typeadapter(value: Any, expected_type: Any) -> tuple[bool, str]:
+def _validate_value_with_typeadapter(
+    value: Any,
+    expected_type: Any,
+    globals_namespace: dict[str, Any] | None = None,
+) -> tuple[bool, str]:
     try:
-        _type_adapter_for(expected_type).validate_python(value)
+        if globals_namespace is None:
+            ta = _type_adapter_for(expected_type)
+        else:
+            ta = _type_adapter_for(expected_type, globals_namespace=globals_namespace)
+        ta.validate_python(value)
     except Exception as e:
         return False, f"TypeAdapter validation failed for {expected_type!r}: {e}"
     return True, ""
@@ -108,6 +117,8 @@ def _validate_basic_execution(
     sample_input: Optional[dict[str, Any]],
     slot_category: SlotCategory | None,
     output_names: list[str],
+    typeadapter_globals: dict[str, Any] | None = None,
+    free_variables: list[str] | None = None,
 ) -> ValidationResult:
     # We intentionally do not require non-None results for unknown types.
     if sample_input is None:
@@ -118,24 +129,35 @@ def _validate_basic_execution(
             execution_ok=True,
             error_message="",
         )
-    args = sample_input.get("args", ()) or ()
-    kwargs = sample_input.get("kwargs", {}) or {}
+    args = tuple(sample_input.get("args", ()) or ())
+    kwargs = dict(sample_input.get("kwargs", {}) or {})
+    fv = free_variables or []
 
     try:
-        # Fast, deterministic signature check so failures don't require executing the function body.
-        try:
-            sig = inspect.signature(fn)
-            sig.bind(*args, **kwargs)
-        except TypeError as e:
-            return ValidationResult(
-                passed=False,
-                ast_valid=True,
-                type_correct=True,
-                execution_ok=False,
-                error_message=f"Signature mismatch: {e}",
-            )
-
-        result = fn(*args, **kwargs)
+        if fv and len(fv) == len(args) and not kwargs:
+            try:
+                result = invoke_slot(fn, fv, args)
+            except TypeError as e:
+                return ValidationResult(
+                    passed=False,
+                    ast_valid=True,
+                    type_correct=True,
+                    execution_ok=False,
+                    error_message=f"Signature mismatch: {e}",
+                )
+        else:
+            try:
+                sig = inspect.signature(fn)
+                sig.bind(*args, **kwargs)
+            except TypeError as e:
+                return ValidationResult(
+                    passed=False,
+                    ast_valid=True,
+                    type_correct=True,
+                    execution_ok=False,
+                    error_message=f"Signature mismatch: {e}",
+                )
+            result = fn(*args, **kwargs)
     except Exception:
         return ValidationResult(
             passed=False,
@@ -249,7 +271,11 @@ def _validate_basic_execution(
         )
 
     if _should_use_typeadapter_for_expected_type(expected_type):
-        ok, err = _validate_value_with_typeadapter(value_for_typecheck, expected_type)
+        ok, err = _validate_value_with_typeadapter(
+            value_for_typecheck,
+            expected_type,
+            globals_namespace=typeadapter_globals,
+        )
         if not ok:
             return ValidationResult(
                 passed=False,
@@ -258,6 +284,15 @@ def _validate_basic_execution(
                 execution_ok=True,
                 error_message=err,
             )
+        return ValidationResult(
+            passed=True,
+            ast_valid=True,
+            type_correct=True,
+            execution_ok=True,
+            error_message="",
+        )
+
+    if expected_type is Any:
         return ValidationResult(
             passed=True,
             ast_valid=True,
@@ -334,8 +369,18 @@ def validate(
             error_message=f"Syntax error: {e}",
         )
 
-    funcs = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]
-    if not funcs:
+    primary_name: str | None = None
+    if isinstance(tree, ast.Module):
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef):
+                primary_name = node.name
+                break
+    if primary_name is None:
+        for n in ast.walk(tree):
+            if isinstance(n, ast.FunctionDef):
+                primary_name = n.name
+                break
+    if primary_name is None:
         return ValidationResult(
             passed=False,
             ast_valid=False,
@@ -367,17 +412,18 @@ def validate(
 
     try:
         ns: dict[str, Any] = {}
+        if spec is not None and getattr(spec, "execution_namespace", None):
+            ns.update(spec.execution_namespace)
         exec(compile(source, "<generated>", "exec"), ns)
-        fns = [v for v in ns.values() if callable(v) and not isinstance(v, type)]
-        if not fns:
+        fn = ns.get(primary_name)
+        if fn is None or not callable(fn) or isinstance(fn, type):
             return ValidationResult(
                 passed=False,
                 ast_valid=True,
                 type_correct=True,
                 execution_ok=False,
-                error_message="No callable in compiled source",
+                error_message=f"No callable named {primary_name!r} in compiled source",
             )
-        fn = fns[0]
     except Exception:
         return ValidationResult(
             passed=False,
@@ -392,6 +438,9 @@ def validate(
 
     effective_type = spec.expected_type if spec is not None else expected_type
     effective_sample = spec.sample_input if spec is not None and spec.sample_input is not None else sample_input
+    ta_globals = spec.execution_namespace if spec is not None else None
+
+    fv = list(spec.slot_spec.free_variables) if spec and spec.slot_spec else None
 
     return _validate_basic_execution(
         fn=fn,
@@ -399,6 +448,8 @@ def validate(
         sample_input=effective_sample,
         slot_category=slot_category,
         output_names=output_names,
+        typeadapter_globals=ta_globals,
+        free_variables=fv,
     )
 
 
@@ -410,6 +461,7 @@ def verify_runtime_execution(
     slot_category: SlotCategory | None,
     output_names: list[str],
     enable_execution: bool = True,
+    free_variables: list[str] | None = None,
 ) -> ValidationResult:
     """
     Run execution + type checks for an already-loaded dispatch function (REUSE path).
@@ -431,5 +483,6 @@ def verify_runtime_execution(
         sample_input=sample_input,
         slot_category=slot_category,
         output_names=output_names,
+        free_variables=free_variables,
     )
 

@@ -65,7 +65,7 @@ def _peek_visible_lines(lines: deque[str], visible: int) -> list[str]:
 def _render_peek_body(visible: list[str], *, lexer: str) -> Syntax | Text:
     code = "\n".join(visible)
     if not code.strip():
-        return Text("[dim]waiting for streamed tokens…[/]", overflow="crop")
+        return Text("waiting for streamed tokens…[/]", overflow="crop")
     try:
         return Syntax(
             code,

@@ -157,6 +157,7 @@ class SemiformalContext:
     first_lineno: int
     slot_specs: list[SlotSpec]
     scaffold_source: str
+    defining_globals: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -184,6 +185,9 @@ class GenerationSpec:
 
     # kept for agent tooling / gist validation
     user_source_code: Optional[str] = None
+
+    # Call-site module globals (decorated function / stack frame) for exec validation and gist preambles.
+    execution_namespace: dict[str, Any] | None = None
 
     # Distinct values seen for each slot parameter across invocations (from portal); profiling only.
     session_input_observations: dict[str, list[str]] | None = None

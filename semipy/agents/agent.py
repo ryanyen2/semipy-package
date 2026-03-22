@@ -14,18 +14,14 @@ from typing import Any, Callable, List, Optional
 
 
 def _run_async(coro: Any) -> Any:
-    """Run a coroutine, compatible with both normal Python and Jupyter (already-running event loop).
+    """Run a coroutine in a dedicated thread with its own event loop.
 
-    When no event loop is running, uses asyncio.run(). When a loop is already running
-    (e.g. in Jupyter), runs the coroutine in a separate thread with its own event loop.
+    Always uses ``asyncio.run`` in a worker thread so callers are safe whether or not the
+    current thread already has a running loop (e.g. Jupyter, nested async), avoiding
+    ``asyncio.run()`` from within an active loop or conflicting with other runners.
     """
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(asyncio.run, coro)
-        return future.result()
+        return pool.submit(asyncio.run, coro).result()
 
 from semipy.agents.compiler import _compile_source
 from semipy.agents.config import (

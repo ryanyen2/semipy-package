@@ -116,6 +116,7 @@ def _wrap_function(fn: Callable[..., Any], description: Optional[str] = None, fi
         first_lineno=first_lineno,
         slot_specs=slot_specs,
         scaffold_source=scaffold_src,
+        defining_globals=dict(fn.__globals__),
     )
 
     try:

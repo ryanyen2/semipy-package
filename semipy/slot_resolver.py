@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from semipy.agents.agent import SemiAgent
+from semipy.agents.slot_call import invoke_slot
 from semipy.agents.config import get_config
 from semipy.agents.console_io import print_pipeline_log
 from semipy.agents.validator import verify_runtime_execution
@@ -268,6 +269,36 @@ def _ensure_slot(portal: Any, slot_spec: SlotSpec) -> Slot:
     return slot
 
 
+def _execution_namespace_for_generation(source_file: str) -> dict[str, Any]:
+    """
+    Globals from the user's module for validating generated code and building gists.
+
+    Prefer the @semiformal defining module; otherwise match stack frames to source_file.
+    """
+    try:
+        from semipy.decorator import get_semiformal_context
+
+        ctx = get_semiformal_context()
+        if ctx is not None and getattr(ctx, "defining_globals", None):
+            return dict(ctx.defining_globals)
+    except Exception:
+        pass
+    try:
+        import os
+
+        target = os.path.abspath(os.path.normpath(source_file))
+        for fr in _inspect.stack()[2:]:
+            try:
+                cand = os.path.abspath(os.path.normpath(fr.filename))
+            except Exception:
+                continue
+            if cand == target:
+                return dict(fr.frame.f_globals)
+    except Exception:
+        pass
+    return {}
+
+
 def build_generation_spec(
     *,
     slot_spec: SlotSpec,
@@ -300,6 +331,8 @@ def build_generation_spec(
     slot_obj = portal.slots.get(slot_spec.slot_id)
     session_obs = _slot_session_observations(slot_obj) if slot_obj else None
 
+    exec_ns = _execution_namespace_for_generation(slot_spec.source_span[0])
+
     return GenerationSpec(
         prompt=slot_spec.spec_text,
         call_site=call_site,
@@ -317,6 +350,7 @@ def build_generation_spec(
         downstream_requirements=downstream_requirements,
         enclosing_function_source=slot_spec.enclosing_function_source,
         user_source_code=None,
+        execution_namespace=exec_ns or None,
         session_input_observations=session_obs,
         runtime_profile_scalar_only=_runtime_profile_is_scalar_only(runtime_values),
     )
@@ -339,7 +373,7 @@ def _call_generated_fn(
 ) -> Any:
     args = tuple(runtime_values.get(n) for n in slot_spec.free_variables)
     try:
-        return fn(*args)
+        return invoke_slot(fn, list(slot_spec.free_variables), args)
     except Exception as e:
         raise SemiCallError(
             "Generated slot function raised at runtime",
@@ -455,6 +489,7 @@ def execute_slot(
                         slot_category=slot_spec.expected_category,
                         output_names=list(slot_spec.output_names or []),
                         enable_execution=True,
+                        free_variables=list(slot_spec.free_variables),
                     )
                     if not vr.passed:
                         if config.verbose:

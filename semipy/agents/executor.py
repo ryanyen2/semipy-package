@@ -51,6 +51,7 @@ def _run_python_subprocess(
     script_args: list[str],
     timeout: int,
     cwd: Optional[str] = None,
+    env: Optional[dict[str, str]] = None,
 ) -> tuple[str, str, int]:
     """Run a Python script. Returns (stdout, stderr, returncode)."""
     cmd = [sys.executable, script_path] + list(script_args)
@@ -59,6 +60,10 @@ def _run_python_subprocess(
         cwd_abs = os.path.abspath(os.path.expanduser(cwd))
         if os.path.isdir(cwd_abs):
             run_kwargs["cwd"] = cwd_abs
+    if env is not None:
+        merged = os.environ.copy()
+        merged.update(env)
+        run_kwargs["env"] = merged
     try:
         result = subprocess.run(cmd, **run_kwargs)
         return (result.stdout or "", result.stderr or "", result.returncode)
@@ -72,6 +77,7 @@ def _exec_gist_subprocess(
     gist_source: str,
     timeout: int = 30,
     cwd: Optional[str] = None,
+    user_source_path: Optional[str] = None,
 ) -> tuple[Optional[object], str, Optional[str]]:
     """
     Execute gist in subprocess. Returns (result_value, stdout, error_or_None).
@@ -95,7 +101,14 @@ print({repr(marker)}, repr(__out), flush=True)
             f.write(runner)
             path = f.name
             cleanup.append(path)
-        stdout, stderr, returncode = _run_python_subprocess(path, [code_path], timeout, cwd=cwd)
+        gist_env: Optional[dict[str, str]] = None
+        if user_source_path:
+            up = os.path.abspath(os.path.normpath(user_source_path))
+            if os.path.isfile(up):
+                gist_env = {"SEMIPY_GIST_USER_SOURCE": up}
+        stdout, stderr, returncode = _run_python_subprocess(
+            path, [code_path], timeout, cwd=cwd, env=gist_env
+        )
         err = None
         if returncode != 0:
             err = stderr or f"Process exited with code {returncode}"
@@ -153,25 +166,38 @@ class GistExecutor:
             pass
         self._e2b_sandbox = None
 
-    async def execute_async(self, gist_source: str, cwd: Optional[str] = None) -> ExecutionResult:
+    async def execute_async(
+        self,
+        gist_source: str,
+        cwd: Optional[str] = None,
+        user_source_path: Optional[str] = None,
+    ) -> ExecutionResult:
         """Execute gist asynchronously. Uses E2B if configured, else subprocess in executor."""
         if self.use_e2b and self._e2b_api_key:
-            return await self._execute_e2b(gist_source, cwd)
-        return self._execute_subprocess_sync(gist_source, cwd)
+            return await self._execute_e2b(gist_source, cwd, user_source_path=user_source_path)
+        return self._execute_subprocess_sync(gist_source, cwd, user_source_path=user_source_path)
 
-    def execute_sync(self, gist_source: str, cwd: Optional[str] = None) -> ExecutionResult:
+    def execute_sync(
+        self,
+        gist_source: str,
+        cwd: Optional[str] = None,
+        user_source_path: Optional[str] = None,
+    ) -> ExecutionResult:
         """Execute gist synchronously (subprocess or E2B via asyncio.run)."""
         if self.use_e2b and self._e2b_api_key:
             import asyncio
-            return asyncio.run(self._execute_e2b(gist_source, cwd))
-        return self._execute_subprocess_sync(gist_source, cwd)
+            return asyncio.run(self._execute_e2b(gist_source, cwd, user_source_path=user_source_path))
+        return self._execute_subprocess_sync(gist_source, cwd, user_source_path=user_source_path)
 
     def _execute_subprocess_sync(
         self,
         gist_source: str,
         cwd: Optional[str] = None,
+        user_source_path: Optional[str] = None,
     ) -> ExecutionResult:
-        value, stdout, err = _exec_gist_subprocess(gist_source, timeout=self.timeout, cwd=cwd)
+        value, stdout, err = _exec_gist_subprocess(
+            gist_source, timeout=self.timeout, cwd=cwd, user_source_path=user_source_path
+        )
         return ExecutionResult(
             success=err is None,
             stdout=stdout,
@@ -184,13 +210,14 @@ class GistExecutor:
         self,
         gist_source: str,
         cwd: Optional[str] = None,
+        user_source_path: Optional[str] = None,
         _retrying: bool = False,
     ) -> ExecutionResult:
         """Execute via E2B AsyncSandbox. Reuses one sandbox per executor; on 'Event loop is closed' retries with a fresh sandbox."""
         try:
             from e2b_code_interpreter import AsyncSandbox
         except ImportError:
-            return self._execute_subprocess_sync(gist_source, cwd)
+            return self._execute_subprocess_sync(gist_source, cwd, user_source_path=user_source_path)
 
         gist_source = _patch_blocking_calls(gist_source)
         try:
@@ -240,11 +267,13 @@ class GistExecutor:
             if not _retrying and "Event loop is closed" in err_msg:
                 self._e2b_sandbox = None
                 try:
-                    return await self._execute_e2b(gist_source, cwd=cwd, _retrying=True)
+                    return await self._execute_e2b(
+                        gist_source, cwd=cwd, user_source_path=user_source_path, _retrying=True
+                    )
                 except Exception as e2:
                     err_msg = str(e2)
             if "Event loop is closed" in err_msg:
-                return self._execute_subprocess_sync(gist_source, cwd)
+                return self._execute_subprocess_sync(gist_source, cwd, user_source_path=user_source_path)
             return ExecutionResult(
                 success=False,
                 stdout="",
