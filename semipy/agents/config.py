@@ -39,6 +39,8 @@ class SemiConfig:
     cocoindex_db_url: str = ""
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     session_source: Optional[str] = None
+    semantic_verify: bool = True
+    semantic_verify_threshold: int = 10
 
 
 _config: Optional[SemiConfig] = None

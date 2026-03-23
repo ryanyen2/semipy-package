@@ -297,11 +297,23 @@ class SemiAgent:
         if spec.decision == Decision.ADAPT and spec.parent_sources:
             parts.append("")
             parts.append(
-                "The previous implementation below FAILED for the current input. "
+                "The previous implementation below FAILED runtime verification for the current input. "
                 "Adapt it: keep all existing format/branch handling that works, "
                 "and add or fix only what is needed for the failing input. "
                 "Do not remove branches that handle other formats."
             )
+            if spec.verify_failure_context:
+                parts.append("")
+                parts.append("Verification failure reason:")
+                parts.append(spec.verify_failure_context)
+                parts.append("")
+                parts.append(
+                    "Use this failure reason to understand what went wrong. "
+                    "If the error indicates a type mismatch, fix the return type. "
+                    "If the error indicates an execution failure (exception, empty output, "
+                    "identity return), fix the logic for the new input shape while "
+                    "preserving handling of previously working inputs."
+                )
             parts.append("```python")
             parts.append(spec.parent_sources[0].strip())
             parts.append("```")

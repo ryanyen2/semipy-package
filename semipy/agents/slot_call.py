@@ -18,13 +18,20 @@ def bind_slot_arguments(
 
     Only names that appear in *fn*'s signature are supplied, so extra slot inputs
     (e.g. ``self``) are ignored when the generated function does not declare them.
+
+    When no free-variable names match the function's parameter names (common for
+    standalone ``semi()`` slots where free variables are auto-named ``v0``, ``v1``
+    while the generated function uses descriptive names), falls back to positional
+    binding so the arguments still reach the function.
     """
     if not free_variables:
         return inspect.signature(fn).bind(*arg_values)
     by_name = dict(zip(free_variables, arg_values))
     sig = inspect.signature(fn)
     kw = {k: by_name[k] for k in sig.parameters if k in by_name}
-    return sig.bind(**kw)
+    if kw:
+        return sig.bind(**kw)
+    return sig.bind(*arg_values)
 
 
 def invoke_slot(

@@ -1,9 +1,10 @@
-"""Shared LLM utilities for classification, impact analysis, and pattern naming (validator model)."""
+"""Shared LLM utilities for classification, impact analysis, and pattern naming (OpenAI, same key as generator)."""
 from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Callable, Optional, TypeVar
+import os
+from typing import Callable, Optional, TypeVar
 
 from semipy.agents.config import get_config
 
@@ -17,24 +18,23 @@ async def classify_with_llm(
     timeout: float = 15.0,
 ) -> T:
     """
-    Call the validator model with the given prompt; parse response with parse_fn; return default on error/timeout.
-    Uses config.validator_model. No hardcoded patterns; the prompt drives the task.
+    Call the OpenAI chat completions API with the given prompt; parse response with parse_fn; return default on error/timeout.
+    Uses config.openai_model and config.openai_api_key or OPENAI_API_KEY (same as generator._create_openai_model). No hardcoded patterns; the prompt drives the task.
     """
     config = get_config()
-    model_id = getattr(config, "validator_model", "anthropic/claude-haiku-4-5-20251001")
-    api_key = getattr(config, "openrouter_api_key", None) or __import__("os").environ.get("OPENROUTER_API_KEY")
+    model_id = getattr(config, "openai_model", "gpt-5.4")
+    api_key = config.openai_api_key or os.getenv("OPENAI_API_KEY")
     if not api_key:
         return default
     def _sync_call() -> Optional[str]:
         payload = {
             "model": model_id,
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.0,
             "max_tokens": 512,
         }
         import urllib.request
         req = urllib.request.Request(
-            "https://openrouter.ai/api/v1/chat/completions",
+            "https://api.openai.com/v1/chat/completions",
             data=json.dumps(payload).encode(),
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             method="POST",

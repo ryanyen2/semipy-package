@@ -194,6 +194,10 @@ class GenerationSpec:
     # True when current runtime_values contain only non-collection inputs (no DataFrame/Series in scope).
     runtime_profile_scalar_only: bool = False
 
+    # When ADAPT is triggered by verify_runtime_execution failure, this carries the error so the
+    # generation prompt can explain *why* the previous implementation was rejected.
+    verify_failure_context: str | None = None
+
 
 @dataclass
 class ValidationResult:

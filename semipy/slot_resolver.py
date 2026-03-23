@@ -214,6 +214,130 @@ def _extract_source_file_imports(filename: str) -> list[str]:
         return []
 
 
+_semantic_reuse_counters: dict[str, int] = {}
+_semantic_last_fingerprints: dict[str, str] = {}
+
+
+def _has_diverse_observations(slot: Any) -> bool:
+    obs = getattr(slot, "input_observation_samples", None)
+    if not isinstance(obs, dict):
+        return False
+    for k, v in obs.items():
+        if isinstance(k, str) and (k.startswith("_") or k == "self"):
+            continue
+        if isinstance(v, list) and len(v) > 1:
+            return True
+    return False
+
+
+def _obs_content_fingerprint(slot: Any) -> str:
+    """Coarse fingerprint of the observation patterns for a slot.
+
+    Normalises each observation value by replacing digit sequences with
+    ``N`` and truncating to a short prefix so that inputs differing only
+    in numeric IDs or IP addresses (e.g. ``Found child 25792`` vs
+    ``Found child 6765``, or ``[client 1.2.3.4]`` vs ``[client 5.6.7.8]``)
+    map to the same bucket.  The fingerprint only changes when a
+    genuinely new input *pattern* appears.
+    """
+    import hashlib as _hl
+    import re as _re
+
+    _PREFIX_LEN = 24
+    obs = getattr(slot, "input_observation_samples", None)
+    if not isinstance(obs, dict):
+        return ""
+    parts: list[str] = []
+    for k in sorted(obs.keys()):
+        if isinstance(k, str) and (k.startswith("_") or k == "self"):
+            continue
+        v = obs.get(k)
+        if isinstance(v, list) and len(v) > 1:
+            prefixes = sorted(
+                {_re.sub(r"\d+", "N", str(x))[:_PREFIX_LEN] for x in v}
+            )
+            parts.append(f"{k}:{','.join(prefixes)}")
+    return _hl.sha256("|".join(parts).encode()).hexdigest()[:16]
+
+
+def _should_semantic_check(
+    slot: Any,
+    commit_id: str,
+    config: Any,
+) -> bool:
+    """Decide whether to run an LLM-based semantic reuse check.
+
+    Triggers when:
+    1. The commit changed (new generation) and observations exist --
+       always check once so the very first commit gets evaluated.
+    2. The observation content fingerprint has changed since the last
+       check AND enough REUSE calls have accumulated (rate limiter).
+
+    The fingerprint gate is the primary mechanism: if the observation
+    set hasn't changed since the last successful check, there is no
+    need to re-evaluate.  When it *has* changed, the reuse-count
+    threshold rate-limits the LLM calls.
+    """
+    if not getattr(config, "semantic_verify", True):
+        return False
+    if not _has_diverse_observations(slot):
+        return False
+
+    adv = getattr(slot, "advisor_state", None) or {}
+    if not isinstance(adv, dict):
+        adv = {}
+
+    last_commit = adv.get("semantic_last_commit_id")
+    if last_commit != commit_id:
+        return True
+
+    counter_key = f"{slot.slot_id}:{commit_id}"
+    current_fp = _obs_content_fingerprint(slot)
+    stored_fp = (
+        _semantic_last_fingerprints.get(counter_key)
+        or adv.get("semantic_obs_fingerprint", "")
+    )
+    if current_fp == stored_fp:
+        return False
+
+    threshold = getattr(config, "semantic_verify_threshold", 3)
+    reuse_count = _semantic_reuse_counters.get(counter_key, 0)
+    return reuse_count >= threshold
+
+
+def _increment_semantic_reuse_counter(
+    slot: Any,
+    commit_id: str,
+) -> None:
+    """In-memory counter of REUSE calls since last semantic check."""
+    counter_key = f"{slot.slot_id}:{commit_id}"
+    _semantic_reuse_counters[counter_key] = _semantic_reuse_counters.get(counter_key, 0) + 1
+
+
+def _update_semantic_state(
+    slot: Any,
+    commit_id: str,
+    decision: str,
+    *,
+    portal: Any,
+    cache_dir: Any,
+) -> None:
+    """Persist semantic check result in slot advisor_state and reset counters."""
+    adv = getattr(slot, "advisor_state", None) or {}
+    if not isinstance(adv, dict):
+        adv = {}
+    adv["semantic_last_commit_id"] = commit_id
+    fp = _obs_content_fingerprint(slot)
+    adv["semantic_obs_fingerprint"] = fp
+    adv["semantic_decision"] = decision
+    slot.advisor_state = adv
+    save_portal(cache_dir, portal)
+
+    counter_key = f"{slot.slot_id}:{commit_id}"
+    _semantic_reuse_counters[counter_key] = 0
+    _semantic_last_fingerprints[counter_key] = fp
+
+
 def _call_site_from_slot(slot_spec: SlotSpec) -> SemiCallSite:
     filename, lineno, _end = slot_spec.source_span
     return SemiCallSite(filename=filename, lineno=lineno, func_qualname=slot_spec.enclosing_function_qualname)
@@ -308,6 +432,7 @@ def build_generation_spec(
     dep_graph: Any | None,
     current_slot_ref: SlotRef,
     source_file_imports: list[str],
+    verify_failure_context: str | None = None,
 ) -> GenerationSpec:
     call_site = _call_site_from_slot(slot_spec)
 
@@ -353,6 +478,7 @@ def build_generation_spec(
         execution_namespace=exec_ns or None,
         session_input_observations=session_obs,
         runtime_profile_scalar_only=_runtime_profile_is_scalar_only(runtime_values),
+        verify_failure_context=verify_failure_context,
     )
 
 
@@ -449,6 +575,8 @@ def execute_slot(
 
     source_file_imports = _extract_source_file_imports(source_file)
 
+    _verify_failure_msg: str | None = None
+
     if resolution.decision == Decision.REUSE and resolution.commit_id is not None:
         dispatch_slot_id = resolution.reuse_dispatch_slot_id or slot_spec.slot_id
         commit_holder = portal.slots.get(dispatch_slot_id) or slot
@@ -470,8 +598,6 @@ def execute_slot(
                     _dispatch_globals_cache,
                 )
             if fn is None:
-                # Cache inconsistency: dispatch module can't be executed (e.g. invalid function names).
-                # Force regeneration so we rewrite dispatch with the current naming/sanitization.
                 force_regenerate = True
             else:
                 call_site = _call_site_from_slot(slot_spec)
@@ -492,8 +618,9 @@ def execute_slot(
                         free_variables=list(slot_spec.free_variables),
                     )
                     if not vr.passed:
+                        _verify_failure_msg = (vr.error_message or "").strip()
                         if config.verbose:
-                            err = (vr.error_message or "").strip().replace("\n", " ")
+                            err = _verify_failure_msg.replace("\n", " ")
                             if len(err) > 160:
                                 err = err[:157] + "..."
                             print_pipeline_log(
@@ -502,6 +629,74 @@ def execute_slot(
                                 f"Runtime check failed; adapting. {err}",
                             )
                         force_regenerate = True
+                    else:
+                        # Type check passed. Run semantic check if threshold
+                        # crossed to catch implementations that are type-correct
+                        # but semantically inadequate for new input patterns.
+                        _increment_semantic_reuse_counter(slot, commit.commit_id)
+                        if _should_semantic_check(slot, commit.commit_id, config):
+                            from semipy.agents.decision import evaluate_reuse_semantics
+
+                            session_obs = _slot_session_observations(slot)
+                            impl_source = getattr(commit, "generated_source", "") or ""
+                            if config.verbose:
+                                print_pipeline_log(
+                                    call_site,
+                                    "semantic_check",
+                                    "New input patterns detected; running batch test and evaluating...",
+                                )
+                            sem = evaluate_reuse_semantics(
+                                slot_spec=slot_spec,
+                                implementation_source=impl_source,
+                                session_observations=session_obs,
+                            )
+                            _update_semantic_state(
+                                slot, commit.commit_id, sem.decision,
+                                portal=portal, cache_dir=cache_dir,
+                            )
+                            if sem.decision == "adapt":
+                                _verify_failure_msg = (
+                                    f"Semantic check: {sem.reasoning}"
+                                )
+                                if sem.problematic_inputs:
+                                    examples = "; ".join(
+                                        s[:120] for s in sem.problematic_inputs[:3]
+                                    )
+                                    _verify_failure_msg += (
+                                        f" Problematic inputs: {examples}"
+                                    )
+                                if config.verbose:
+                                    print_pipeline_log(
+                                        call_site,
+                                        "semantic_check",
+                                        f"Implementation gaps detected; adapting. {sem.reasoning}",
+                                    )
+                                force_regenerate = True
+                            elif config.verbose:
+                                print_pipeline_log(
+                                    call_site,
+                                    "semantic_check",
+                                    "Implementation covers observed input diversity; proceeding with reuse.",
+                                )
+                        if not force_regenerate:
+                            if config.verbose:
+                                is_donor = bool(resolution.reuse_dispatch_slot_id)
+                                donor_note = " (from donor slot)" if is_donor else ""
+                                print_pipeline_log(
+                                    call_site,
+                                    "reuse",
+                                    f"Reusing cached implementation{donor_note}; runtime verify passed.",
+                                )
+                elif skip_verify:
+                    _increment_semantic_reuse_counter(slot, commit.commit_id)
+                    if config.verbose:
+                        is_donor = bool(resolution.reuse_dispatch_slot_id)
+                        donor_note = " (from donor slot)" if is_donor else ""
+                        print_pipeline_log(
+                            call_site,
+                            "reuse",
+                            f"Reusing cached implementation{donor_note}; same input fingerprint.",
+                        )
 
                 if not force_regenerate:
                     result = _call_generated_fn(
@@ -556,6 +751,7 @@ def execute_slot(
         dep_graph=dep_graph,
         current_slot_ref=current_slot_ref,
         source_file_imports=source_file_imports,
+        verify_failure_context=_verify_failure_msg,
     )
     entry = SemiAgent().generate(generation_spec)
 

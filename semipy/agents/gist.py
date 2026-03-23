@@ -464,6 +464,8 @@ def _build_test_invocation(
                     for name in sig.parameters
                     if name in by_name
                 ]
+                if not parts:
+                    parts = [_expr_for_gist_invocation(a) for a in args]
                 args_str = ", ".join(parts)
             elif fv and len(fv) == len(args) and not kwargs:
                 args_str = ", ".join(

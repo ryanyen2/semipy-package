@@ -7,6 +7,7 @@ is captured and printed as one scrollable Panel per cell.
 """
 from __future__ import annotations
 
+import atexit
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -207,6 +208,116 @@ def _file_link_url(path: str) -> str:
 # Dedupe: same (call_file, source, generation, path) only printed once per process.
 _semipy_log_printed: set[tuple[str, str, str, str]] = set()
 
+# Batched one-line logs for high-frequency paths (e.g. REUSE verify on every row).
+_PIPELINE_AGG_STAGES = frozenset({"reuse", "reuse_verify"})
+_pipeline_agg_pending: Optional[dict[str, Any]] = None
+_ipython_agg_flush_registered = False
+
+
+def _pipeline_agg_key(call_site: SemiCallSite, stage: str, message: str) -> tuple[Any, ...]:
+    """Group by stage + message + file + function; ignore lineno so multiple #> lines merge."""
+    try:
+        path = str(Path(call_site.filename).resolve())
+    except Exception:
+        path = call_site.filename or ""
+    return (stage, message, path, call_site.func_qualname or "")
+
+
+def _format_call_site_aggregate(
+    filename: str,
+    lineno_lo: int,
+    lineno_hi: int,
+    func_qualname: str,
+) -> str:
+    """Like _format_call_site_short but collapses a lineno range (e.g. 160-163)."""
+    from os.path import basename
+
+    f = basename(filename) if filename else "<unknown>"
+    fn = func_qualname or "?"
+    if lineno_lo == lineno_hi:
+        line_s = str(lineno_lo)
+    else:
+        line_s = f"{lineno_lo}-{lineno_hi}"
+    return f"{f}:{line_s} ({fn})"
+
+
+def _ensure_ipython_post_cell_flush() -> None:
+    """Flush batched pipeline logs after each notebook cell (reuse rows often fill a cell alone)."""
+    global _ipython_agg_flush_registered
+    if _ipython_agg_flush_registered:
+        return
+    try:
+        from IPython import get_ipython
+
+        ip = get_ipython()
+        if ip is None:
+            return
+
+        def _flush_after_cell(*_a: Any, **_k: Any) -> None:
+            flush_pipeline_log_pending()
+
+        ev = getattr(ip, "events", None)
+        if ev is not None:
+            try:
+                ev.register("post_run_cell", _flush_after_cell)
+                _ipython_agg_flush_registered = True
+                return
+            except Exception:
+                pass
+        reg = getattr(ip, "register_post_execute", None)
+        if callable(reg):
+            try:
+                reg(_flush_after_cell)
+                _ipython_agg_flush_registered = True
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def flush_pipeline_log_pending() -> None:
+    """Emit any batched pipeline log lines (reuse / reuse_verify). Idempotent; safe after each cell or script."""
+    global _pipeline_agg_pending
+    p = _pipeline_agg_pending
+    if p is None:
+        return
+    _pipeline_agg_pending = None
+
+    console = get_console()
+    count: int = p["count"]
+    stage: str = p["stage"]
+    message: str = p["message"]
+    first: SemiCallSite = p["first_call_site"]
+    lo: int = p["min_lineno"]
+    hi: int = p["max_lineno"]
+
+    if count <= 1:
+        loc = _format_call_site_short(first)
+    else:
+        loc = _format_call_site_aggregate(
+            first.filename,
+            lo,
+            hi,
+            first.func_qualname or "",
+        )
+
+    tail = f"[dim][semipy][/] [cyan][{stage}][/] {loc} {message}"
+    if count > 1:
+        col_w = max(7, len(str(count)) + 1)
+        counter_cell = f"{count}x".rjust(col_w)
+        line = f"[dim]{counter_cell}[/]  {tail}"
+        console.print(line, crop=False, overflow="ignore", no_wrap=True)
+        return
+
+    console.print(tail, no_wrap=True, crop=False, overflow="ignore")
+
+
+def _flush_pipeline_log_before_non_aggregate() -> None:
+    flush_pipeline_log_pending()
+
+
+atexit.register(flush_pipeline_log_pending)
+
 
 def _format_call_source(call_site: SemiCallSite) -> str:
     """Human-readable call site: relative path and line (function)."""
@@ -228,9 +339,44 @@ def print_pipeline_log(
     stage: str,
     message: str,
 ) -> None:
-    """Print one pipeline line: [semipy] [stage] call_site message (cohesive format)."""
+    """Print one pipeline line: [semipy] [stage] call_site message (cohesive format).
+
+    Stages ``reuse`` and ``reuse_verify`` batch consecutive identical messages that
+    share the same source file and function; lineno ranges are collapsed (e.g. two
+    ``#>`` blocks become ``file:160-163``) and a left column shows repeat count.
+    """
     console = get_console()
     loc = _format_call_site_short(call_site) if call_site else "?"
+
+    if call_site is not None and stage in _PIPELINE_AGG_STAGES:
+        _ensure_ipython_post_cell_flush()
+        key = _pipeline_agg_key(call_site, stage, message)
+        global _pipeline_agg_pending
+        if _pipeline_agg_pending is not None and _pipeline_agg_pending["key"] != key:
+            flush_pipeline_log_pending()
+        if _pipeline_agg_pending is None:
+            _pipeline_agg_pending = {
+                "key": key,
+                "count": 1,
+                "min_lineno": call_site.lineno,
+                "max_lineno": call_site.lineno,
+                "stage": stage,
+                "message": message,
+                "first_call_site": call_site,
+            }
+        else:
+            _pipeline_agg_pending["count"] += 1
+            _pipeline_agg_pending["min_lineno"] = min(
+                _pipeline_agg_pending["min_lineno"],
+                call_site.lineno,
+            )
+            _pipeline_agg_pending["max_lineno"] = max(
+                _pipeline_agg_pending["max_lineno"],
+                call_site.lineno,
+            )
+        return
+
+    _flush_pipeline_log_before_non_aggregate()
     console.print(
         f"[dim][semipy][/] [cyan][{stage}][/] {loc} {message}",
         no_wrap=True,
