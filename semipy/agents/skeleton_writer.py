@@ -26,12 +26,28 @@ from pathlib import Path
 from pydantic_ai import Agent
 
 from semipy.agents.config import get_config
+from semipy.agents.console_io import print_pipeline_log
 from semipy.agents.generator import _create_openai_model, _create_openrouter_model
 from semipy.lowering import strip_skeleton_lines
-from semipy.types import CacheEntry, SlotSpec
+from semipy.types import CacheEntry, SlotSpec, SemiCallSite
+import re
 
 _file_write_locks: dict[str, threading.Lock] = {}
 _file_write_locks_mutex = threading.Lock()
+
+
+def _pipeline_trace_skeleton() -> bool:
+    """Log raw skeleton LLM output when ``SEMIPY_PIPELINE_TRACE`` is set (same as agent pipeline trace)."""
+    return os.getenv("SEMIPY_PIPELINE_TRACE", "").strip().lower() in ("1", "true", "yes")
+
+
+def _log_surface(slot_spec: SlotSpec, message: str) -> None:
+    call_site = SemiCallSite(
+        filename=slot_spec.source_span[0],
+        lineno=slot_spec.source_span[1],
+        func_qualname=slot_spec.enclosing_function_qualname,
+    )
+    print_pipeline_log(call_site, "surface", message)
 
 
 def _lock_for_path(path: Path) -> threading.Lock:
@@ -103,6 +119,8 @@ def _call_skeleton_llm(
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             return pool.submit(asyncio.run, _async_skeleton()).result(timeout=timeout)
     except Exception:
+        if get_config().verbose or _pipeline_trace_skeleton():
+            traceback.print_exc()
         return None
 
 
@@ -112,30 +130,31 @@ def _build_skeleton_prompts(
     reasoning_summary: str,
 ) -> tuple[str, str]:
     rs = reasoning_summary.strip() if reasoning_summary.strip() else "(none)"
-    system_prompt = """You are generating brief but substantial program-tracing lines as Python comments—called "reasoning surfaces"—to capture the core logic, decision points, or constraints, not just recapping each statement, in order to help users both understand and iteratively refine the code by editing these comments.
+    system_prompt = """You are generating brief program-tracing lines as Python comments—called "reasoning surfaces" (`#<`)—so the user can read and edit intent separately from executable code.
+
+**Source of truth (non-negotiable)**
+
+- The block labeled "Enclosing function" in the user message is the exact text that must appear in your output, except that you **insert new whole lines** whose first non-whitespace characters are `#<`.
+- **Character-for-character preservation:** Every existing line of code, every string literal, every `...` ellipsis placeholder, every import, and every user `#>` / `# >` fragment must stay exactly as given (same order, same line breaks; inline `#>` stays on the same code line). You are **not** allowed to "fix", refactor, or complete placeholders using the separate "Generated implementation" section.
+- **Generated implementation is reference only:** It shows how the slot was implemented for testing. Use it to understand behavior when writing `#<` text. **Do not paste** statements, assignments, return shapes, or literals from that section into the enclosing function. If the enclosing function still has `...` where the generator used a concrete value, **keep `...`** in your output.
+- **No duplicate semantics:** `#<` lines should add rationale, control flow, or risk notes that are **not** already stated in a `#>` line on the same stretch of code. Prefer "why / what to watch" over repeating the user's spec wording.
 
 Your output should:
-- Insert `#<` annotated reasoning traces within the function (never outside), matching code block indentation. The user provides `#>` specification lines, which must remain unchanged.
-- For each explanation, use a [Tag] (first token after `#<`), including [Task] (first), and choose from: [Given], [Then], [When], [But], [Verify], both alone and mixed as needed. Encourage creative mixing of formality and informality across tags and domains.
-- Always ensure that each `#<` is true reasoning (explain a non-obvious step, intent, constraint, condition, or implication), not just a summary or a direct echo.
-- Insert between 4 and 8 `#<` lines, tight but not verbose: Each after-tag phrase must use **no more than 10 words** (prefer 5-8 words), e.g. "parse then format", "skip if missing pattern", not sentences, not multi-clause lists.
-- Do NOT modify code, specifications (`#>` lines), or structure; do NOT emit filler or blank comment lines.
-- Place all `#<` lines in the code body, never before function definition or after the last line.
-- Every annotation is crafted for editability: the user should be able to review, modify, or replace these reasoning traces to direct iterative code changes.
-- Reasoning always precedes or is interleaved with the associated code; never summarize afterward.
-- Produce only the complete enclosing function source (from `def ` or `async def` to the last line), with `#<` annotations; NO markdown or prose intro/outro.
+- Insert `#<` annotated reasoning traces within the function (never outside), matching code block indentation.
+- For each explanation, use a [Tag] (first token after `#<`), including [Task] (first), and choose from: [Given], [Then], [When], [But], [Verify], both alone and mixed as needed.
+- Each `#<` line should be true reasoning (non-obvious step, intent, constraint, or implication), not a line-by-line recap of the code.
+- Insert between 2 and 6 `#<` lines: each after-tag phrase must use **no more than 8 words** (prefer 4-6), e.g. "parse then format", "watch ambiguous month order".
+- Do NOT emit filler or blank comment lines. Do NOT wrap the function in markdown fences or prose before or after it.
 
 # Steps
 
-- Read the target code and `#>` lines so you can understand the program's operational semantics.
-- Choose reasoning tags and short surface texts that clarify choices, decisions, or constraints—not just "what" but "why/how"—showing a range of domains and both formal and informal phrasing.
-- Examples should span multiple fields (e.g. data parsing, user interaction, business logic, ML inferences, process coordination, error handling) and show several permutations: formal-informal tone mixing, varied tag sets, and complex reasoning made concise.
-- For each line or block in need of explanation, add the best fitting reasoning tag and concise phrase, designed for high editability.
-- Ensure every annotation is actionable: users should be able to adjust these to directly revisit and iterate the code.
+- Read the enclosing function and each `#>` fragment so you understand constraints.
+- Use the generated implementation only to inform what `#<` should emphasize (edge cases, ordering), without copying its code into the output.
+- Add `#<` lines that a user could edit later to steer the next generation.
 
 # Output Format
 
-Return only the full, syntactically correct Python function with your `#<` reasoning traces inserted as comments, in-place, matching code indentation. No markdown/code delimiters, no explanation, no filler, no blank comments, and no removal or alteration of existing `#>` lines, code, or function signature.
+Return **only** the full, syntactically valid Python function: from `def` or `async def` through the last line of the function body. No markdown code fences, no preamble, no trailing commentary. The only new lines you add are `#<` lines.
 
 # Examples
 
@@ -205,29 +224,40 @@ def predict_sentiment(inputs: list[str]) -> float:
 - Reasoning should be discoverable—highlight why, not merely what. Emphasize points of design choice, decision, or error-prone areas.
 - Strive for a mix of tags, tones, and application scenarios.
 - Never start an annotation with a conclusion; always supply reasoning context first.
+- If `#>` already states a rule, `#<` should add rationale/context around it, not duplicate it.
 - Your goal is for the user to look at the annotated reasoning traces and directly edit them to revise program logic in future iterations.
 
 Reminder: Insert annotations inside function body only; always reason before conclusions or actions; be succinct but illuminating; enable iterative user editing."""
     user_prompt = (
-        "Enclosing function (no `#<` yet; `#>` lines must appear verbatim in your output):\n"
+        "Enclosing function (copy this exactly into your reply, inserting only new `#<` lines; "
+        "keep every `#>` line and inline `#>` fragment verbatim):\n"
         "```python\n"
         + fn_source_clean.strip()
         + "\n```\n\n"
-        + "Generated implementation for this slot (reference only):\n"
+        + "Generated implementation for this slot (reference only; do not paste into the enclosing function):\n"
         + "```python\n"
         + generated_source.strip()
         + "\n```\n\n"
         + "Model reasoning summary (may be empty):\n"
         + rs
         + "\n\n"
-        + "Produce the complete function source with `#<` annotations inserted."
+        + "Reply with the complete function as plain Python only (no markdown around the whole answer). "
+        + "Insert `#<` annotations as specified in the system message."
     )
     return system_prompt, user_prompt
 
 
 def _strip_markdown_fences(raw: str) -> str:
+    """Remove common markdown wrappers; prefer a fenced block that contains a ``def``."""
     s = raw.strip()
-    if s.startswith("```"):
+    if not s:
+        return s
+    m = re.search(r"```(?:python|py)?\s*\r?\n([\s\S]*?)```", s, re.IGNORECASE)
+    if m:
+        inner = m.group(1).strip()
+        if inner:
+            s = inner
+    elif s.startswith("```"):
         lines = s.splitlines()
         if lines and lines[0].startswith("```"):
             lines = lines[1:]
@@ -235,6 +265,34 @@ def _strip_markdown_fences(raw: str) -> str:
             lines = lines[:-1]
         s = "\n".join(lines).strip()
     return s
+
+
+def _trim_prose_before_first_def(s: str) -> str:
+    """Drop leading explanation when the model prints prose before ``def``."""
+    m = re.search(r"(?ms)^(?:async\s+)?def\s+\w+\s*\(", s)
+    if m and m.start() > 0:
+        return s[m.start() :]
+    return s
+
+
+def _first_function_slice_from_text(s: str) -> str | None:
+    """If the whole buffer does not parse, take the longest prefix from the first ``def`` that parses."""
+    lines = s.splitlines()
+    start: int | None = None
+    for i, line in enumerate(lines):
+        if re.match(r"^\s*(?:async\s+)?def\s+\w+\s*\(", line):
+            start = i
+            break
+    if start is None:
+        return None
+    for end in range(len(lines), start, -1):
+        block = "\n".join(lines[start:end])
+        try:
+            ast.parse(block)
+            return block
+        except SyntaxError:
+            continue
+    return None
 
 
 def _strip_leading_decorators_before_def(src: str) -> str:
@@ -268,40 +326,50 @@ def _extract_function_from_llm_output(
     raw: str | None,
     func_qualname: str,
     original_fn_source: str,
-) -> str | None:
+) -> tuple[str | None, str]:
+    """
+    Validate skeleton LLM output: only ``#<`` lines may differ from the user's enclosing function.
+
+    Returns ``(result, "")`` on success, or ``(None, short reason)`` for logging.
+    """
     if not raw or not raw.strip():
-        return None
+        return None, "empty model output"
     cleaned = _strip_leading_decorators_before_def(_strip_markdown_fences(raw))
+    cleaned = _trim_prose_before_first_def(cleaned)
+    if not cleaned.strip():
+        return None, "no text after stripping markdown or leading prose"
     simple = _function_simple_name(func_qualname)
     candidate = _extract_function_source_for_name(cleaned, simple)
     if candidate is None:
+        candidate = _first_function_slice_from_text(cleaned)
+    if candidate is None:
         stripped = cleaned.lstrip()
-        if not (stripped.startswith("def ") or stripped.startswith("async def ")):
-            return None
-        candidate = cleaned
+        if stripped.startswith("def ") or stripped.startswith("async def "):
+            candidate = _first_function_slice_from_text(stripped)
+    if candidate is None:
+        return None, "could not parse a Python function (check for markdown or extra text around the function)"
     try:
         ast.parse(candidate)
-    except SyntaxError:
-        return None
-    has_skeleton = any(
-        ln.lstrip().startswith("#<") for ln in candidate.splitlines()
-    )
+    except SyntaxError as e:
+        return None, f"syntax error in extracted function: {e}"
+    has_skeleton = any(ln.lstrip().startswith("#<") for ln in candidate.splitlines())
     if not has_skeleton:
-        return None
-    # Guardrail: surfaced skeleton must not rewrite executable code.
-    # Compare function bodies only (ignore decorators around the original source).
-    # Both sides are normalized by stripping `#<` annotations to placeholder lines.
+        return None, "model output had no #< reasoning lines"
     original_simple = _function_simple_name(func_qualname)
     original_fn = _extract_function_source_for_name(original_fn_source, original_simple)
     if original_fn is None:
         original_fn = _strip_leading_decorators_before_def(original_fn_source)
     if _normalized_source_for_compare(candidate) != _normalized_source_for_compare(original_fn):
-        return None
+        return None, (
+            "executable text differs from enclosing function (only insert #< lines; "
+            "do not change code, literals, or ... placeholders; do not paste generated implementation)"
+        )
     before = _spec_marker_lines(original_fn_source)
     after = _spec_marker_lines(candidate)
     if before != after:
-        return None
-    return _drop_empty_hash_only_lines(_cap_skeleton_line_words(candidate))
+        return None, "user #> spec text changed or reordered relative to enclosing source"
+    out = _drop_empty_hash_only_lines(_cap_skeleton_line_words(candidate))
+    return out, ""
 
 
 def _drop_empty_hash_only_lines(source: str) -> str:
@@ -326,7 +394,7 @@ def _normalized_source_for_compare(source: str) -> str:
     return _drop_empty_hash_only_lines(strip_skeleton_lines(source)).strip()
 
 
-def _cap_skeleton_line_words(source: str, *, max_words: int = 5) -> str:
+def _cap_skeleton_line_words(source: str, *, max_words: int = 10) -> str:
     """Keep text after each `#< [Tag]` to at most ``max_words`` words (model may be verbose)."""
     out: list[str] = []
     for line in source.splitlines(keepends=True):
@@ -458,8 +526,17 @@ def _surface_skeleton_impl(slot_spec: SlotSpec, cache_entry: CacheEntry) -> None
         fn_source_clean, generated, reasoning
     )
     raw = _call_skeleton_llm(system_prompt, user_prompt)
-    skeleton_fn = _extract_function_from_llm_output(raw, simple_qual, fn_source_clean)
+    skeleton_fn, sk_reason = _extract_function_from_llm_output(raw, simple_qual, fn_source_clean)
     if skeleton_fn is None:
+        msg = f"Skeleton skipped: LLM output failed validation. ({sk_reason})"
+        if raw is None or not str(raw).strip():
+            msg = "Skeleton skipped: skeleton model returned no text (check API keys and network)."
+        elif _pipeline_trace_skeleton() and raw:
+            head = raw.strip()
+            if len(head) > 1200:
+                head = head[:1200] + "..."
+            msg = f"{msg} Raw head: {head!r}"
+        _log_surface(slot_spec, msg)
         return
 
     lock = _lock_for_path(target)
@@ -477,10 +554,15 @@ def _surface_skeleton_impl(slot_spec: SlotSpec, cache_entry: CacheEntry) -> None
                 disk_clean, generated, reasoning
             )
             raw2 = _call_skeleton_llm(system_prompt2, user_prompt2)
-            print(raw2)
-            sk2 = _extract_function_from_llm_output(raw2, simple_qual, disk_clean)
-            print(sk2)
+            sk2, sk2_reason = _extract_function_from_llm_output(raw2, simple_qual, disk_clean)
             if sk2 is None:
+                msg = f"Skeleton skipped: stale on-disk block did not match lowered source; rewrite failed. ({sk2_reason})"
+                if _pipeline_trace_skeleton() and raw2:
+                    h = raw2.strip()
+                    if len(h) > 1200:
+                        h = h[:1200] + "..."
+                    msg = f"{msg} Raw head: {h!r}"
+                _log_surface(slot_spec, msg)
                 return
             skeleton_fn = sk2
 
@@ -492,3 +574,4 @@ def _surface_skeleton_impl(slot_spec: SlotSpec, cache_entry: CacheEntry) -> None
 
         new_text = "".join(lines[: start - 1] + sk_lines + lines[end:])
         _atomic_write_text(target, new_text)
+        _log_surface(slot_spec, "Skeleton surfaced to source file.")

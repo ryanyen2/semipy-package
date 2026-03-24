@@ -382,6 +382,7 @@ Rules:
 - Do not use emoji or decorative output. No docstrings or comments in the code, just code.
 - Do not call `print()` or include any sample/test invocation code inside the generated function. Return only the requested value.
 - When the user provides a previous implementation (adapt or inspiration), preserve its structure where possible and change only what is needed.
+- When the prompt includes scaffold context (surrounding user code), it may use placeholders such as `...` or informal spec comments. Implement the slot fully in your generated function; the scaffold is context for intent, not a requirement that your generated body match the user file line-for-line.
 - When "Available library primitives" are shown in the prompt, you may reuse or adapt them to satisfy the request.
 
 Slot category instructions (from SlotSpec):

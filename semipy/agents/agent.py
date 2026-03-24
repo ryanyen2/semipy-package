@@ -380,6 +380,10 @@ class SemiAgent:
             if spec.scaffold_source:
                 slot_block += "Scaffold context (surrounding formal code):\n"
                 slot_block += f"```python\n{spec.scaffold_source}\n```\n"
+                slot_block += (
+                    "Implement the slot in your generated function; the scaffold may use placeholders "
+                    "and need not match the generated body line-for-line.\n"
+                )
 
         if slot_block:
             parts.append("")

@@ -280,6 +280,14 @@ def _should_semantic_check(
     """
     if not getattr(config, "semantic_verify", True):
         return False
+    snap = getattr(slot, "slot_spec", None)
+    if isinstance(snap, dict):
+        cat = str(snap.get("expected_category", "") or "")
+        outs = snap.get("output_names", [])
+        if cat == SlotCategory.STATEMENT_BLOCK.value and isinstance(outs, list) and len(outs) == 0:
+            # Pure side-effect blocks are noisy for semantic checks and often produce
+            # redundant adapt loops without improving correctness.
+            return False
     if not _has_diverse_observations(slot):
         return False
 
