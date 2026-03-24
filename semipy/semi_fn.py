@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from semipy.agents.config import get_config
+from semipy.lowering import _make_slot_id
 from semipy.slot_resolver import execute_slot
 from semipy.types import (
     SlotCategory,
@@ -227,7 +228,7 @@ def _semi_standalone(prompt: str, *, expected_type: Any = None) -> Any:
         expected_category=SlotCategory.EXPRESSION_STANDALONE,
         output_names=[],
     )
-    slot_id = _sha16(f"{filename}:{func_qualname}:{start_abs}:{spec_text}")
+    slot_id = _make_slot_id(filename, func_qualname, 0, f"{spec_text}\0{spec_equivalence_key}")
 
     control_context = "method" if "." in (func_qualname or "") else "top_level"
 

@@ -617,6 +617,7 @@ def execute_slot(
                         output_names=list(slot_spec.output_names or []),
                         enable_execution=True,
                         free_variables=list(slot_spec.free_variables),
+                        usage_hints=list(slot_spec.usage_hints or []),
                     )
                     if not vr.passed:
                         _verify_failure_msg = (vr.error_message or "").strip()

@@ -119,6 +119,7 @@ def _validate_basic_execution(
     output_names: list[str],
     typeadapter_globals: dict[str, Any] | None = None,
     free_variables: list[str] | None = None,
+    usage_hints: list[str] | None = None,
 ) -> ValidationResult:
     # We intentionally do not require non-None results for unknown types.
     if sample_input is None:
@@ -132,6 +133,7 @@ def _validate_basic_execution(
     args = tuple(sample_input.get("args", ()) or ())
     kwargs = dict(sample_input.get("kwargs", {}) or {})
     fv = free_variables or []
+    hints = set(usage_hints or [])
 
     try:
         if fv and len(fv) == len(args) and not kwargs:
@@ -187,8 +189,24 @@ def _validate_basic_execution(
                     error_message=f"STATEMENT_BLOCK dict keys mismatch. expected={output_names} got={list(result.keys())}",
                 )
         else:
-            # Side-effect blocks are allowed to return None.
-            if result is not None:
+            if "inline:if_test" in hints:
+                # Replaces `if ...: #> ...`; generated slot must produce a bool condition.
+                if not isinstance(result, bool):
+                    return ValidationResult(
+                        passed=False,
+                        ast_valid=True,
+                        type_correct=False,
+                        execution_ok=True,
+                        error_message=f"Inline if-test slot must return bool; got {type(result).__name__}",
+                    )
+            elif "inline:return" in hints:
+                # Replaces `return ... #> ...`; return value is validated below via expected_type.
+                pass
+            elif "inline:expr" in hints:
+                # Replaces bare expression `... #> ...`; expression value is intentionally ignored.
+                pass
+            elif result is not None:
+                # Side-effect blocks are allowed to return None.
                 return ValidationResult(
                     passed=False,
                     ast_valid=True,
@@ -435,6 +453,7 @@ def validate(
 
     slot_category = spec.slot_spec.expected_category if spec and spec.slot_spec else None
     output_names = spec.slot_spec.output_names if spec and spec.slot_spec else []
+    usage_hints = spec.slot_spec.usage_hints if spec and spec.slot_spec else []
 
     effective_type = spec.expected_type if spec is not None else expected_type
     effective_sample = spec.sample_input if spec is not None and spec.sample_input is not None else sample_input
@@ -450,6 +469,7 @@ def validate(
         output_names=output_names,
         typeadapter_globals=ta_globals,
         free_variables=fv,
+        usage_hints=usage_hints,
     )
 
 
@@ -462,6 +482,7 @@ def verify_runtime_execution(
     output_names: list[str],
     enable_execution: bool = True,
     free_variables: list[str] | None = None,
+    usage_hints: list[str] | None = None,
 ) -> ValidationResult:
     """
     Run execution + type checks for an already-loaded dispatch function (REUSE path).
@@ -484,5 +505,6 @@ def verify_runtime_execution(
         slot_category=slot_category,
         output_names=output_names,
         free_variables=free_variables,
+        usage_hints=usage_hints,
     )
 

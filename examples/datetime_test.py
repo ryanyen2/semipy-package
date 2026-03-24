@@ -12,22 +12,13 @@ _SESSION_SOURCE = str((Path(CACHE_DIR).resolve().parent / "examples").resolve())
 configure(
     cache_dir=CACHE_DIR,
     session_source=_SESSION_SOURCE,
-    verbose=False,
+    verbose=True,
 )
 
 @semiformal
 def infer_datetime_formatter(date_str: str) -> str:
-    #< [Task] infer parse then format
-    #< [Given] observed date string
-    #< [When] detect input pattern
-    #< [Then] use session format
-    #< [Given] output month year
     input_pattern = ... #> infer the input date regex/strptime pattern from the observed string format in this session.
-    #< [When] parse with pattern
-    #< [Then] format to %b %Y
-    #< [Verify] return formatted string
     output_pattern = "%b %Y"
-
     return datetime.strptime(str(date_str), input_pattern).strftime(output_pattern)
 
 
@@ -45,7 +36,7 @@ data = pd.DataFrame(
             "June 21 2025",
             "July 09 2026",
             "Aug 2026",
-            "09:30:00",
+            # "09:30:00",
             "04/21/2025",
         ]
     }

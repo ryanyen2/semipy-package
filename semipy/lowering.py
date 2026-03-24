@@ -3,8 +3,9 @@ from __future__ import annotations
 import ast
 import builtins
 import hashlib
+import re
 import textwrap
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Optional
 
 from semipy.types import (
@@ -27,6 +28,239 @@ def _sha16(s: str) -> str:
 def _is_hash_arrow(line: str) -> bool:
     stripped = line.lstrip()
     return stripped.startswith("#>") or stripped.startswith("# >")
+
+
+def _is_skeleton_placeholder_line(line: str) -> bool:
+    """True for a line that is only `#` after lstrip (e.g. strip_skeleton_lines from `#<`)."""
+    stripped = line.lstrip()
+    if not stripped.startswith("#"):
+        return False
+    if stripped.startswith("#<") or stripped.startswith("#>") or stripped.startswith("# >"):
+        return False
+    return stripped[1:].strip() == ""
+
+
+def _collect_hash_arrow_block_ranges(source_lines: list[str]) -> list[tuple[int, int]]:
+    """0-based inclusive (start, last_hash_arrow) per logical #> block.
+
+    Lines that are only `#` (skeleton placeholders between `#<` and code) sit between
+    `#>` lines without splitting the block.
+    """
+    blocks: list[tuple[int, int]] = []
+    i = 0
+    n = len(source_lines)
+    while i < n:
+        if not _is_hash_arrow(source_lines[i]):
+            i += 1
+            continue
+        start = i
+        j = i
+        last_hash_arrow = i
+        while j < n:
+            line = source_lines[j]
+            if _is_hash_arrow(line):
+                last_hash_arrow = j
+                j += 1
+            elif _is_skeleton_placeholder_line(line):
+                j += 1
+            else:
+                break
+        blocks.append((start, last_hash_arrow))
+        i = j
+    return blocks
+
+
+# usage_hints markers for end-of-line #> specs (not lines that start with #>)
+INLINE_ASSIGN = "inline:assign"
+INLINE_IF_TEST = "inline:if_test"
+INLINE_EXPR = "inline:expr"
+INLINE_RETURN = "inline:return"
+
+
+def _inline_hash_arrow_spec(line: str) -> str | None:
+    """Spec text after inline ``#>`` or ``#`` + optional space + ``>`` when the line is not a #>-only line."""
+    if _is_hash_arrow(line):
+        return None
+    idx = line.find("#>")
+    if idx >= 0:
+        return line[idx + 2 :].strip() or None
+    m = re.search(r"#\s*>", line)
+    if m is None:
+        return None
+    return line[m.end() :].strip() or None
+
+
+def _is_ellipsis_constant(node: ast.AST | None) -> bool:
+    return isinstance(node, ast.Constant) and node.value is Ellipsis
+
+
+def _ellipsis_assign_targets(stmt: ast.Assign) -> list[str]:
+    out: list[str] = []
+    if not isinstance(stmt.value, ast.Constant) or stmt.value.value is not Ellipsis:
+        return out
+    for t in stmt.targets:
+        if isinstance(t, ast.Name):
+            out.append(t.id)
+    return out
+
+
+def _find_stmt_at_rel_line(
+    fn_def: ast.FunctionDef | ast.AsyncFunctionDef, rel_line: int
+) -> ast.stmt | None:
+    return _find_stmt_at_rel_line_in_list(fn_def.body, rel_line)
+
+
+def _find_stmt_at_rel_line_in_list(stmts: list[ast.stmt], rel_line: int) -> ast.stmt | None:
+    for stmt in stmts:
+        if getattr(stmt, "lineno", 0) == rel_line:
+            return stmt
+        if isinstance(stmt, ast.If):
+            r = _find_stmt_at_rel_line_in_list(stmt.body, rel_line)
+            if r is not None:
+                return r
+            r = _find_stmt_at_rel_line_in_list(stmt.orelse, rel_line)
+            if r is not None:
+                return r
+        if isinstance(stmt, (ast.For, ast.AsyncFor)):
+            r = _find_stmt_at_rel_line_in_list(stmt.body, rel_line)
+            if r is not None:
+                return r
+            r = _find_stmt_at_rel_line_in_list(stmt.orelse, rel_line)
+            if r is not None:
+                return r
+        if isinstance(stmt, ast.While):
+            r = _find_stmt_at_rel_line_in_list(stmt.body, rel_line)
+            if r is not None:
+                return r
+            r = _find_stmt_at_rel_line_in_list(stmt.orelse, rel_line)
+            if r is not None:
+                return r
+        if isinstance(stmt, (ast.With, ast.AsyncWith)):
+            r = _find_stmt_at_rel_line_in_list(stmt.body, rel_line)
+            if r is not None:
+                return r
+        if isinstance(stmt, ast.Try):
+            r = _find_stmt_at_rel_line_in_list(stmt.body, rel_line)
+            if r is not None:
+                return r
+            for h in stmt.handlers:
+                r = _find_stmt_at_rel_line_in_list(h.body, rel_line)
+                if r is not None:
+                    return r
+            r = _find_stmt_at_rel_line_in_list(stmt.orelse, rel_line)
+            if r is not None:
+                return r
+            r = _find_stmt_at_rel_line_in_list(stmt.finalbody, rel_line)
+            if r is not None:
+                return r
+    return None
+
+
+def _replace_if_test_at_line(fn_def: ast.FunctionDef, rel_line: int, call_expr: ast.expr) -> None:
+    def walk(stmts: list[ast.stmt]) -> bool:
+        for st in stmts:
+            if isinstance(st, ast.If) and getattr(st, "lineno", 0) == rel_line:
+                st.test = call_expr
+                return True
+            if isinstance(st, ast.If):
+                if walk(st.body) or walk(st.orelse):
+                    return True
+        return False
+
+    walk(fn_def.body)
+
+
+def _replace_expr_value_at_line(fn_def: ast.FunctionDef, rel_line: int, call_expr: ast.expr) -> None:
+    def walk(stmts: list[ast.stmt]) -> bool:
+        for st in stmts:
+            if isinstance(st, ast.Expr) and getattr(st, "lineno", 0) == rel_line:
+                st.value = call_expr
+                return True
+            if isinstance(st, ast.If):
+                if walk(st.body) or walk(st.orelse):
+                    return True
+            if isinstance(st, (ast.For, ast.AsyncFor, ast.While)):
+                if walk(st.body) or walk(st.orelse):
+                    return True
+            if isinstance(st, (ast.With, ast.AsyncWith)):
+                if walk(st.body):
+                    return True
+            if isinstance(st, ast.Try):
+                if walk(st.body) or walk(st.orelse) or walk(st.finalbody):
+                    return True
+                for h in st.handlers:
+                    if walk(h.body):
+                        return True
+        return False
+
+    walk(fn_def.body)
+
+
+def _replace_return_value_at_line(fn_def: ast.FunctionDef, rel_line: int, call_expr: ast.expr) -> None:
+    def walk(stmts: list[ast.stmt]) -> bool:
+        for st in stmts:
+            if isinstance(st, ast.Return) and getattr(st, "lineno", 0) == rel_line:
+                st.value = call_expr
+                return True
+            if isinstance(st, ast.If):
+                if walk(st.body) or walk(st.orelse):
+                    return True
+            if isinstance(st, (ast.For, ast.AsyncFor, ast.While)):
+                if walk(st.body) or walk(st.orelse):
+                    return True
+            if isinstance(st, (ast.With, ast.AsyncWith)):
+                if walk(st.body):
+                    return True
+            if isinstance(st, ast.Try):
+                if walk(st.body) or walk(st.orelse) or walk(st.finalbody):
+                    return True
+                for h in st.handlers:
+                    if walk(h.body):
+                        return True
+        return False
+
+    walk(fn_def.body)
+
+
+def _splice_assign_replacement(
+    stmts: list[ast.stmt], rel_line: int, replace_count: int, new_stmts: list[ast.stmt]
+) -> bool:
+    i = 0
+    while i < len(stmts):
+        st = stmts[i]
+        if getattr(st, "lineno", 0) == rel_line and isinstance(st, ast.Assign):
+            stmts[i : i + replace_count] = new_stmts
+            return True
+        if isinstance(st, ast.If):
+            if _splice_assign_replacement(st.body, rel_line, replace_count, new_stmts):
+                return True
+            if _splice_assign_replacement(st.orelse, rel_line, replace_count, new_stmts):
+                return True
+        if isinstance(st, (ast.For, ast.AsyncFor)):
+            if _splice_assign_replacement(st.body, rel_line, replace_count, new_stmts):
+                return True
+            if _splice_assign_replacement(st.orelse, rel_line, replace_count, new_stmts):
+                return True
+        if isinstance(st, ast.While):
+            if _splice_assign_replacement(st.body, rel_line, replace_count, new_stmts):
+                return True
+            if _splice_assign_replacement(st.orelse, rel_line, replace_count, new_stmts):
+                return True
+        if isinstance(st, (ast.With, ast.AsyncWith)):
+            if _splice_assign_replacement(st.body, rel_line, replace_count, new_stmts):
+                return True
+        if isinstance(st, ast.Try):
+            if _splice_assign_replacement(st.body, rel_line, replace_count, new_stmts):
+                return True
+            for h in st.handlers:
+                if _splice_assign_replacement(h.body, rel_line, replace_count, new_stmts):
+                    return True
+            if _splice_assign_replacement(st.orelse, rel_line, replace_count, new_stmts):
+                return True
+            if _splice_assign_replacement(st.finalbody, rel_line, replace_count, new_stmts):
+                return True
+        i += 1
+    return False
 
 
 def strip_skeleton_lines(source: str) -> str:
@@ -263,6 +497,18 @@ def _infer_output_names_for_statement_block(
     if not after:
         return []
     region = after[:max_statements]
+    ellipsis_targets: list[str] = []
+    for stmt in region:
+        if not isinstance(stmt, ast.Assign):
+            continue
+        val = stmt.value
+        if not isinstance(val, ast.Constant) or val.value is not Ellipsis:
+            continue
+        for tgt in stmt.targets:
+            if isinstance(tgt, ast.Name):
+                ellipsis_targets.append(tgt.id)
+    if ellipsis_targets:
+        return ellipsis_targets
     loaded: set[str] = set()
     assigned: set[str] = set()
     for stmt in region:
@@ -279,8 +525,26 @@ def _infer_output_names_for_statement_block(
     return out
 
 
-def _make_slot_id(filename: str, func_qualname: str, start_abs_lineno: int, spec_text: str) -> str:
-    key = f"{filename}:{func_qualname}:{start_abs_lineno}:{spec_text}"
+def _slot_id_interim(
+    filename: str,
+    func_qualname: str,
+    start_abs_lineno: int,
+    end_abs_lineno: int,
+    spec_text: str,
+) -> str:
+    """Unique id before ordinal assignment; not used for portal identity after finalize."""
+    key = f"{filename}:{func_qualname}:{start_abs_lineno}:{end_abs_lineno}:{spec_text}"
+    return _stable_slot_hash(key)
+
+
+def _make_slot_id(filename: str, func_qualname: str, slot_ordinal: int, spec_text: str) -> str:
+    """
+    Stable slot identity for a region inside one enclosing function.
+
+    Uses **ordinal** (0..n-1 in source order) instead of absolute line numbers so inserting
+    `#<` / blank `#` comments above a region does not mint a new slot id and break REUSE.
+    """
+    key = f"{filename}:{func_qualname}:{slot_ordinal}:{spec_text}"
     return _stable_slot_hash(key)
 
 
@@ -310,7 +574,7 @@ def _make_slot_spec(
         expected_category=expected_category,
         output_names=output_names,
     )
-    slot_id = _make_slot_id(filename, func_qualname, start_abs_lineno, spec_text)
+    slot_id = _slot_id_interim(filename, func_qualname, start_abs_lineno, end_abs_lineno, spec_text)
     source_span = (filename, start_abs_lineno, end_abs_lineno)
     return SlotSpec(
         slot_id=slot_id,
@@ -437,20 +701,9 @@ def scan_informal_specs(
 
     # Collect #> comment blocks for SlotSpec creation (STATEMENT_BLOCK).
     comment_slots: list[tuple[int, SlotSpec]] = []
-    i = 0
-    while i < len(source_lines):
-        if not _is_hash_arrow(source_lines[i]):
-            i += 1
-            continue
-        # contiguous block
-        indent = source_lines[i][: len(source_lines[i]) - len(source_lines[i].lstrip())]
-        block_start_idx = i
-        j = i
-        while j < len(source_lines) and _is_hash_arrow(source_lines[j]):
-            j += 1
-        block_end_idx = j - 1
-
-        block_lines = source_lines[block_start_idx : block_end_idx + 1]
+    for block_start_idx, block_end_idx in _collect_hash_arrow_block_ranges(source_lines):
+        indent = source_lines[block_start_idx][: len(source_lines[block_start_idx]) - len(source_lines[block_start_idx].lstrip())]
+        block_lines = [source_lines[k] for k in range(block_start_idx, block_end_idx + 1) if _is_hash_arrow(source_lines[k])]
         spec_text = "\n".join(_strip_hash_arrow(l) for l in block_lines).strip()
 
         start_abs = first_lineno + block_start_idx
@@ -503,12 +756,85 @@ def scan_informal_specs(
         )
         comment_slots.append((start_abs, slot_spec))
 
-        i = j
+    # End-of-line #> (e.g. ``name = ... #> spec``) is a Python comment; collect as STATEMENT_BLOCK.
+    inline_slots: list[tuple[int, SlotSpec]] = []
+    for line_idx, line in enumerate(source_lines):
+        spec_tail = _inline_hash_arrow_spec(line)
+        if spec_tail is None:
+            continue
+        rel_line = line_idx + 1
+        stmt = _find_stmt_at_rel_line(fn_def, rel_line)
+        if stmt is None:
+            continue
+        hint: str | None = None
+        output_names: list[str] = []
+        expected_type: Any = type(None)
+        if isinstance(stmt, ast.Assign) and _ellipsis_assign_targets(stmt):
+            hint = INLINE_ASSIGN
+            output_names = _ellipsis_assign_targets(stmt)
+            expected_type = _infer_expected_type_for_output_names(fn_def, output_names, type_hints)
+        elif isinstance(stmt, ast.If) and _is_ellipsis_constant(stmt.test):
+            hint = INLINE_IF_TEST
+            expected_type = bool
+        elif isinstance(stmt, ast.Expr) and _is_ellipsis_constant(stmt.value):
+            hint = INLINE_EXPR
+            expected_type = type(None)
+        elif isinstance(stmt, ast.Return) and _is_ellipsis_constant(stmt.value):
+            hint = INLINE_RETURN
+            expected_type = (
+                type_hints.get("return") if type_hints and "return" in type_hints else type(None)
+            )
+        if hint is None:
+            continue
+
+        block_end_rel = rel_line
+        indent = source_lines[line_idx][: len(source_lines[line_idx]) - len(source_lines[line_idx].lstrip())]
+        bound_before = _bound_names_before(fn_def, block_end_rel + 1)
+
+        assigned_in_region: set[str] = set()
+        for st in fn_def.body:
+            st_ln = getattr(st, "lineno", 0) or 0
+            if st_ln > block_end_rel:
+                if st_ln > block_end_rel + 20:
+                    break
+                assigned_in_region |= _assigned_names(st)
+        free_var_set = bound_before - assigned_in_region - set(output_names) - _BUILTIN_NAMES
+        free_vars = _ordered_vars_from_fn(fn_def, free_var_set)
+
+        control_context = _control_context_for_line(fn_def, block_end_rel, func_qualname)
+        formal_constraints = _extract_formal_constraint_lines(source_lines, indent, line_idx)
+
+        start_abs = first_lineno + line_idx
+        end_abs = start_abs
+        usage_hints = [hint]
+        slot_spec = _make_slot_spec(
+            filename=filename,
+            func_qualname=func_qualname,
+            start_abs_lineno=start_abs,
+            end_abs_lineno=end_abs,
+            spec_text=spec_tail,
+            free_variables=free_vars,
+            control_context=control_context,
+            expected_category=SlotCategory.STATEMENT_BLOCK,
+            expected_type=expected_type,
+            output_names=output_names,
+            formal_constraints=formal_constraints,
+            usage_hints=usage_hints,
+            enclosing_function_source=source,
+            enclosing_function_qualname=func_qualname,
+            enclosing_function_span=enclosing_span,
+        )
+        inline_slots.append((start_abs, slot_spec))
 
     slots: list[SlotSpec] = []
-    slots.extend([s for _, s in sorted(comment_slots, key=lambda t: t[0])])
+    merged_comment = sorted(comment_slots + inline_slots, key=lambda t: t[0])
+    slots.extend([s for _, s in merged_comment])
     slots.extend([s for _, s in sorted(semi_slots, key=lambda t: t[0])])
     slots.sort(key=lambda s: s.source_span[1])
+    slots = [
+        replace(s, slot_id=_make_slot_id(filename, func_qualname, i, s.spec_text))
+        for i, s in enumerate(slots)
+    ]
 
     if not slots:
         # Whole function body becomes a single slot.
@@ -527,25 +853,24 @@ def scan_informal_specs(
         control_context = _control_context_for_line(fn_def, rel_start, func_qualname)
         expected_type = type_hints.get("return") if type_hints and "return" in type_hints else type(None)
         # For FUNCTION_BODY we use a special output_names contract: empty = return value only.
-        slots = [
-            _make_slot_spec(
-                filename=filename,
-                func_qualname=func_qualname,
-                start_abs_lineno=start_abs,
-                end_abs_lineno=end_abs,
-                spec_text=spec_text,
-                free_variables=_ordered_vars_from_fn(fn_def, bound_before),
-                control_context=control_context,
-                expected_category=SlotCategory.FUNCTION_BODY,
-                expected_type=expected_type,
-                output_names=[],
-                formal_constraints=[],
-                usage_hints=[],
-                enclosing_function_source=source,
-                enclosing_function_qualname=func_qualname,
-                enclosing_function_span=enclosing_span,
-            )
-        ]
+        fb = _make_slot_spec(
+            filename=filename,
+            func_qualname=func_qualname,
+            start_abs_lineno=start_abs,
+            end_abs_lineno=end_abs,
+            spec_text=spec_text,
+            free_variables=_ordered_vars_from_fn(fn_def, bound_before),
+            control_context=control_context,
+            expected_category=SlotCategory.FUNCTION_BODY,
+            expected_type=expected_type,
+            output_names=[],
+            formal_constraints=[],
+            usage_hints=[],
+            enclosing_function_source=source,
+            enclosing_function_qualname=func_qualname,
+            enclosing_function_span=enclosing_span,
+        )
+        slots = [replace(fb, slot_id=_make_slot_id(filename, func_qualname, 0, fb.spec_text))]
     return slots
 
 
@@ -553,13 +878,20 @@ def lower_to_scaffold(
     source: str,
     slot_specs: list[SlotSpec],
     slot_index_offset: int = 0,
+    *,
+    dedent_anchor_abs: int | None = None,
 ) -> str:
     """
     Produce valid Python scaffold by replacing open regions:
     - STATEMENT_BLOCK (#> block):
         - replace the comment region with __slot_N__(...) assignment(s)
+    - STATEMENT_BLOCK (end-of-line #> on ``...`` placeholders):
+        - replace the Ellipsis assignment / if-test / expr / return value
     - EXPRESSION (semi() call):
         - replace the call expression with __slot_N__(...)
+
+    ``dedent_anchor_abs`` is the absolute line number of the first line of ``textwrap.dedent``
+    source (usually ``inspect.getsourcelines`` first line, e.g. ``@semiformal``).
 
     Returns scaffold source string (must ast.parse cleanly).
     """
@@ -594,34 +926,23 @@ def lower_to_scaffold(
         ast.fix_missing_locations(tree)
         return ast.unparse(tree)
 
-    # Detect comment blocks in dedented source so we can align absolute line numbers.
-    comment_blocks: list[tuple[int, int]] = []  # (rel_start, rel_end) 1-based, inclusive
     lines = dedented.splitlines()
-    i = 0
-    while i < len(lines):
-        if not _is_hash_arrow(lines[i]):
-            i += 1
-            continue
-        start = i
-        j = i
-        while j < len(lines) and _is_hash_arrow(lines[j]):
-            j += 1
-        end = j - 1
-        # rel_* are 1-based in the dedented source for AST lineno comparisons.
-        comment_blocks.append((start + 1, end + 1))
-        i = j
+    comment_blocks: list[tuple[int, int]] = [
+        (s + 1, e + 1) for s, e in _collect_hash_arrow_block_ranges(lines)
+    ]  # (rel_start, rel_end) 1-based, inclusive
 
     stmt_slots = [(idx, s) for idx, s in enumerate(slot_specs) if s.expected_category == SlotCategory.STATEMENT_BLOCK]
     stmt_slots.sort(key=lambda t: t[1].source_span[1])
     expr_slots = [(idx, s) for idx, s in enumerate(slot_specs) if s.expected_category == SlotCategory.EXPRESSION]
     expr_slots.sort(key=lambda t: t[1].source_span[1])
 
-    # Align dedented first line absolute number using the first statement block (if any).
-    dedented_first_abs: Optional[int] = None
-    if stmt_slots and comment_blocks:
+    anchor = dedent_anchor_abs
+    if anchor is None and stmt_slots and comment_blocks:
         first_stmt_abs_start = stmt_slots[0][1].source_span[1]
         first_comment_rel_start = comment_blocks[0][0]
-        dedented_first_abs = first_stmt_abs_start - (first_comment_rel_start - 1)
+        anchor = first_stmt_abs_start - (first_comment_rel_start - 1)
+    if anchor is None and stmt_slots:
+        anchor = stmt_slots[0][1].source_span[1] - (fn_def.lineno - 1)
 
     # --- Rewrite expression semi(...) calls by node order ---
     # Collect all semi() call nodes with their precise location.
@@ -665,23 +986,26 @@ def lower_to_scaffold(
     tree = _SemiRewriter().visit(tree)
     ast.fix_missing_locations(tree)
 
-    # --- Insert statement block slots as assignments ---
-    # Insert before the first AST statement after each #> block end.
+    # --- Statement slots: assignments / inserts, then inline if/expr/return ---
+    original_body = list(fn_def.body)
     insertions: list[tuple[int, list[ast.stmt]]] = []
+    rel_replacements: list[tuple[int, int, list[ast.stmt]]] = []
+    deferred_control: list[tuple[int, SlotSpec]] = []
+
     for block_index, (overall_idx, spec) in enumerate(stmt_slots):
-        # Map the statement spec to its comment block by index in source order.
-        if not comment_blocks:
-            break
-        if block_index >= len(comment_blocks):
-            break
-        _rel_start, rel_end = comment_blocks[block_index]
-        # rel_end is inclusive comment end; insert before first stmt whose lineno > rel_end.
-        insert_at = len(fn_def.body)
-        for s_i, stmt in enumerate(fn_def.body):
-            stmt_lineno = getattr(stmt, "lineno", 0) or 0
-            if stmt_lineno > rel_end:
-                insert_at = s_i
+        hints = spec.usage_hints
+        if INLINE_IF_TEST in hints or INLINE_EXPR in hints or INLINE_RETURN in hints:
+            deferred_control.append((overall_idx, spec))
+            continue
+
+        if anchor is not None:
+            end_rel = spec.source_span[2] - anchor + 1
+            start_rel = spec.source_span[1] - anchor + 1
+        else:
+            if not comment_blocks or block_index >= len(comment_blocks):
                 break
+            _bs, end_rel = comment_blocks[block_index]
+            start_rel = comment_blocks[block_index][0]
 
         call_idx = overall_idx + slot_index_offset
         call_expr = ast.Call(
@@ -691,7 +1015,7 @@ def lower_to_scaffold(
         )
 
         if not spec.output_names:
-            new_stmts: list[ast.stmt] = [ast.Expr(value=call_expr)]
+            new_stmts = [ast.Expr(value=call_expr)]
         elif len(spec.output_names) == 1:
             new_stmts = [
                 ast.Assign(
@@ -718,11 +1042,108 @@ def lower_to_scaffold(
                     )
                 )
 
+        n_out = len(spec.output_names)
+        inline_assign = INLINE_ASSIGN in hints
+
+        if n_out > 0 and inline_assign:
+            insert_at_inline: int | None = None
+            for s_i, stmt in enumerate(original_body):
+                if getattr(stmt, "lineno", 0) == start_rel:
+                    insert_at_inline = s_i
+                    break
+            match_ok = insert_at_inline is not None
+            if match_ok and insert_at_inline is not None:
+                for k in range(n_out):
+                    si = insert_at_inline + k
+                    if si >= len(original_body):
+                        match_ok = False
+                        break
+                    st = original_body[si]
+                    if not isinstance(st, ast.Assign) or len(st.targets) != 1:
+                        match_ok = False
+                        break
+                    if not isinstance(st.targets[0], ast.Name) or st.targets[0].id != spec.output_names[k]:
+                        match_ok = False
+                        break
+                    v = st.value
+                    if not isinstance(v, ast.Constant) or v.value is not Ellipsis:
+                        match_ok = False
+                        break
+            if match_ok:
+                rel_replacements.append((start_rel, n_out, new_stmts))
+                continue
+
+        insert_at = len(original_body)
+        for s_i, stmt in enumerate(original_body):
+            stmt_lineno = getattr(stmt, "lineno", 0) or 0
+            if stmt_lineno > end_rel:
+                insert_at = s_i
+                break
+
+        if n_out > 0 and insert_at < len(original_body):
+            match_ok = True
+            for k in range(n_out):
+                si = insert_at + k
+                if si >= len(original_body):
+                    match_ok = False
+                    break
+                st = original_body[si]
+                if not isinstance(st, ast.Assign) or len(st.targets) != 1:
+                    match_ok = False
+                    break
+                if not isinstance(st.targets[0], ast.Name) or st.targets[0].id != spec.output_names[k]:
+                    match_ok = False
+                    break
+                v = st.value
+                if not isinstance(v, ast.Constant) or v.value is not Ellipsis:
+                    match_ok = False
+                    break
+            if match_ok:
+                rel_replacements.append(
+                    (getattr(original_body[insert_at], "lineno", 0) or 0, n_out, new_stmts)
+                )
+                continue
+
         insertions.append((insert_at, new_stmts))
+
+    rel_replacements.sort(key=lambda t: t[0], reverse=True)
+    for start_rel, count, new_stmts in rel_replacements:
+        _splice_assign_replacement(fn_def.body, start_rel, count, new_stmts)
+
+    def _insert_offset(orig_pos: int) -> int:
+        delta = 0
+        for r_start, r_count, r_stmts in rel_replacements:
+            if r_start + r_count <= orig_pos:
+                delta += len(r_stmts) - r_count
+        return orig_pos + delta
 
     insertions.sort(key=lambda t: t[0], reverse=True)
     for insert_at, new_stmts in insertions:
-        fn_def.body[insert_at:insert_at] = new_stmts
+        at = _insert_offset(insert_at)
+        fn_def.body[at:at] = new_stmts
+
+    if anchor is None and deferred_control and stmt_slots:
+        anchor = stmt_slots[0][1].source_span[1] - (fn_def.lineno - 1)
+
+    if anchor is not None:
+        deferred_control.sort(key=lambda t: t[1].source_span[1])
+        for overall_idx, spec in deferred_control:
+            rel_line = spec.source_span[1] - anchor + 1
+            call_idx = overall_idx + slot_index_offset
+            call_expr = ast.Call(
+                func=ast.Name(id=f"__slot_{call_idx}__", ctx=ast.Load()),
+                args=[],
+                keywords=[
+                    ast.keyword(arg=name, value=ast.Name(id=name, ctx=ast.Load()))
+                    for name in spec.free_variables
+                ],
+            )
+            if INLINE_IF_TEST in spec.usage_hints:
+                _replace_if_test_at_line(fn_def, rel_line, call_expr)
+            elif INLINE_EXPR in spec.usage_hints:
+                _replace_expr_value_at_line(fn_def, rel_line, call_expr)
+            elif INLINE_RETURN in spec.usage_hints:
+                _replace_return_value_at_line(fn_def, rel_line, call_expr)
 
     ast.fix_missing_locations(tree)
     return ast.unparse(tree)

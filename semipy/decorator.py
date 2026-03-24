@@ -9,7 +9,7 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Callable, Optional, Union, get_type_hints
 
-from semipy.lowering import lower_to_scaffold, scan_informal_specs, strip_skeleton_lines
+from semipy.lowering import _make_slot_id, lower_to_scaffold, scan_informal_specs, strip_skeleton_lines
 from semipy.slot_resolver import _make_slot_proxy
 from semipy.types import SemiformalContext, SlotCategory, SlotSpec, compute_spec_equivalence_key
 from semipy.agents.config import get_config
@@ -109,7 +109,9 @@ def _wrap_function(fn: Callable[..., Any], description: Optional[str] = None, fi
         type_hints=resolved_for_slots or type_hints,
         globals_ns=getattr(fn, "__globals__", None) or {},
     )
-    scaffold_src = lower_to_scaffold(source, slot_specs, slot_index_offset=0)
+    scaffold_src = lower_to_scaffold(
+        source, slot_specs, slot_index_offset=0, dedent_anchor_abs=first_lineno
+    )
 
     ctx = SemiformalContext(
         func_name=func_qualname,
@@ -135,7 +137,7 @@ def _wrap_function(fn: Callable[..., Any], description: Optional[str] = None, fi
         expected_type = _type_hints_for_lowering(fn).get("return", type(None))
         spec_text = source
         spec_hash = __import__("hashlib").sha256(spec_text.encode()).hexdigest()[:16]
-        slot_id = __import__("hashlib").sha256(f"{resolved_filename}:{func_qualname}:{first_lineno}:{spec_text}".encode()).hexdigest()[:16]
+        slot_id = _make_slot_id(resolved_filename, func_qualname, 0, spec_text)
         spec_equivalence_key = compute_spec_equivalence_key(
             spec_text,
             param_names,

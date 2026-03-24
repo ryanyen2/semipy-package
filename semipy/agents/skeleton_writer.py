@@ -66,7 +66,12 @@ def _spec_marker_lines(source: str) -> list[str]:
     return out
 
 
-def _call_skeleton_llm(prompt: str, *, timeout: float = 120.0) -> str | None:
+def _call_skeleton_llm(
+    system_prompt: str,
+    user_prompt: str,
+    *,
+    timeout: float = 120.0,
+) -> str | None:
     """
     Single-turn text generation via pydantic_ai, matching ``generator.py`` backend selection:
     OpenAI when ``OPENAI_API_KEY`` / ``configure(openai_api_key=...)`` is set, else OpenRouter.
@@ -82,8 +87,13 @@ def _call_skeleton_llm(prompt: str, *, timeout: float = 120.0) -> str | None:
                 model, settings = _create_openrouter_model(config)
         except ValueError:
             return None
-        agent = Agent(model, model_settings=settings, output_type=str)
-        result = await agent.run(prompt)
+        agent = Agent(
+            model,
+            model_settings=settings,
+            output_type=str,
+            system_prompt=system_prompt,
+        )
+        result = await agent.run(user_prompt)
         out = getattr(result, "output", None)
         if isinstance(out, str) and out.strip():
             return out
@@ -96,98 +106,123 @@ def _call_skeleton_llm(prompt: str, *, timeout: float = 120.0) -> str | None:
         return None
 
 
-def _build_skeleton_prompt(
+def _build_skeleton_prompts(
     fn_source_clean: str,
     generated_source: str,
     reasoning_summary: str,
-) -> str:
+) -> tuple[str, str]:
     rs = reasoning_summary.strip() if reasoning_summary.strip() else "(none)"
-    static = """You are formatting a short reasoning skeleton as Python comments for a semipy slot.
+    system_prompt = """You are generating brief but substantial program-tracing lines as Python comments—called "reasoning surfaces"—to capture the core logic, decision points, or constraints, not just recapping each statement, in order to help users both understand and iteratively refine the code by editing these comments.
 
-The user file uses `#>` for their natural-language specification (immutable). You add `#<` lines
-that summarize how the generated implementation relates to that spec. Tags (first token after `#<`):
-[Task] (required first annotation inside the function body), [Given], [Then], [When], [But], [Verify].
+Your output should:
+- Insert `#<` annotated reasoning traces within the function (never outside), matching code block indentation. The user provides `#>` specification lines, which must remain unchanged.
+- For each explanation, use a [Tag] (first token after `#<`), including [Task] (first), and choose from: [Given], [Then], [When], [But], [Verify], both alone and mixed as needed. Encourage creative mixing of formality and informality across tags and domains.
+- Always ensure that each `#<` is true reasoning (explain a non-obvious step, intent, constraint, condition, or implication), not just a summary or a direct echo.
+- Insert between 4 and 8 `#<` lines, tight but not verbose: Each after-tag phrase must use **no more than 7 words** (prefer 4–5), e.g. "parse then format", "skip if missing pattern", not sentences, not multi-clause lists.
+- Do NOT modify code, specifications (`#>` lines), or structure; do NOT emit filler or blank comment lines.
+- Place all `#<` lines in the code body, never before function definition or after the last line.
+- Every annotation is crafted for editability: the user should be able to review, modify, or replace these reasoning traces to direct iterative code changes.
+- Reasoning always precedes or is interleaved with the associated code; never summarize afterward.
+- Produce only the complete enclosing function source (from `def ` or `async def` to the last line), with `#<` annotations; NO markdown or prose intro/outro.
 
-Rules:
-- Output ONLY the full enclosing function source: from `def ` or `async def ` through the last line
-  of that function. No markdown fences, no prose before or after.
-- Do NOT change the function name, parameters, decorators, or any `#>` line text.
-- Add 4 to 8 `#<` lines total. The first `#<` line in the function body must use [Task].
-- Brevity (strict): on each `#<` line, after the `[Tag]` token, use at most **5 words** (prefer **3 to 4**).
-  No full sentences, no commas for multiple clauses; labels only (e.g. "parse then format").
-- Match indentation of neighboring code. Each `#<` line must be at most 90 characters including
-  leading spaces and `#< `.
-- Do not duplicate or remove user spec lines; do not add executable code.
+# Steps
 
-Concrete shape examples (illustrative only; your output must follow the actual sources below):
+- Read the target code and `#>` lines so you can understand the program's operational semantics.
+- Choose reasoning tags and short surface texts that clarify choices, decisions, or constraints—not just "what" but "why/how"—showing a range of domains and both formal and informal phrasing.
+- Examples should span multiple fields (e.g. data parsing, user interaction, business logic, ML inferences, process coordination, error handling) and show several permutations: formal-informal tone mixing, varied tag sets, and complex reasoning made concise.
+- For each line or block in need of explanation, add the best fitting reasoning tag and concise phrase, designed for high editability.
+- Ensure every annotation is actionable: users should be able to adjust these to directly revisit and iterate the code.
 
-Example A -- expression slot with `semi(...)` and `#>` on the same line as code:
-```python
-def infer_datetime_formatter(date_str: str) -> str:
-    #< [Task] infer pattern then format
-    input_pattern = ... #> infer the input date regex/strptime pattern from the observed string format in this session.
-    output_pattern = "%b %Y"
-    if ...: #> year is over 2026
-        return ... #> return the formatted date string
-    else:
-        return datetime.strptime(str(date_str), input_pattern).strftime(output_pattern)
-```
+# Output Format
 
-Example B -- `@semiformal` method with a multi-line `#>` statement block (classification):
-```python
-def classify_body(self, body: str) -> str:
-    #< [Task] label body snake_case family
-    text = "" if body is None else str(body).strip()
-    lower = text.lower()
-    #> Classify this Apache error log body into a short snake_case event family name.
-    if not lower:
-        return "unknown"
-    #> other conditions for other families like worker_init, jk_error, scoreboard_found, etc.
-    return family  # type: ignore[name-defined]
-```
+Return only the full, syntactically correct Python function with your `#<` reasoning traces inserted as comments, in-place, matching code indentation. No markdown/code delimiters, no explanation, no filler, no blank comments, and no removal or alteration of existing `#>` lines, code, or function signature.
 
-Example C -- method building a prompt then calling `semi` with `expected_type=list`:
-```python
-def infer_templates(self, families_and_bodies: dict[str, list[str]]) -> list[dict]:
-    #< [Task] one regex per family
-    families_text = ""
-    for fam, fam_bodies in sorted(families_and_bodies.items()):
-        samples = "\\n".join("    - " + repr(b) for b in sorted(set(fam_bodies))[:15])
-        families_text += "\\n  " + fam + ":\\n" + samples
-    return semi(
-        "For each event family, create a Python regex ... Families and example bodies:" + families_text,
-        expected_type=list,
-    )
-```
+# Examples
+
+Here are several diverse, high-quality examples, demonstrating a spectrum of domains, mixed tone and formality, and strictly reasoning-based traces, not program summaries:
 
 ---
+**Example 1 (natural language clean-up and transformation)**
 
-Enclosing function (no `#<` yet; `#>` lines must appear verbatim in your output):
-```python
-"""
-    tail = """
+def clean_title(title: str) -> str:
+    #< [Task] enforce title tidy heuristic
+    title = "untitled" if not title else title.strip()
+    #< [When] missing, fallback to generic title
+    #< [But] trim whitespace, skip in test
+    #> Normalize and sanitize the given title string. If missing or blank, use "untitled".
+    #> In tests skip fields with mock titles.
+    title = title.lower()
+    #< [Then] conversion to lowercase standardizes
+    return title
 
-Generated implementation for this slot (reference only):
-```python
-"""
-    tail2 = """
+---
+**Example 2 (event log enrichment, mixing formality and informality)**
 
-Model reasoning summary (may be empty):
-"""
-    tail3 = """
+def tag_log(log: dict) -> dict:
+    #< [Task] enrich log with family and iso time
+    ts = log.get("timestamp")
+    #< [Given] timestamp should be ISO8601
+    fam = semi("family name?", context=log)
+    #< [When] family not present parse from body
+    #< [Verify] result aligns with context sample
+    log["family"] = fam
+    log["iso_time"] = ts
+    return log
 
-Produce the complete function source with `#<` annotations inserted."""
-    return (
-        static
+---
+**Example 3 (decision point, complex branching, informal phrase)**
+
+def process_invoice(doc: dict) -> str:
+    #< [Task] route by category, then extract id
+    if not doc.get("supplier"):
+        #< [When] supplier missing, abort fast
+        return "failed"
+    cat = get_category(doc)
+    #< [Then] use vendor rules for categorizing
+    #> Apply supplier rules to process and classify the invoice
+    inv_id = doc.get("invoice_id")
+    #< [Verify] invoice id really conforms (loose check)
+    return f"{cat}:{inv_id or 'unknown'}"
+
+---
+**Example 4 (pure ML inference, formal-informal blend)**
+
+def predict_sentiment(inputs: list[str]) -> float:
+    #< [Task] aggregate ML prediction for sentiment
+    preds = ml_model.predict(inputs)
+    #< [Given] input list cleaned above, else warn
+    val = float(sum(preds) / len(preds))
+    #< [But] weighted mean unnecessary here
+    #> Compute aggregate sentiment using pretrained model.
+    return val
+
+---
+(Real tasks should draw from varied code and domains. These are shortened to fit; typical traces and surfaces may involve longer or more technical tags/logic.)
+
+# Notes
+
+- All `#<` lines must be concise, informative reasoning surfaces. Do not turn program actions into simple summaries; your annotations should help users see non-trivial logic and iterate/refine accordingly.
+- Reasoning should be discoverable—highlight why, not merely what. Emphasize points of design choice, decision, or error-prone areas.
+- Strive for a mix of tags, tones, and application scenarios.
+- Never start an annotation with a conclusion; always supply reasoning context first.
+- Your goal is for the user to look at the annotated reasoning traces and directly edit them to revise program logic in future iterations.
+
+Reminder: Insert annotations inside function body only; always reason before conclusions or actions; be succinct but illuminating; enable iterative user editing."""
+    user_prompt = (
+        "Enclosing function (no `#<` yet; `#>` lines must appear verbatim in your output):\n"
+        "```python\n"
         + fn_source_clean.strip()
-        + "\n```\n"
-        + tail
+        + "\n```\n\n"
+        + "Generated implementation for this slot (reference only):\n"
+        + "```python\n"
         + generated_source.strip()
-        + "\n```\n"
-        + tail2
+        + "\n```\n\n"
+        + "Model reasoning summary (may be empty):\n"
         + rs
-        + tail3
+        + "\n\n"
+        + "Produce the complete function source with `#<` annotations inserted."
     )
+    return system_prompt, user_prompt
 
 
 def _strip_markdown_fences(raw: str) -> str:
@@ -253,11 +288,34 @@ def _extract_function_from_llm_output(
     )
     if not has_skeleton:
         return None
+    # Guardrail: surfaced skeleton must not rewrite executable code.
+    # We only accept outputs that preserve the original function text
+    # after normalizing `#<` lines back to placeholder `#` lines.
+    candidate_clean = strip_skeleton_lines(candidate)
+    if candidate_clean.strip() != original_fn_source.strip():
+        return None
     before = _spec_marker_lines(original_fn_source)
     after = _spec_marker_lines(candidate)
     if before != after:
         return None
-    return _cap_skeleton_line_words(candidate)
+    return _drop_empty_hash_only_lines(_cap_skeleton_line_words(candidate))
+
+
+def _drop_empty_hash_only_lines(source: str) -> str:
+    """Remove lines that are only ``#`` (placeholders from prior strips); keep ``#<`` / ``#>``."""
+    out: list[str] = []
+    for line in source.splitlines(keepends=True):
+        core = line.rstrip("\r\n")
+        stripped = core.lstrip()
+        if stripped.startswith("#<") or stripped.startswith("#>") or stripped.startswith("# >"):
+            out.append(line)
+            continue
+        if stripped.startswith("#"):
+            remainder = stripped[1:].lstrip()
+            if remainder == "":
+                continue
+        out.append(line)
+    return "".join(out)
 
 
 def _cap_skeleton_line_words(source: str, *, max_words: int = 5) -> str:
@@ -383,8 +441,10 @@ def _surface_skeleton_impl(slot_spec: SlotSpec, cache_entry: CacheEntry) -> None
     reasoning = cache_entry.reasoning_summary or ""
 
     hint_start = slot_spec.enclosing_function_span[1] or slot_spec.source_span[1]
-    prompt = _build_skeleton_prompt(fn_source_clean, generated, reasoning)
-    raw = _call_skeleton_llm(prompt)
+    system_prompt, user_prompt = _build_skeleton_prompts(
+        fn_source_clean, generated, reasoning
+    )
+    raw = _call_skeleton_llm(system_prompt, user_prompt)
     simple_qual = slot_spec.enclosing_function_qualname
     skeleton_fn = _extract_function_from_llm_output(raw, simple_qual, fn_source_clean)
     if skeleton_fn is None:
@@ -401,12 +461,16 @@ def _surface_skeleton_impl(slot_spec: SlotSpec, cache_entry: CacheEntry) -> None
         block = "".join(lines[start - 1 : end])
         disk_clean = strip_skeleton_lines(block)
         if disk_clean.strip() != fn_source_clean.strip():
-            prompt2 = _build_skeleton_prompt(disk_clean, generated, reasoning)
-            raw2 = _call_skeleton_llm(prompt2)
+            system_prompt2, user_prompt2 = _build_skeleton_prompts(
+                disk_clean, generated, reasoning
+            )
+            raw2 = _call_skeleton_llm(system_prompt2, user_prompt2)
             sk2 = _extract_function_from_llm_output(raw2, simple_qual, disk_clean)
             if sk2 is None:
                 return
             skeleton_fn = sk2
+
+        skeleton_fn = _drop_empty_hash_only_lines(_cap_skeleton_line_words(skeleton_fn))
 
         sk_lines = skeleton_fn.splitlines(keepends=True)
         if sk_lines and not sk_lines[-1].endswith("\n"):

@@ -10,18 +10,58 @@ import asyncio
 import concurrent.futures
 import json
 import os
+import threading
 from typing import Any, Callable, List, Optional
 
 
-def _run_async(coro: Any) -> Any:
-    """Run a coroutine in a dedicated thread with its own event loop.
+_async_loop_lock = threading.Lock()
+_async_loop: asyncio.AbstractEventLoop | None = None
+_async_loop_thread: threading.Thread | None = None
 
-    Always uses ``asyncio.run`` in a worker thread so callers are safe whether or not the
-    current thread already has a running loop (e.g. Jupyter, nested async), avoiding
-    ``asyncio.run()`` from within an active loop or conflicting with other runners.
+
+def _ensure_async_loop() -> asyncio.AbstractEventLoop:
+    """Create or return the shared background event loop."""
+    global _async_loop, _async_loop_thread
+    with _async_loop_lock:
+        if (
+            _async_loop is not None
+            and not _async_loop.is_closed()
+            and _async_loop_thread is not None
+            and _async_loop_thread.is_alive()
+        ):
+            return _async_loop
+
+        loop_ready = threading.Event()
+        loop_holder: dict[str, asyncio.AbstractEventLoop] = {}
+
+        def _loop_thread_main() -> None:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop_holder["loop"] = loop
+            loop_ready.set()
+            loop.run_forever()
+
+        thread = threading.Thread(target=_loop_thread_main, name="semipy-async-runner", daemon=True)
+        thread.start()
+        loop_ready.wait(timeout=5.0)
+        loop = loop_holder.get("loop")
+        if loop is None:
+            raise RuntimeError("Failed to initialize shared async loop")
+        _async_loop = loop
+        _async_loop_thread = thread
+        return loop
+
+
+def _run_async(coro: Any) -> Any:
+    """Run a coroutine on a persistent background event loop.
+
+    Using a long-lived loop avoids teardown races from creating/closing event loops
+    for every slot invocation, which can surface as ``RuntimeError: Event loop is closed``
+    during streamed HTTP client shutdown.
     """
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(asyncio.run, coro).result()
+    loop = _ensure_async_loop()
+    fut = asyncio.run_coroutine_threadsafe(coro, loop)
+    return fut.result()
 
 from semipy.agents.compiler import _compile_source
 from semipy.agents.config import (
@@ -550,6 +590,14 @@ class SemiAgent:
     def generate(self, spec: GenerationSpec) -> CacheEntry:
         """Synchronous wrapper: run generate_async in a new event loop."""
         total_attempts = self.max_retries + 1
+        # Inline placeholder slots (`... #> ...`) are intended to be a direct
+        # one-shot fill for the missing expression/condition. Retrying tends to
+        # overfit and churn on tiny contexts, so keep them single-pass.
+        slot = getattr(spec, "slot_spec", None)
+        if slot is not None:
+            hints = set(getattr(slot, "usage_hints", []) or [])
+            if "inline:assign" in hints:
+                total_attempts = 1
         decision = spec.decision if spec.decision is not None else Decision.GENERATE
         use_peek_sink = self.verbose and effective_stream_display_mode(verbose=self.verbose) == "peek"
 
