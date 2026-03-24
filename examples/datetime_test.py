@@ -17,8 +17,16 @@ configure(
 
 @semiformal
 def infer_datetime_formatter(date_str: str) -> str:
+    #< [Task] infer parse pattern before formatting
+    #< [Given] placeholder expects session-derived pattern guess
     input_pattern = ... #> infer the input date regex/strptime pattern from the observed string format in this session.
+    #< [Then] output stays fixed across accepted
     output_pattern = "%b %Y"
+    
+    #< [When] inferred pattern mismatches, parsing should
+    #< [But] warning communicates inference quality, not
+    #> [But] bad inferred pattern should raise Warning
+    #< [Verify] str conversion normalizes non-string date
     return datetime.strptime(str(date_str), input_pattern).strftime(output_pattern)
 
 

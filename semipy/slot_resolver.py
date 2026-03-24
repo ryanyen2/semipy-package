@@ -790,16 +790,10 @@ def execute_slot(
     write_dispatch_module(cache_dir, portal)
     save_portal(cache_dir, portal)
     if resolution.decision in (Decision.GENERATE, Decision.ADAPT):
-        import threading
-
         from semipy.agents.skeleton_writer import surface_skeleton as _surface_skeleton
 
-        threading.Thread(
-            target=_surface_skeleton,
-            args=(slot_spec, entry, portal.source_file),
-            daemon=True,
-            name="semipy-skeleton-writer",
-        ).start()
+        # Run synchronously so script termination cannot drop the surface write.
+        _surface_skeleton(slot_spec, entry, portal.source_file)
     _dispatch_globals_cache.pop(module_name, None)
 
     fn_name = function_name_for_commit(slot, commit)

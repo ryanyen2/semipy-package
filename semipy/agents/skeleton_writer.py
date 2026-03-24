@@ -118,7 +118,7 @@ Your output should:
 - Insert `#<` annotated reasoning traces within the function (never outside), matching code block indentation. The user provides `#>` specification lines, which must remain unchanged.
 - For each explanation, use a [Tag] (first token after `#<`), including [Task] (first), and choose from: [Given], [Then], [When], [But], [Verify], both alone and mixed as needed. Encourage creative mixing of formality and informality across tags and domains.
 - Always ensure that each `#<` is true reasoning (explain a non-obvious step, intent, constraint, condition, or implication), not just a summary or a direct echo.
-- Insert between 4 and 8 `#<` lines, tight but not verbose: Each after-tag phrase must use **no more than 7 words** (prefer 4–5), e.g. "parse then format", "skip if missing pattern", not sentences, not multi-clause lists.
+- Insert between 4 and 8 `#<` lines, tight but not verbose: Each after-tag phrase must use **no more than 10 words** (prefer 5-8 words), e.g. "parse then format", "skip if missing pattern", not sentences, not multi-clause lists.
 - Do NOT modify code, specifications (`#>` lines), or structure; do NOT emit filler or blank comment lines.
 - Place all `#<` lines in the code body, never before function definition or after the last line.
 - Every annotation is crafted for editability: the user should be able to review, modify, or replace these reasoning traces to direct iterative code changes.
@@ -289,10 +289,13 @@ def _extract_function_from_llm_output(
     if not has_skeleton:
         return None
     # Guardrail: surfaced skeleton must not rewrite executable code.
-    # We only accept outputs that preserve the original function text
-    # after normalizing `#<` lines back to placeholder `#` lines.
-    candidate_clean = strip_skeleton_lines(candidate)
-    if candidate_clean.strip() != original_fn_source.strip():
+    # Compare function bodies only (ignore decorators around the original source).
+    # Both sides are normalized by stripping `#<` annotations to placeholder lines.
+    original_simple = _function_simple_name(func_qualname)
+    original_fn = _extract_function_source_for_name(original_fn_source, original_simple)
+    if original_fn is None:
+        original_fn = _strip_leading_decorators_before_def(original_fn_source)
+    if _normalized_source_for_compare(candidate) != _normalized_source_for_compare(original_fn):
         return None
     before = _spec_marker_lines(original_fn_source)
     after = _spec_marker_lines(candidate)
@@ -316,6 +319,11 @@ def _drop_empty_hash_only_lines(source: str) -> str:
                 continue
         out.append(line)
     return "".join(out)
+
+
+def _normalized_source_for_compare(source: str) -> str:
+    """Normalize source by stripping skeleton markers and placeholder hash lines."""
+    return _drop_empty_hash_only_lines(strip_skeleton_lines(source)).strip()
 
 
 def _cap_skeleton_line_words(source: str, *, max_words: int = 5) -> str:
@@ -436,7 +444,12 @@ def _surface_skeleton_impl(slot_spec: SlotSpec, cache_entry: CacheEntry) -> None
     if not target.is_file() or target.suffix.lower() != ".py":
         return
 
-    fn_source_clean = strip_skeleton_lines(slot_spec.enclosing_function_source)
+    fn_source_clean_all = strip_skeleton_lines(slot_spec.enclosing_function_source)
+    simple_qual = slot_spec.enclosing_function_qualname
+    simple_name = _function_simple_name(simple_qual)
+    fn_source_clean = _extract_function_source_for_name(fn_source_clean_all, simple_name)
+    if fn_source_clean is None:
+        fn_source_clean = _strip_leading_decorators_before_def(fn_source_clean_all)
     generated = cache_entry.generated_source or ""
     reasoning = cache_entry.reasoning_summary or ""
 
@@ -445,7 +458,6 @@ def _surface_skeleton_impl(slot_spec: SlotSpec, cache_entry: CacheEntry) -> None
         fn_source_clean, generated, reasoning
     )
     raw = _call_skeleton_llm(system_prompt, user_prompt)
-    simple_qual = slot_spec.enclosing_function_qualname
     skeleton_fn = _extract_function_from_llm_output(raw, simple_qual, fn_source_clean)
     if skeleton_fn is None:
         return
@@ -465,7 +477,9 @@ def _surface_skeleton_impl(slot_spec: SlotSpec, cache_entry: CacheEntry) -> None
                 disk_clean, generated, reasoning
             )
             raw2 = _call_skeleton_llm(system_prompt2, user_prompt2)
+            print(raw2)
             sk2 = _extract_function_from_llm_output(raw2, simple_qual, disk_clean)
+            print(sk2)
             if sk2 is None:
                 return
             skeleton_fn = sk2
