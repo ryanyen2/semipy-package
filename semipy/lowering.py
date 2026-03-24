@@ -29,6 +29,26 @@ def _is_hash_arrow(line: str) -> bool:
     return stripped.startswith("#>") or stripped.startswith("# >")
 
 
+def strip_skeleton_lines(source: str) -> str:
+    """
+    Replace each `#<` reasoning annotation line with a blank `#` line (same length budget:
+    one line per former `#<` line) so absolute line numbers stay aligned with prior runs.
+    User `#>` spec lines are unchanged.
+    """
+    lines = source.splitlines(keepends=True)
+    result: list[str] = []
+    for line in lines:
+        stripped = line.lstrip()
+        if stripped.startswith("#<"):
+            indent = len(line) - len(stripped)
+            rest = line.rstrip("\r\n")
+            ending = line[len(rest) :]
+            result.append(line[:indent] + "#" + ending)
+        else:
+            result.append(line)
+    return "".join(result)
+
+
 def _strip_hash_arrow(line: str) -> str:
     stripped = line.lstrip()
     if stripped.startswith("#>"):
@@ -280,6 +300,7 @@ def _make_slot_spec(
     usage_hints: list[str],
     enclosing_function_source: str,
     enclosing_function_qualname: str,
+    enclosing_function_span: tuple[str, int, int] = ("", 0, 0),
 ) -> SlotSpec:
     spec_hash = _sha16(spec_text)
     spec_equivalence_key = compute_spec_equivalence_key(
@@ -306,6 +327,7 @@ def _make_slot_spec(
         usage_hints=usage_hints,
         enclosing_function_source=enclosing_function_source,
         enclosing_function_qualname=enclosing_function_qualname,
+        enclosing_function_span=enclosing_function_span,
     )
 
 
@@ -334,6 +356,10 @@ def scan_informal_specs(
     fn_def = _function_def_from_source(dedented)
     if fn_def is None:
         return []
+
+    fn_end_rel = getattr(fn_def, "end_lineno", None) or fn_def.lineno
+    func_end_abs = _relative_to_abs_lineno(first_lineno, fn_end_rel)
+    enclosing_span = (filename, first_lineno, func_end_abs)
 
     exclude_names: set[str] = set()
     if globals_ns:
@@ -405,6 +431,7 @@ def scan_informal_specs(
                 usage_hints=usage_hints,
                 enclosing_function_source=source,
                 enclosing_function_qualname=func_qualname,
+                enclosing_function_span=enclosing_span,
             )
             semi_slots.append((start_abs, slot_spec))
 
@@ -472,6 +499,7 @@ def scan_informal_specs(
             usage_hints=usage_hints,
             enclosing_function_source=source,
             enclosing_function_qualname=func_qualname,
+            enclosing_function_span=enclosing_span,
         )
         comment_slots.append((start_abs, slot_spec))
 
@@ -515,6 +543,7 @@ def scan_informal_specs(
                 usage_hints=[],
                 enclosing_function_source=source,
                 enclosing_function_qualname=func_qualname,
+                enclosing_function_span=enclosing_span,
             )
         ]
     return slots

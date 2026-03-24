@@ -338,7 +338,7 @@ def main() -> None:
     parser.add_argument("--log", type=Path, default=DEFAULT_LOG)
     args = parser.parse_args()
 
-    configure(verbose=True)
+    configure(verbose=False)
     if args.fresh:
         _clear_cache()
 

@@ -9,7 +9,7 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Callable, Optional, Union, get_type_hints
 
-from semipy.lowering import lower_to_scaffold, scan_informal_specs
+from semipy.lowering import lower_to_scaffold, scan_informal_specs, strip_skeleton_lines
 from semipy.slot_resolver import _make_slot_proxy
 from semipy.types import SemiformalContext, SlotCategory, SlotSpec, compute_spec_equivalence_key
 from semipy.agents.config import get_config
@@ -99,6 +99,8 @@ def _wrap_function(fn: Callable[..., Any], description: Optional[str] = None, fi
     # Slot proxies therefore read the effective cache_dir dynamically at call time.
     cache_dir: Optional[Path] = None
 
+    source = strip_skeleton_lines(source)
+
     slot_specs: list[SlotSpec] = scan_informal_specs(
         source,
         filename=resolved_filename,
@@ -142,9 +144,10 @@ def _wrap_function(fn: Callable[..., Any], description: Optional[str] = None, fi
             output_names=[],
         )
 
+        _end_line = first_lineno + len(source.splitlines()) - 1
         whole_slot = SlotSpec(
             slot_id=slot_id,
-            source_span=(resolved_filename, first_lineno, first_lineno + len(source.splitlines()) - 1),
+            source_span=(resolved_filename, first_lineno, _end_line),
             spec_text=spec_text,
             spec_hash=spec_hash,
             spec_equivalence_key=spec_equivalence_key,
@@ -157,6 +160,7 @@ def _wrap_function(fn: Callable[..., Any], description: Optional[str] = None, fi
             usage_hints=[],
             enclosing_function_source=source,
             enclosing_function_qualname=func_qualname,
+            enclosing_function_span=(resolved_filename, first_lineno, _end_line),
         )
 
         proxy_fn = _make_slot_proxy(whole_slot, resolved_filename, cache_dir)

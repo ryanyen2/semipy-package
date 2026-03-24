@@ -122,6 +122,7 @@ class SlotSpec:
     usage_hints: list[str]
     enclosing_function_source: str
     enclosing_function_qualname: str
+    enclosing_function_span: tuple[str, int, int] = field(default=("", 0, 0))
 
 
 @dataclass

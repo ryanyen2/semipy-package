@@ -364,6 +364,7 @@ def _slot_spec_snapshot(slot_spec: SlotSpec) -> dict[str, Any]:
         "formal_constraints": slot_spec.formal_constraints,
         "usage_hints": slot_spec.usage_hints,
         "enclosing_function_qualname": slot_spec.enclosing_function_qualname,
+        "enclosing_function_span": list(slot_spec.enclosing_function_span),
     }
 
 
@@ -787,6 +788,17 @@ def execute_slot(
 
     write_dispatch_module(cache_dir, portal)
     save_portal(cache_dir, portal)
+    if resolution.decision in (Decision.GENERATE, Decision.ADAPT):
+        import threading
+
+        from semipy.agents.skeleton_writer import surface_skeleton as _surface_skeleton
+
+        threading.Thread(
+            target=_surface_skeleton,
+            args=(slot_spec, entry, portal.source_file),
+            daemon=True,
+            name="semipy-skeleton-writer",
+        ).start()
     _dispatch_globals_cache.pop(module_name, None)
 
     fn_name = function_name_for_commit(slot, commit)
