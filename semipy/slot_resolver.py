@@ -608,12 +608,13 @@ def _call_generated_fn(
     runtime_values: dict[str, Any],
     prompt_preview: str,
     generated_path: str,
+    cache_dir: Path,
 ) -> Any:
     args = tuple(runtime_values.get(n) for n in slot_spec.free_variables)
     try:
         return invoke_slot(fn, list(slot_spec.free_variables), args)
     except Exception as e:
-        raise SemiCallError(
+        err = SemiCallError(
             "Generated slot function raised at runtime",
             call_site=_call_site_from_slot(slot_spec),
             generated_path=generated_path,
@@ -621,7 +622,14 @@ def _call_generated_fn(
             prompt_preview=prompt_preview,
             usage_hint="",
             cause=e,
-        ) from e
+        )
+        try:
+            from semipy.diagnostics_export import export_from_semi_call_error
+
+            export_from_semi_call_error(cache_dir, slot_spec, err)
+        except Exception:
+            pass
+        raise err from e
 
 
 def execute_slot(
@@ -647,6 +655,12 @@ def execute_slot(
     module_name = session_module_name_from_filename(portal_anchor)
 
     portal = load_portal(cache_dir, session_id, portal_anchor, module_name)
+    try:
+        from semipy.diagnostics_export import clear_diagnostics
+
+        clear_diagnostics(cache_dir, slot_spec.slot_id)
+    except Exception:
+        pass
     slot = _ensure_slot(portal, slot_spec)
     _record_slot_input_observations(slot, runtime_values)
     if _runtime_profile_is_scalar_only(runtime_values):
@@ -741,6 +755,7 @@ def execute_slot(
                     runtime_values=runtime_values,
                     prompt_preview=slot_spec.spec_text,
                     generated_path=str(dispatch_path),
+                    cache_dir=cache_dir,
                 )
             except SemiCallError as e:
                 cause = e.__cause__
@@ -953,6 +968,7 @@ def execute_slot(
                             runtime_values=runtime_values,
                             prompt_preview=slot_spec.spec_text,
                             generated_path=str(dispatch_path),
+                            cache_dir=cache_dir,
                         )
                     except SemiCallError as e:
                         cause = e.__cause__
@@ -1093,6 +1109,7 @@ def execute_slot(
         runtime_values=runtime_values,
         prompt_preview=slot_spec.spec_text,
         generated_path=str(dispatch_path),
+        cache_dir=cache_dir,
     )
 
     if dep_graph is not None:

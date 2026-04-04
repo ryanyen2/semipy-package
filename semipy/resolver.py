@@ -152,6 +152,22 @@ def resolve(
             commit_id=None,
         )
 
+    from semipy.history.version_lock import locked_commit_id
+
+    lc = locked_commit_id(slot)
+    if lc is not None:
+        c = slot.commits.get(lc)
+        if c is not None:
+            return ResolutionResult(
+                decision=Decision.REUSE,
+                slot=slot,
+                branch_name=None,
+                parent_commit_ids=[],
+                parent_sources=[],
+                lineage_summary=None,
+                commit_id=lc,
+            )
+
     has_commits = bool(slot.commits)
     head = _head_commit(slot) if has_commits else None
     equiv_ok = _equivalence_matches(slot, slot_spec)

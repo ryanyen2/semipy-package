@@ -1,0 +1,22 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "semipy-python-injection",
+  "scopeName": "source.python.injection.semipy",
+  "injectionSelector": "L:comment.line.number-sign.python",
+  "patterns": [
+    {
+      "match": "^\\s*((#\\s*>))(.*)$",
+      "captures": {
+        "2": { "name": "punctuation.definition.spec.semipy" },
+        "3": { "name": "string.unquoted.spec-text.semipy" }
+      }
+    },
+    {
+      "match": "^\\s*((#\\s*<))(.*)$",
+      "captures": {
+        "2": { "name": "punctuation.definition.reasoning.semipy" },
+        "3": { "name": "string.unquoted.reasoning-text.semipy" }
+      }
+    }
+  ]
+}

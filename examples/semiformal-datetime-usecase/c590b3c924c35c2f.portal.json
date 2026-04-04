@@ -1,0 +1,109 @@
+{
+  "session_id": "c590b3c924c35c2f",
+  "source_file": "/Users/r4yen/Desktop/Research/semi-formal/repo/semipy-package/examples/examples",
+  "module_name": "examples",
+  "slots": {
+    "bc3b9c572c313ac9": {
+      "slot_id": "bc3b9c572c313ac9",
+      "call_site_info": {
+        "filename": "/Users/r4yen/Desktop/Research/semi-formal/repo/semipy-package/examples/datetime_test.py",
+        "lineno": 17,
+        "func_qualname": "infer_datetime_formatter"
+      },
+      "function_name_base": "infer_datetime_formatter_slot_bc3b9c57",
+      "commits": {
+        "c93ada7d487b0539f22c": {
+          "commit_id": "c93ada7d487b0539f22c",
+          "parent_ids": [],
+          "generated_source": "def __slot_0__(date_str):\n    output_pattern = \"%b %Y\"\n    s = \"\" if date_str is None else str(date_str).strip()\n    if not s:\n        return {\"input_pattern\": \"%m/%d/%Y\"}\n    alpha = any(c.isalpha() for c in s)\n    if alpha:\n        parts = s.replace(\",\", \" \").split()\n        if len(parts) == 2:\n            month = parts[0]\n            if month[:3].isalpha() and len(month) <= 3:\n                return {\"input_pattern\": \"%b %Y\"}\n            return {\"input_pattern\": \"%B %Y\"}\n        if len(parts) == 3:\n            month = parts[0]\n            if month[:3].isalpha() and len(month) <= 3:\n                return {\"input_pattern\": \"%b %d %Y\"}\n            return {\"input_pattern\": \"%B %d %Y\"}\n    if \"/\" in s:\n        parts = s.split(\"/\")\n        if len(parts) == 3 and all(part.isdigit() for part in parts):\n            if len(parts[2]) == 4:\n                return {\"input_pattern\": \"%m/%d/%Y\"}\n            if len(parts[0]) == 4:\n                return {\"input_pattern\": \"%Y/%m/%d\"}\n    if \"-\" in s:\n        date_part, sep, time_part = s.partition(\" \")\n        date_parts = date_part.split(\"-\")\n        if len(date_parts) == 3 and all(part.isdigit() for part in date_parts):\n            if len(date_parts[0]) == 4:\n                base = \"%Y-%m-%d\"\n            else:\n                base = \"%m-%d-%Y\"\n            if sep:\n                time_parts = time_part.split(\":\")\n                if len(time_parts) == 2 and all(part.isdigit() for part in time_parts):\n                    return {\"input_pattern\": base + \" %H:%M\"}\n                if len(time_parts) == 3 and all(part.isdigit() for part in time_parts):\n                    return {\"input_pattern\": base + \" %H:%M:%S\"}\n            return {\"input_pattern\": base}\n    parts = s.split()\n    if len(parts) == 2 and all(part.isdigit() for part in parts):\n        return {\"input_pattern\": \"%m %d\"}\n    return {\"input_pattern\": \"%m/%d/%Y\"}",
+          "source_hash": "fafd8ced90465edb1b24",
+          "template_fingerprint": "b7e2812270d32b0e",
+          "constants_snapshot": [],
+          "operation_signature": "aa6e6fd11fa1636793c2",
+          "prompt_snapshot": "infer the input date regex/strptime pattern from the observed string format in this session.",
+          "timestamp": 1775321575.0671842,
+          "message": "initial implementation",
+          "decision": "GENERATE",
+          "usage_id": "bc3b9c572c313ac9",
+          "runtime_input_fingerprint": "c3c59fd1532da153",
+          "binding_id": ""
+        }
+      },
+      "branches": {
+        "main": {
+          "name": "main",
+          "head": "c93ada7d487b0539f22c"
+        }
+      },
+      "refs": {
+        "bc3b9c572c313ac9": "c93ada7d487b0539f22c"
+      },
+      "default_branch": "main",
+      "upstream_slot_refs": [],
+      "spec_hash": "b7e2812270d32b0e",
+      "slot_spec": {
+        "source_span": [
+          "/Users/r4yen/Desktop/Research/semi-formal/repo/semipy-package/examples/datetime_test.py",
+          17,
+          17
+        ],
+        "spec_text": "infer the input date regex/strptime pattern from the observed string format in this session.",
+        "spec_hash": "b7e2812270d32b0e",
+        "spec_equivalence_key": "57337bd0a58613a5",
+        "free_variables": [
+          "date_str"
+        ],
+        "control_context": "top_level",
+        "expected_category": "statement",
+        "expected_type": "<class 'str'>",
+        "output_names": [
+          "input_pattern"
+        ],
+        "formal_constraints": [
+          "output_pattern = \"%b %Y\""
+        ],
+        "usage_hints": [
+          "inline:assign"
+        ],
+        "enclosing_function_qualname": "infer_datetime_formatter",
+        "enclosing_function_span": [
+          "/Users/r4yen/Desktop/Research/semi-formal/repo/semipy-package/examples/datetime_test.py",
+          15,
+          19
+        ]
+      },
+      "enclosing_function_site_id": null,
+      "advisor_state": {
+        "semantic_last_commit_id": "c93ada7d487b0539f22c",
+        "semantic_obs_fingerprint": "9261354c185d1686",
+        "semantic_decision": "reuse"
+      },
+      "input_observation_samples": {
+        "date_str": [
+          "03/14/2025",
+          "03/20/2025",
+          "04/05/2025",
+          "04/18/2025",
+          "01 12",
+          "05-01-2025",
+          "05-12-2025 11:30",
+          "08-18-2025 09:30:00",
+          "06-18-2025 9:11",
+          "June 21 2025",
+          "July 09 2026",
+          "Aug 2026",
+          "01/01/2026",
+          "04/21/2025"
+        ]
+      }
+    }
+  },
+  "spec_map": {
+    "bc3b9c572c313ac9": "infer_datetime_formatter_slot_bc3b9c57_c93ada7d:7-51"
+  },
+  "enclosing_function_slots": {
+    "infer_datetime_formatter": [
+      "bc3b9c572c313ac9"
+    ]
+  }
+}

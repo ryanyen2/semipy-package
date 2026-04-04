@@ -207,12 +207,17 @@ def function_name_for_commit(slot: Slot, commit: Commit) -> str:
 
 
 def _get_active_commit(slot: Slot) -> Optional[Commit]:
-    """Return the active commit for the slot: most recent branch head, falling back to most recent ref'd commit."""
+    """Return the active commit for the slot: locked ref wins, else branch head, else refs."""
+    from semipy.history.version_lock import LOCK_REF_KEY, locked_commit_id
+
+    lc = locked_commit_id(slot)
+    if lc is not None:
+        return slot.commits.get(lc)
     c = most_recent_branch_head(slot)
     if c is not None:
         return c
     if slot.refs:
-        commit_ids = set(slot.refs.values())
+        commit_ids = {cid for k, cid in slot.refs.items() if k != LOCK_REF_KEY}
         candidates = [slot.commits[cid] for cid in commit_ids if slot.commits.get(cid)]
         if candidates:
             return max(candidates, key=lambda c: c.timestamp)

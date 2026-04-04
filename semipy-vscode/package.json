@@ -1,0 +1,123 @@
+{
+  "name": "semipy-vscode",
+  "displayName": "Semipy",
+  "description": "Editor support for semipy semiformal specs (#> / #<), portal history, and dispatch navigation.",
+  "version": "0.1.0",
+  "publisher": "semipy",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Other"
+  ],
+  "activationEvents": [
+    "onLanguage:python",
+    "workspaceContains:**/.semiformal/*.portal.json"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "grammars": [
+      {
+        "scopeName": "source.python.injection.semipy",
+        "path": "./syntaxes/semipy-injection.tmLanguage.json",
+        "injectTo": [
+          "source.python"
+        ]
+      }
+    ],
+    "commands": [
+      {
+        "command": "semipy.openSplitView",
+        "title": "Semipy: Open dispatch split view"
+      },
+      {
+        "command": "semipy.refreshHistory",
+        "title": "Semipy: Refresh slot history"
+      },
+      {
+        "command": "semipy.viewGeneratedCode",
+        "title": "Semipy: View generated code for commit"
+      },
+      {
+        "command": "semipy.regenerateSlotDiagnostic",
+        "title": "Semipy: Regenerate this spec (CLI)"
+      }
+    ],
+    "views": {
+      "explorer": [
+        {
+          "id": "semipy.slotHistory",
+          "name": "Semipy Slots"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Semipy",
+      "properties": {
+        "semipy.debounceMs": {
+          "type": "number",
+          "default": 200,
+          "description": "Debounce for reloading .semiformal artifacts and refreshing decorations."
+        },
+        "semipy.linkedHighlightFadeMs": {
+          "type": "number",
+          "default": 1500,
+          "description": "Duration before linked split-view highlights fade."
+        },
+        "semipy.signFlipOnSkeletonEdit": {
+          "type": "boolean",
+          "default": true,
+          "description": "When you edit text on a #< line, rewrite the prefix to #> (user-owned spec)."
+        }
+      }
+    },
+    "configurationDefaults": {
+      "editor.tokenColorCustomizations": {
+        "textMateRules": [
+          {
+            "scope": "string.unquoted.spec-text.semipy",
+            "settings": {
+              "foreground": "#4EC9B0"
+            }
+          },
+          {
+            "scope": "punctuation.definition.spec.semipy",
+            "settings": {
+              "foreground": "#4EC9B0",
+              "fontStyle": "bold"
+            }
+          },
+          {
+            "scope": "string.unquoted.reasoning-text.semipy",
+            "settings": {
+              "foreground": "#6A9955"
+            }
+          },
+          {
+            "scope": "punctuation.definition.reasoning.semipy",
+            "settings": {
+              "foreground": "#6A9955"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --sourcemap",
+    "watch": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --sourcemap --watch",
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "diff": "^5.2.0"
+  },
+  "devDependencies": {
+    "@types/diff": "^5.2.0",
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.20.0",
+    "typescript": "^5.3.0"
+  }
+}

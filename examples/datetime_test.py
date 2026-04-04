@@ -1,12 +1,9 @@
 from semipy import semiformal, semi, configure
 import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
 from datetime import datetime
-import seaborn as sns
 from pathlib import Path
 
-CACHE_DIR = '/Users/r4yen/Desktop/Research/semi-formal/repo/semipy-package/.semiformal-datetime-usecase'
+CACHE_DIR = './semiformal-datetime-usecase'
 _SESSION_SOURCE = str((Path(CACHE_DIR).resolve().parent / "examples").resolve())
 
 configure(
@@ -17,12 +14,12 @@ configure(
 
 @semiformal
 def infer_datetime_formatter(date_str: str) -> str:
-    #< [Task] infer parse format before display
+    #< [Task] infer parse pattern before normalization
     input_pattern = ... #> infer the input date regex/strptime pattern from the observed string format in this session.
-    #< [Given] session examples define accepted shapes
+    #< [Given] output collapses day-level detail
     output_pattern = "%b %Y"
-    #< [But] ambiguous numeric order can misparse
-    #< [Verify] parser and formatter use matching pattern
+    #< [But] parser must match session variant
+    #< [Verify] malformed inputs fail at parse
     return datetime.strptime(str(date_str), input_pattern).strftime(output_pattern)
 
 
@@ -48,7 +45,6 @@ data = pd.DataFrame(
 )
 
 data["formatted_signup_date"] = data["signup_date"].apply(infer_datetime_formatter)
-# data["formatted_signup_date"] = semi(f"infer datetime formatter from {data['signup_date']}")
 print(data["formatted_signup_date"].value_counts())
 
 

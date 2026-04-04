@@ -38,3 +38,7 @@ rich/
 .semiformal*/*
 tests/pdf/*
 eng.traineddata
+
+
+
+node_modules/
