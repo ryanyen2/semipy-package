@@ -165,20 +165,14 @@ class ApacheLogPipeline:
 
     @semiformal
     def classify_body(self, body: str) -> str:
-        #< [Task] normalize first, classify by signatures
+        #< [Task] normalize body before pattern matching
         text = "" if body is None else str(body).strip()
+        #< [Given] casing noise should not affect family
         lower = text.lower()
-        #< [Given] casing noise should not affect matches
+        #< [When] body missing, prefer explicit fallback
         
         #> Classify this Apache error log body into a short snake_case event family name.
-        if not lower:
-            #> [When] ....
-            return "unknown"
-        elif ...:
-            #< [But] prefer specific patterns before generic ones
-            return ... #> other conditions for other families
-        
-        #< [Verify] fallback family exists on unmatched bodies
+        #< [Verify] families stay stable across similar phrasings
         return family
 
 

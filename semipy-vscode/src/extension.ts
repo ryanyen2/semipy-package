@@ -35,6 +35,12 @@ import {
   SemipyCodeLensProvider,
   SemipyInlayHintsProvider,
 } from "./features/slotAnnotations/slotEditorAnnotations";
+import { getSemipyOutputChannel } from "./logging/semipyOutputChannel";
+import {
+  createSpecCommentSyntaxTypes,
+  disposeSpecCommentSyntaxTypes,
+  refreshSpecCommentSyntaxDecorations,
+} from "./features/specCommentSyntax/specCommentSyntaxDecorations";
 
 type PortalState = {
   portal: PortalJson | undefined;
@@ -101,6 +107,7 @@ export function activate(context: ExtensionContext): void {
 
   const opacityTypes = createOpacityDecorationTypes();
   const phraseTypes = createPhraseDecorationTypes();
+  const specSyntaxTypes = createSpecCommentSyntaxTypes();
   const debounceMs = () => cfg().get<number>("debounceMs") ?? 200;
 
   const signFlip = new SignFlipCoordinator(
@@ -139,6 +146,14 @@ export function activate(context: ExtensionContext): void {
     refreshPortalForUri(editor.document.uri.fsPath, portalState);
     const cacheDir = portalState.portalCacheDir;
     refreshOpacityDecorations(editor, opacityTypes.reasoningDim);
+    if (cfg().get<boolean>("enableSpecLineSyntax") ?? true) {
+      refreshSpecCommentSyntaxDecorations(editor, specSyntaxTypes);
+    } else {
+      editor.setDecorations(specSyntaxTypes.specMarker, []);
+      editor.setDecorations(specSyntaxTypes.specBody, []);
+      editor.setDecorations(specSyntaxTypes.reasoningMarker, []);
+      editor.setDecorations(specSyntaxTypes.reasoningBody, []);
+    }
     refreshPhraseDecorations(
       editor,
       portalState.portal,
@@ -159,8 +174,10 @@ export function activate(context: ExtensionContext): void {
   const opacitySub = subscribeOpacityWrapper(opacityTypes, debounceMs, refreshAllDecorations);
 
   context.subscriptions.push(
+    getSemipyOutputChannel(),
     treeView,
     status,
+    { dispose: () => disposeSpecCommentSyntaxTypes(specSyntaxTypes) },
     opacitySub,
     signFlip.attach(),
     { dispose: () => linked.dispose() },
@@ -171,6 +188,7 @@ export function activate(context: ExtensionContext): void {
       if (e.affectsConfiguration("semipy")) {
         codeLensProvider.refresh();
         inlayProvider.refresh();
+        refreshAllDecorations(window.activeTextEditor);
       }
     }),
     window.onDidChangeTextEditorSelection((e) => {
@@ -193,6 +211,9 @@ export function activate(context: ExtensionContext): void {
     ),
     registerCommitTextProvider(),
     commands.registerCommand("semipy.noop", () => {}),
+    commands.registerCommand("semipy.showOutput", () => {
+      getSemipyOutputChannel().show(true);
+    }),
     commands.registerCommand("semipy.openSplitView", async () => {
       const ed = window.activeTextEditor;
       if (!ed) {

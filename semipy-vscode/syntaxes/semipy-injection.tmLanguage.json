@@ -17,6 +17,20 @@
         "2": { "name": "punctuation.definition.reasoning.semipy" },
         "3": { "name": "string.unquoted.reasoning-text.semipy" }
       }
+    },
+    {
+      "match": "((#\\s*>))(.*)$",
+      "captures": {
+        "2": { "name": "punctuation.definition.spec.semipy" },
+        "3": { "name": "string.unquoted.spec-text.semipy" }
+      }
+    },
+    {
+      "match": "((#\\s*<))(.*)$",
+      "captures": {
+        "2": { "name": "punctuation.definition.reasoning.semipy" },
+        "3": { "name": "string.unquoted.reasoning-text.semipy" }
+      }
     }
   ]
 }

@@ -32,6 +32,7 @@ import asyncio
 import re
 import shutil
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 # from dotenv import load_dotenv
@@ -47,7 +48,7 @@ from semipy.library.binding import (
 from semipy.library.sketch import build_code_sketch_from_commit, merge_sketch_into_library
 from semipy.library.sketch_store import load_sketch_library, save_sketch_library
 from semipy.session_anchor import resolve_portal_anchor
-from semipy.store import load_portal
+from semipy.store import load_portal, save_portal
 from semipy.types import session_id_from_filename, session_module_name_from_filename
 
 
@@ -152,6 +153,17 @@ def _sync_sketch_from_function(qualname: str) -> bool:
         )
         merge_sketch_into_library(lib, sketch, binding)
         save_sketch_library(cache_dir, lib)
+        portal2 = load_portal(cache_dir, session_id, anchor, module_name)
+        target_slot = None
+        for sl in portal2.slots.values():
+            snap = sl.slot_spec if isinstance(sl.slot_spec, dict) else {}
+            if snap.get("enclosing_function_qualname") == qualname:
+                target_slot = sl
+                break
+        if target_slot is not None and head.commit_id in target_slot.commits:
+            oc = target_slot.commits[head.commit_id]
+            target_slot.commits[head.commit_id] = replace(oc, binding_id=binding.binding_id)
+            save_portal(cache_dir, portal2)
 
     try:
         asyncio.run(_run())
@@ -164,12 +176,12 @@ def _sync_sketch_from_function(qualname: str) -> bool:
 
 @semiformal
 def filter_alpha(df):
-    #< [Task] prefer status-based subset only
+    #< [Task] preserve only active-status records
     #> filter rows where "status" column equals "active"
-    #< [Given] status access may vary by container
-    #< [But] missing field should not silently broaden
+    #< [Given] shape should mirror input container
     out = ...
-    #< [Verify] result preserves matching row shape
+    #< [But] missing status can imply empty result
+    #< [Verify] avoid crashing on unsupported inputs
     return out
 
 
@@ -182,12 +194,12 @@ def filter_beta(df):
 
 @semiformal
 def filter_gamma(df):
-    #< [Task] prefer score-filter, tolerate bad inputs
+    #< [Task] prefer robust score-threshold filtering
     #> filter rows where "score" column is greater than 10
-    #< [Given] column access may fail by shape
+    #< [Given] input shape may vary unexpectedly
+    #< [But] missing score should fail safely
     out = ...
-    #< [But] keep nullish cases from crashing
-    #< [Verify] threshold stays strictly greater
+    #< [Verify] preserve only rows above cutoff
     return out
 
 

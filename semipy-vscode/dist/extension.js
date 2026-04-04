@@ -35,7 +35,7 @@ __export(extension_exports, {
 });
 module.exports = __toCommonJS(extension_exports);
 var path8 = __toESM(require("path"));
-var import_vscode14 = require("vscode");
+var import_vscode16 = require("vscode");
 
 // src/data/portalLoader.ts
 var fs = __toESM(require("fs"));
@@ -951,6 +951,29 @@ function bindingById(lib, bindingId) {
   }
   return lib.bindings[bindingId];
 }
+function resolveBindingIdForCommit(lib, commitId, explicitBindingId) {
+  const e = (explicitBindingId || "").trim();
+  if (e) {
+    return e;
+  }
+  if (!lib?.sketches || !commitId) {
+    return void 0;
+  }
+  for (const sk of Object.values(lib.sketches)) {
+    if (!sk || typeof sk !== "object") {
+      continue;
+    }
+    const ids = sk.source_commit_ids || [];
+    if (!ids.includes(commitId)) {
+      continue;
+    }
+    const bid = (sk.binding_id || "").trim();
+    if (bid) {
+      return bid;
+    }
+  }
+  return void 0;
+}
 
 // src/features/splitEditor/portalCommit.ts
 var LOCK_REF = "__locked__";
@@ -1031,6 +1054,20 @@ function findSlotForSourceLine(portal, sourceFsPath, line1, fullText) {
   }
   return void 0;
 }
+function offsetOfLine1(fullText, line1) {
+  if (line1 <= 1) {
+    return 0;
+  }
+  let pos = 0;
+  for (let k = 1; k < line1; k++) {
+    const nl = fullText.indexOf("\n", pos);
+    if (nl < 0) {
+      return pos;
+    }
+    pos = nl + 1;
+  }
+  return pos;
+}
 function resolveSourceBlockRange(fullText, slot) {
   const sp = slot.slot_spec;
   if (!sp?.source_span || sp.source_span.length < 3) {
@@ -1044,7 +1081,11 @@ function resolveSourceBlockRange(fullText, slot) {
     return { startLine1: start, endLine1: end };
   }
   if (specText) {
-    const idx = fullText.indexOf(specText);
+    const staleCharHint = offsetOfLine1(fullText, start);
+    let idx = fullText.indexOf(specText, Math.max(0, staleCharHint - 400));
+    if (idx < 0) {
+      idx = fullText.indexOf(specText);
+    }
     if (idx >= 0) {
       const before = fullText.slice(0, idx);
       const startLine1 = before.split(/\r?\n/).length;
@@ -1097,7 +1138,8 @@ function createPhraseHoverProvider(getPortal, getPortalCacheDir, getWorkspaceRoo
       const lowerSuffix = suffix.toLowerCase();
       for (const slot of Object.values(portal.slots)) {
         const head = activeCommitFromPortalSlot(slot);
-        const bid = head?.binding_id || "";
+        const cid = head?.commit_id || "";
+        const bid = resolveBindingIdForCommit(lib, cid, head?.binding_id) || "";
         if (!bid) {
           continue;
         }
@@ -1154,7 +1196,22 @@ function createPhraseHoverProvider(getPortal, getPortalCacheDir, getWorkspaceRoo
 }
 
 // src/features/phraseHighlight/phraseDecorations.ts
+var import_vscode6 = require("vscode");
+
+// src/logging/semipyOutputChannel.ts
 var import_vscode5 = require("vscode");
+var channel;
+function getSemipyOutputChannel() {
+  if (!channel) {
+    channel = import_vscode5.window.createOutputChannel("Semipy");
+  }
+  return channel;
+}
+function appendSemipyLog(line) {
+  getSemipyOutputChannel().appendLine(line);
+}
+
+// src/features/phraseHighlight/phraseDecorations.ts
 var ROLE_ORDER = ["operation", "param", "operator", "connective"];
 var ROLE_STYLES = {
   operation: {
@@ -1178,8 +1235,8 @@ function createPhraseDecorationTypes() {
   const out = {};
   for (const role of ROLE_ORDER) {
     const st = ROLE_STYLES[role] ?? ROLE_STYLES.param;
-    out[role] = import_vscode5.window.createTextEditorDecorationType({
-      rangeBehavior: import_vscode5.DecorationRangeBehavior.ClosedClosed,
+    out[role] = import_vscode6.window.createTextEditorDecorationType({
+      rangeBehavior: import_vscode6.DecorationRangeBehavior.ClosedClosed,
       light: { ...st.light, fontWeight: role === "operation" ? "600" : void 0 },
       dark: { ...st.dark, fontWeight: role === "operation" ? "600" : void 0 }
     });
@@ -1233,25 +1290,45 @@ function refreshPhraseDecorations(editor, portal, portalCacheDir, types, workspa
   const doc = editor.document;
   const full = doc.getText();
   const lines = full.split(/\r?\n/);
+  const trace = import_vscode6.workspace.getConfiguration("semipy").get("tracePhraseDecorations") ?? false;
+  if (trace) {
+    appendSemipyLog(`[phrase] refresh ${doc.uri.fsPath}`);
+    appendSemipyLog(
+      `  cacheDir=${portalCacheDir} lib=${lib ? "ok" : "missing"} bindingKeys=${lib?.bindings ? Object.keys(lib.bindings).length : 0}`
+    );
+  }
   const rangesByRole = {};
   for (const r of ROLE_ORDER) {
     rangesByRole[r] = [];
   }
   for (const slot of Object.values(portal.slots)) {
     const head = activeCommitFromPortalSlot(slot);
-    const bid = head?.binding_id || "";
+    const cid = head?.commit_id || "";
+    const bid = resolveBindingIdForCommit(lib, cid, head?.binding_id) || "";
+    if (trace) {
+      appendSemipyLog(
+        `  slot ${slot.slot_id.slice(0, 8)} commit ${cid.slice(0, 12) || "?"} resolved binding_id=${bid || "none"}`
+      );
+    }
     if (!bid) {
       continue;
     }
     const binding = bindingById(lib, bid);
     if (!binding?.phrases?.length) {
+      if (trace) {
+        appendSemipyLog(`    no phrases for binding ${bid.slice(0, 8)}`);
+      }
       continue;
     }
     const block = resolveSourceBlockRange(full, slot);
     if (!block) {
+      if (trace) {
+        appendSemipyLog(`    no source block range`);
+      }
       continue;
     }
     const { startLine1: start1, endLine1: end1 } = block;
+    let spanTotal = 0;
     for (let lineIdx = start1 - 1; lineIdx <= end1 - 1; lineIdx++) {
       if (lineIdx < 0 || lineIdx >= lines.length) {
         continue;
@@ -1263,17 +1340,21 @@ function refreshPhraseDecorations(editor, portal, portalCacheDir, types, workspa
       }
       const suffix = specRegion.suffix;
       const spans = phraseSpansInSuffix(suffix, binding.phrases);
+      spanTotal += spans.length;
       const lineObj = doc.lineAt(lineIdx);
       for (const sp of spans) {
         const role = ROLE_ORDER.includes(sp.role) ? sp.role : "param";
         const startCol = specRegion.baseCol + sp.start;
         const endCol = specRegion.baseCol + sp.end;
-        const r = new import_vscode5.Range(
-          new import_vscode5.Position(lineIdx, startCol),
-          new import_vscode5.Position(lineIdx, Math.min(endCol, lineObj.text.length))
+        const r = new import_vscode6.Range(
+          new import_vscode6.Position(lineIdx, startCol),
+          new import_vscode6.Position(lineIdx, Math.min(endCol, lineObj.text.length))
         );
         rangesByRole[role].push(r);
       }
+    }
+    if (trace) {
+      appendSemipyLog(`    block lines ${start1}-${end1} phraseSpans=${spanTotal}`);
     }
   }
   for (const role of ROLE_ORDER) {
@@ -1286,12 +1367,12 @@ function refreshPhraseDecorations(editor, portal, portalCacheDir, types, workspa
 
 // src/features/splitEditor/linkedHighlight.ts
 var path4 = __toESM(require("path"));
-var import_vscode6 = require("vscode");
+var import_vscode7 = require("vscode");
 var LinkedHighlightCoordinator = class {
   constructor(fadeMs) {
     this.fadeMs = fadeMs;
-    this.highlight = import_vscode6.window.createTextEditorDecorationType({
-      backgroundColor: new import_vscode6.ThemeColor("editor.wordHighlightBackground"),
+    this.highlight = import_vscode7.window.createTextEditorDecorationType({
+      backgroundColor: new import_vscode7.ThemeColor("editor.wordHighlightBackground"),
       isWholeLine: false
     });
   }
@@ -1308,7 +1389,7 @@ var LinkedHighlightCoordinator = class {
       clearTimeout(this.fadeTimer);
       this.fadeTimer = void 0;
     }
-    for (const ed of import_vscode6.window.visibleTextEditors) {
+    for (const ed of import_vscode7.window.visibleTextEditors) {
       ed.setDecorations(this.highlight, []);
     }
     if (!editor || !portal || !portalCacheDir) {
@@ -1332,8 +1413,8 @@ var LinkedHighlightCoordinator = class {
     if (!dr) {
       return;
     }
-    const targetUri = import_vscode6.Uri.file(dr.uriPath);
-    const dispEd = import_vscode6.window.visibleTextEditors.find(
+    const targetUri = import_vscode7.Uri.file(dr.uriPath);
+    const dispEd = import_vscode7.window.visibleTextEditors.find(
       (e) => e.document.uri.toString() === targetUri.toString()
     );
     if (!dispEd) {
@@ -1366,8 +1447,8 @@ var LinkedHighlightCoordinator = class {
           return;
         }
         const [srcFile] = sp;
-        const srcUri = import_vscode6.Uri.file(srcFile);
-        const srcEd = import_vscode6.window.visibleTextEditors.find(
+        const srcUri = import_vscode7.Uri.file(srcFile);
+        const srcEd = import_vscode7.window.visibleTextEditors.find(
           (e) => e.document.uri.toString() === srcUri.toString()
         );
         if (!srcEd) {
@@ -1393,7 +1474,7 @@ var LinkedHighlightCoordinator = class {
     const ms = this.fadeMs();
     this.fadeTimer = setTimeout(() => {
       this.fadeTimer = void 0;
-      for (const ed of import_vscode6.window.visibleTextEditors) {
+      for (const ed of import_vscode7.window.visibleTextEditors) {
         ed.setDecorations(this.highlight, []);
       }
     }, ms);
@@ -1402,23 +1483,23 @@ var LinkedHighlightCoordinator = class {
 
 // src/features/splitEditor/splitEditorCommand.ts
 var path5 = __toESM(require("path"));
-var import_vscode7 = require("vscode");
+var import_vscode8 = require("vscode");
 async function openDispatchSplitView(portalCacheDir, moduleName) {
   const abs = path5.join(portalCacheDir, "runtime", `${moduleName}.semi.py`);
-  const uri = import_vscode7.Uri.file(abs);
+  const uri = import_vscode8.Uri.file(abs);
   try {
-    const doc = await import_vscode7.workspace.openTextDocument(uri);
-    await import_vscode7.window.showTextDocument(doc, {
-      viewColumn: import_vscode7.ViewColumn.Beside,
+    const doc = await import_vscode8.workspace.openTextDocument(uri);
+    await import_vscode8.window.showTextDocument(doc, {
+      viewColumn: import_vscode8.ViewColumn.Beside,
       preserveFocus: false
     });
   } catch {
-    void import_vscode7.window.showErrorMessage(`Semipy: could not open dispatch file: ${abs}`);
+    void import_vscode8.window.showErrorMessage(`Semipy: could not open dispatch file: ${abs}`);
   }
 }
 
 // src/features/versionTree/slotHistoryProvider.ts
-var import_vscode9 = require("vscode");
+var import_vscode10 = require("vscode");
 
 // src/features/versionTree/walkHistory.ts
 function walkHistoryCommits(slot, commitId) {
@@ -1444,22 +1525,22 @@ function walkHistoryCommits(slot, commitId) {
 }
 
 // src/features/versionTree/slotTreeItems.ts
-var import_vscode8 = require("vscode");
+var import_vscode9 = require("vscode");
 function decisionIcon(decision) {
   const d = (decision || "").toUpperCase();
   if (d === "GENERATE") {
-    return new import_vscode8.ThemeIcon("git-commit");
+    return new import_vscode9.ThemeIcon("git-commit");
   }
   if (d === "ADAPT") {
-    return new import_vscode8.ThemeIcon("git-merge");
+    return new import_vscode9.ThemeIcon("git-merge");
   }
   if (d === "REUSE" || d === "reuse") {
-    return new import_vscode8.ThemeIcon("link");
+    return new import_vscode9.ThemeIcon("link");
   }
   if (d === "INSTANTIATE" || d === "instantiate") {
-    return new import_vscode8.ThemeIcon("puzzle");
+    return new import_vscode9.ThemeIcon("puzzle");
   }
-  return new import_vscode8.ThemeIcon("git-commit");
+  return new import_vscode9.ThemeIcon("git-commit");
 }
 function formatCommitLabel(c) {
   const id = c.commit_id.slice(0, 8);
@@ -1480,40 +1561,40 @@ var SlotHistoryProvider = class {
   constructor(getPortal) {
     this.getPortal = getPortal;
   }
-  _onDidChange = new import_vscode9.EventEmitter();
+  _onDidChange = new import_vscode10.EventEmitter();
   onDidChangeTreeData = this._onDidChange.event;
   refresh() {
     this._onDidChange.fire(void 0);
   }
   getTreeItem(element) {
     if (element.kind === "portal") {
-      const ti2 = new import_vscode9.TreeItem(
+      const ti2 = new import_vscode10.TreeItem(
         element.portal.source_file || element.portal.module_name || "portal",
-        import_vscode9.TreeItemCollapsibleState.Expanded
+        import_vscode10.TreeItemCollapsibleState.Expanded
       );
       ti2.description = element.portal.module_name;
       return ti2;
     }
     if (element.kind === "slot") {
       const spec = element.slot.slot_spec?.spec_text || "";
-      const ti2 = new import_vscode9.TreeItem(
+      const ti2 = new import_vscode10.TreeItem(
         truncateSpecPreview(spec) || element.slot.slot_id.slice(0, 8),
-        import_vscode9.TreeItemCollapsibleState.Expanded
+        import_vscode10.TreeItemCollapsibleState.Expanded
       );
       ti2.description = element.slot.slot_id.slice(0, 8);
       return ti2;
     }
     if (element.kind === "branch") {
       const isDefault = element.branch.name === (element.slot.default_branch || "main");
-      const ti2 = new import_vscode9.TreeItem(
+      const ti2 = new import_vscode10.TreeItem(
         `${element.branch.name}${isDefault ? " (HEAD)" : ""}`,
-        import_vscode9.TreeItemCollapsibleState.Expanded
+        import_vscode10.TreeItemCollapsibleState.Expanded
       );
       return ti2;
     }
-    const ti = new import_vscode9.TreeItem(
+    const ti = new import_vscode10.TreeItem(
       formatCommitLabel(element.commit),
-      import_vscode9.TreeItemCollapsibleState.None
+      import_vscode10.TreeItemCollapsibleState.None
     );
     ti.iconPath = decisionIcon(element.commit.decision);
     ti.contextValue = "semipy.commit";
@@ -1569,15 +1650,15 @@ var SlotHistoryProvider = class {
 var import_child_process = require("child_process");
 var fs3 = __toESM(require("fs"));
 var path6 = __toESM(require("path"));
-var import_vscode10 = require("vscode");
+var import_vscode11 = require("vscode");
 var previewSources = /* @__PURE__ */ new Map();
 function setCommitPreviewSource(slotId, commitId, source) {
   const key = `${slotId}:${commitId}`;
   previewSources.set(key, source);
-  return import_vscode10.Uri.from({ scheme: "semipy-commit", path: "/preview.py", query: key });
+  return import_vscode11.Uri.from({ scheme: "semipy-commit", path: "/preview.py", query: key });
 }
 function registerCommitTextProvider() {
-  return import_vscode10.workspace.registerTextDocumentContentProvider("semipy-commit", {
+  return import_vscode11.workspace.registerTextDocumentContentProvider("semipy-commit", {
     provideTextDocumentContent(uri) {
       const key = uri.query;
       return previewSources.get(key) || "# Preview expired; run the tree command again.\n";
@@ -1586,12 +1667,12 @@ function registerCommitTextProvider() {
 }
 async function viewGeneratedCode(slotId, commitId, source) {
   const uri = setCommitPreviewSource(slotId, commitId, source);
-  const doc = await import_vscode10.workspace.openTextDocument(uri);
-  await import_vscode10.window.showTextDocument(doc, { preview: true });
+  const doc = await import_vscode11.workspace.openTextDocument(uri);
+  await import_vscode11.window.showTextDocument(doc, { preview: true });
 }
 function expandWorkspaceVars(s) {
   let out = s;
-  const folders = import_vscode10.workspace.workspaceFolders ?? [];
+  const folders = import_vscode11.workspace.workspaceFolders ?? [];
   if (out.includes("${workspaceFolder}")) {
     const first = folders[0]?.uri.fsPath;
     if (first) {
@@ -1606,7 +1687,7 @@ function resolveConfiguredPythonPath(raw) {
     return out;
   }
   if (!path6.isAbsolute(out)) {
-    const wf = import_vscode10.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const wf = import_vscode11.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (wf) {
       out = path6.resolve(wf, out);
     }
@@ -1628,7 +1709,7 @@ function pushIfFile(out, p) {
 function candidateVenvInterpreterPaths() {
   const candidates = [];
   const roots = /* @__PURE__ */ new Set();
-  for (const wf of import_vscode10.workspace.workspaceFolders ?? []) {
+  for (const wf of import_vscode11.workspace.workspaceFolders ?? []) {
     roots.add(wf.uri.fsPath);
     roots.add(path6.dirname(wf.uri.fsPath));
   }
@@ -1643,7 +1724,7 @@ function candidateVenvInterpreterPaths() {
   return candidates;
 }
 function resolvePythonExecutable() {
-  const cfg = import_vscode10.workspace.getConfiguration("semipy");
+  const cfg = import_vscode11.workspace.getConfiguration("semipy");
   const explicit = resolveConfiguredPythonPath((cfg.get("pythonPath") || "").trim());
   if (explicit) {
     return explicit;
@@ -1651,7 +1732,7 @@ function resolvePythonExecutable() {
   for (const p of candidateVenvInterpreterPaths()) {
     return p;
   }
-  const py = import_vscode10.workspace.getConfiguration("python");
+  const py = import_vscode11.workspace.getConfiguration("python");
   const interpreter = expandWorkspaceVars((py.get("defaultInterpreterPath") || "").trim());
   if (interpreter) {
     return interpreter;
@@ -1679,13 +1760,13 @@ function runSemipyCli(args, cwd) {
 // src/features/diagnostics/diagnosticProvider.ts
 var fs4 = __toESM(require("fs"));
 var path7 = __toESM(require("path"));
-var import_vscode11 = require("vscode");
+var import_vscode12 = require("vscode");
 var SemipyDiagnosticManager = class {
   /** semipy `cache_dir` (directory containing `diagnostics.json`). */
   constructor(portalCacheDir) {
     this.portalCacheDir = portalCacheDir;
   }
-  collection = import_vscode11.languages.createDiagnosticCollection("semipy");
+  collection = import_vscode12.languages.createDiagnosticCollection("semipy");
   dispose() {
     this.collection.dispose();
   }
@@ -1715,16 +1796,16 @@ var SemipyDiagnosticManager = class {
       byFile.set(fp, list);
     }
     for (const [fp, diags] of byFile) {
-      const uri = import_vscode11.Uri.file(fp);
+      const uri = import_vscode12.Uri.file(fp);
       this.collection.set(uri, diags);
     }
   }
   entryToDiagnostic(e) {
     const start = Math.max(1, e.source_line_start) - 1;
     const end = Math.max(1, e.source_line_end) - 1;
-    const sev = e.severity === "error" ? import_vscode11.DiagnosticSeverity.Error : e.severity === "warning" ? import_vscode11.DiagnosticSeverity.Warning : import_vscode11.DiagnosticSeverity.Information;
-    const d = new import_vscode11.Diagnostic(
-      new import_vscode11.Range(new import_vscode11.Position(start, 0), new import_vscode11.Position(end, 2e3)),
+    const sev = e.severity === "error" ? import_vscode12.DiagnosticSeverity.Error : e.severity === "warning" ? import_vscode12.DiagnosticSeverity.Warning : import_vscode12.DiagnosticSeverity.Information;
+    const d = new import_vscode12.Diagnostic(
+      new import_vscode12.Range(new import_vscode12.Position(start, 0), new import_vscode12.Position(end, 2e3)),
       e.message,
       sev
     );
@@ -1737,10 +1818,10 @@ var SemipyDiagnosticManager = class {
       const gp = path7.isAbsolute(e.generated_path) ? e.generated_path : path7.join(root, e.generated_path);
       d.relatedInformation.push({
         location: {
-          uri: import_vscode11.Uri.file(gp),
-          range: new import_vscode11.Range(
-            new import_vscode11.Position(Math.max(1, a) - 1, 0),
-            new import_vscode11.Position(Math.max(1, b) - 1, 2e3)
+          uri: import_vscode12.Uri.file(gp),
+          range: new import_vscode12.Range(
+            new import_vscode12.Position(Math.max(1, a) - 1, 0),
+            new import_vscode12.Position(Math.max(1, b) - 1, 2e3)
           )
         },
         message: "Generated implementation"
@@ -1751,7 +1832,7 @@ var SemipyDiagnosticManager = class {
 };
 
 // src/features/diagnostics/codeActions.ts
-var import_vscode12 = require("vscode");
+var import_vscode13 = require("vscode");
 function slotIdFromDiagnosticCode(code) {
   const s = typeof code === "object" && code !== null ? String(code.value) : String(code ?? "");
   if (s.startsWith("semi-call-error:")) {
@@ -1777,7 +1858,7 @@ function createRegenerateCodeActionProvider(getWorkspaceRoot, getPortalRelPath) 
       if (!slotId) {
         return [];
       }
-      const action = new import_vscode12.CodeAction("Regenerate this spec (semipy CLI)", import_vscode12.CodeActionKind.QuickFix);
+      const action = new import_vscode13.CodeAction("Regenerate this spec (semipy CLI)", import_vscode13.CodeActionKind.QuickFix);
       action.command = {
         command: "semipy.regenerateSlotDiagnostic",
         title: "Regenerate",
@@ -1789,7 +1870,7 @@ function createRegenerateCodeActionProvider(getWorkspaceRoot, getPortalRelPath) 
 }
 
 // src/features/slotAnnotations/slotEditorAnnotations.ts
-var import_vscode13 = require("vscode");
+var import_vscode14 = require("vscode");
 
 // src/features/slotAnnotations/slotLineResolve.ts
 function resolveSlotUiLines(document, slot) {
@@ -1822,19 +1903,19 @@ function resolveSlotUiLines(document, slot) {
     }
   }
   const start0 = startLine1 - 1;
+  let semiformalLine;
+  let defLine;
   for (let i = start0; i >= 0 && i >= start0 - 200; i--) {
     const t = document.lineAt(i).text.trim();
-    if (t.startsWith("def ") || t.startsWith("async def")) {
-      return { codeLensLine0: i, inlayLine0: inlayLine1 - 1 };
-    }
     if (t.startsWith("@semiformal")) {
-      return { codeLensLine0: i, inlayLine0: inlayLine1 - 1 };
+      semiformalLine = i;
+    }
+    if (t.startsWith("def ") || t.startsWith("async def")) {
+      defLine = i;
     }
   }
-  return {
-    codeLensLine0: Math.max(0, start1 - 1),
-    inlayLine0: inlayLine1 - 1
-  };
+  const codeLensLine0 = semiformalLine ?? defLine ?? Math.max(0, start1 - 1);
+  return { codeLensLine0, inlayLine0: inlayLine1 - 1 };
 }
 
 // src/features/slotAnnotations/slotEditorAnnotations.ts
@@ -1859,23 +1940,25 @@ function codeLensLineIndexStale(doc, spec) {
     return void 0;
   }
   const firstSpecLine = Math.max(0, start1 - 1);
-  for (let i = firstSpecLine; i >= 0 && i >= firstSpecLine - 80; i--) {
+  let semiformalLine;
+  let defLine;
+  for (let i = firstSpecLine; i >= 0 && i >= firstSpecLine - 120; i--) {
     const t = doc.lineAt(i).text.trim();
-    if (t.startsWith("def ") || t.startsWith("async def")) {
-      return i;
-    }
     if (t.startsWith("@semiformal")) {
-      return i;
+      semiformalLine = i;
+    }
+    if (t.startsWith("def ") || t.startsWith("async def")) {
+      defLine = i;
     }
   }
-  return Math.max(0, firstSpecLine - 1);
+  return semiformalLine ?? defLine ?? Math.max(0, firstSpecLine - 1);
 }
 var SemipyCodeLensProvider = class {
   constructor(getPortal, enabled) {
     this.getPortal = getPortal;
     this.enabled = enabled;
   }
-  _onDidChange = new import_vscode13.EventEmitter();
+  _onDidChange = new import_vscode14.EventEmitter();
   onDidChangeCodeLenses = this._onDidChange.event;
   refresh() {
     this._onDidChange.fire();
@@ -1897,7 +1980,7 @@ var SemipyCodeLensProvider = class {
       if (lineIdx === void 0 || lineIdx >= document.lineCount) {
         continue;
       }
-      const range = new import_vscode13.Range(lineIdx, 0, lineIdx, 0);
+      const range = new import_vscode14.Range(lineIdx, 0, lineIdx, 0);
       const commit = activeCommitFromPortalSlot(slot);
       const idShort = commit?.commit_id?.slice(0, 8) ?? "?";
       const decision = (commit?.decision || "?").toUpperCase();
@@ -1905,16 +1988,16 @@ var SemipyCodeLensProvider = class {
       const locked = slot.refs?.["__locked__"];
       const headline = locked ? `Semipy locked \xB7 ${idShort} \xB7 ${t}` : `Semipy ${decision} \xB7 ${idShort} \xB7 ${t}`;
       out.push(
-        new import_vscode13.CodeLens(range, {
+        new import_vscode14.CodeLens(range, {
           title: headline,
           command: "semipy.noop"
         }),
-        new import_vscode13.CodeLens(range, {
+        new import_vscode14.CodeLens(range, {
           title: "Switch version",
           command: "semipy.pickSlotVersion",
           arguments: [slot.slot_id]
         }),
-        new import_vscode13.CodeLens(range, {
+        new import_vscode14.CodeLens(range, {
           title: locked ? "Unlock" : "Lock",
           command: locked ? "semipy.unlockSlotVersion" : "semipy.lockSlotVersion",
           arguments: locked ? [slot.slot_id] : [slot.slot_id, commit?.commit_id ?? ""]
@@ -1929,7 +2012,7 @@ var SemipyInlayHintsProvider = class {
     this.getPortal = getPortal;
     this.enabled = enabled;
   }
-  _onDidChange = new import_vscode13.EventEmitter();
+  _onDidChange = new import_vscode14.EventEmitter();
   onDidChangeInlayHints = this._onDidChange.event;
   refresh() {
     this._onDidChange.fire();
@@ -1965,16 +2048,115 @@ var SemipyInlayHintsProvider = class {
       const idShort = commit?.commit_id?.slice(0, 8) ?? "?";
       const label = ` semipy \xB7 ${decision} \xB7 ${idShort} `;
       hints.push(
-        new import_vscode13.InlayHint(
-          new import_vscode13.Position(lineNo, line.text.length),
+        new import_vscode14.InlayHint(
+          new import_vscode14.Position(lineNo, line.text.length),
           label,
-          import_vscode13.InlayHintKind.Type
+          import_vscode14.InlayHintKind.Type
         )
       );
     }
     return hints.length ? hints : void 0;
   }
 };
+
+// src/features/specCommentSyntax/specCommentSyntaxDecorations.ts
+var import_vscode15 = require("vscode");
+function createSpecCommentSyntaxTypes() {
+  return {
+    specMarker: import_vscode15.window.createTextEditorDecorationType({
+      fontWeight: "600",
+      light: { color: "#008f84" },
+      dark: { color: "#4ec9b0" }
+    }),
+    specBody: import_vscode15.window.createTextEditorDecorationType({
+      light: { color: "#007a8a" },
+      dark: { color: "#9cdcfe" }
+    }),
+    reasoningMarker: import_vscode15.window.createTextEditorDecorationType({
+      fontWeight: "600",
+      light: { color: "#5a8a3d" },
+      dark: { color: "#6a9955" }
+    }),
+    reasoningBody: import_vscode15.window.createTextEditorDecorationType({
+      light: { color: "#3d6b2e" },
+      dark: { color: "#b5cea8" }
+    })
+  };
+}
+function rangesOnLine(line, lineIdx) {
+  const spec = [];
+  const reasoning = [];
+  let pos = 0;
+  while (pos < line.length) {
+    const gt = line.indexOf("#", pos);
+    if (gt < 0) {
+      break;
+    }
+    const slice = line.slice(gt);
+    const mGt = slice.match(/^#\s*>/);
+    const mLt = slice.match(/^#\s*</);
+    if (mGt) {
+      const markerStart = gt;
+      const markerEnd = gt + mGt[0].length;
+      const bodyEnd = line.length;
+      spec.push({
+        marker: new import_vscode15.Range(new import_vscode15.Position(lineIdx, markerStart), new import_vscode15.Position(lineIdx, markerEnd)),
+        body: new import_vscode15.Range(new import_vscode15.Position(lineIdx, markerEnd), new import_vscode15.Position(lineIdx, bodyEnd))
+      });
+      pos = markerEnd;
+      continue;
+    }
+    if (mLt) {
+      const markerStart = gt;
+      const markerEnd = gt + mLt[0].length;
+      const bodyEnd = line.length;
+      reasoning.push({
+        marker: new import_vscode15.Range(new import_vscode15.Position(lineIdx, markerStart), new import_vscode15.Position(lineIdx, markerEnd)),
+        body: new import_vscode15.Range(new import_vscode15.Position(lineIdx, markerEnd), new import_vscode15.Position(lineIdx, bodyEnd))
+      });
+      pos = markerEnd;
+      continue;
+    }
+    pos = gt + 1;
+  }
+  return { spec, reasoning };
+}
+function refreshSpecCommentSyntaxDecorations(editor, types) {
+  if (editor.document.languageId !== "python") {
+    editor.setDecorations(types.specMarker, []);
+    editor.setDecorations(types.specBody, []);
+    editor.setDecorations(types.reasoningMarker, []);
+    editor.setDecorations(types.reasoningBody, []);
+    return;
+  }
+  const specM = [];
+  const specB = [];
+  const reasM = [];
+  const reasB = [];
+  const n = editor.document.lineCount;
+  for (let lineIdx = 0; lineIdx < n; lineIdx++) {
+    const line = editor.document.lineAt(lineIdx).text;
+    const { spec, reasoning } = rangesOnLine(line, lineIdx);
+    for (const s of spec) {
+      specM.push(s.marker);
+      specB.push(s.body);
+    }
+    for (const r of reasoning) {
+      reasM.push(r.marker);
+      reasB.push(r.body);
+    }
+  }
+  editor.setDecorations(types.specMarker, specM);
+  editor.setDecorations(types.specBody, specB);
+  editor.setDecorations(types.reasoningMarker, reasM);
+  editor.setDecorations(types.reasoningBody, reasB);
+}
+function disposeSpecCommentSyntaxTypes(types) {
+  types.specMarker.dispose();
+  types.specBody.dispose();
+  types.reasoningMarker.dispose();
+  types.reasoningBody.dispose();
+}
 
 // src/extension.ts
 function semipyCliFailureMessage(stderr, stdout, fallback) {
@@ -1985,9 +2167,9 @@ function semipyCliFailureMessage(stderr, stdout, fallback) {
   return detail;
 }
 function sessionSourceOpts() {
-  let raw = import_vscode14.workspace.getConfiguration("semipy").get("sessionSource")?.trim();
+  let raw = import_vscode16.workspace.getConfiguration("semipy").get("sessionSource")?.trim();
   if (raw?.includes("${workspaceFolder}")) {
-    const folder = import_vscode14.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const folder = import_vscode16.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (folder) {
       raw = raw.replace(/\$\{workspaceFolder\}/g, folder);
     }
@@ -2014,7 +2196,7 @@ function refreshPortalForUri(fsPath, state) {
   state.portalPath = found;
   state.portal = portal;
   state.portalCacheDir = path8.dirname(found);
-  const wf = import_vscode14.workspace.getWorkspaceFolder(import_vscode14.Uri.file(found));
+  const wf = import_vscode16.workspace.getWorkspaceFolder(import_vscode16.Uri.file(found));
   state.workspaceRoot = wf?.uri.fsPath ?? path8.dirname(state.portalCacheDir);
 }
 function activate(context) {
@@ -2024,9 +2206,10 @@ function activate(context) {
     portalCacheDir: void 0,
     workspaceRoot: void 0
   };
-  const cfg = () => import_vscode14.workspace.getConfiguration("semipy");
+  const cfg = () => import_vscode16.workspace.getConfiguration("semipy");
   const opacityTypes = createOpacityDecorationTypes();
   const phraseTypes = createPhraseDecorationTypes();
+  const specSyntaxTypes = createSpecCommentSyntaxTypes();
   const debounceMs = () => cfg().get("debounceMs") ?? 200;
   const signFlip = new SignFlipCoordinator(
     () => cfg().get("signFlipOnSkeletonEdit") ?? true,
@@ -2045,11 +2228,11 @@ function activate(context) {
   );
   const diag = new SemipyDiagnosticManager(() => portalState.portalCacheDir);
   const tree = new SlotHistoryProvider(() => portalState.portal);
-  const treeView = import_vscode14.window.createTreeView("semipy.slotHistory", {
+  const treeView = import_vscode16.window.createTreeView("semipy.slotHistory", {
     treeDataProvider: tree,
     showCollapseAll: true
   });
-  const status = import_vscode14.window.createStatusBarItem(import_vscode14.StatusBarAlignment.Left, 100);
+  const status = import_vscode16.window.createStatusBarItem(import_vscode16.StatusBarAlignment.Left, 100);
   status.command = "semipy.refreshHistory";
   function refreshAllDecorations(editor) {
     if (!editor) {
@@ -2058,12 +2241,20 @@ function activate(context) {
     refreshPortalForUri(editor.document.uri.fsPath, portalState);
     const cacheDir = portalState.portalCacheDir;
     refreshOpacityDecorations(editor, opacityTypes.reasoningDim);
+    if (cfg().get("enableSpecLineSyntax") ?? true) {
+      refreshSpecCommentSyntaxDecorations(editor, specSyntaxTypes);
+    } else {
+      editor.setDecorations(specSyntaxTypes.specMarker, []);
+      editor.setDecorations(specSyntaxTypes.specBody, []);
+      editor.setDecorations(specSyntaxTypes.reasoningMarker, []);
+      editor.setDecorations(specSyntaxTypes.reasoningBody, []);
+    }
     refreshPhraseDecorations(
       editor,
       portalState.portal,
       cacheDir,
       phraseTypes,
-      import_vscode14.workspace.workspaceFolders?.map((w) => w.uri.fsPath) ?? []
+      import_vscode16.workspace.workspaceFolders?.map((w) => w.uri.fsPath) ?? []
     );
     const n = portalState.portal ? Object.keys(portalState.portal.slots).length : 0;
     status.text = `Semipy: ${n} slot(s)`;
@@ -2076,60 +2267,66 @@ function activate(context) {
   }
   const opacitySub = subscribeOpacityWrapper(opacityTypes, debounceMs, refreshAllDecorations);
   context.subscriptions.push(
+    getSemipyOutputChannel(),
     treeView,
     status,
+    { dispose: () => disposeSpecCommentSyntaxTypes(specSyntaxTypes) },
     opacitySub,
     signFlip.attach(),
     { dispose: () => linked.dispose() },
     diag,
-    import_vscode14.languages.registerCodeLensProvider({ language: "python", scheme: "file" }, codeLensProvider),
-    import_vscode14.languages.registerInlayHintsProvider({ language: "python", scheme: "file" }, inlayProvider),
-    import_vscode14.workspace.onDidChangeConfiguration((e) => {
+    import_vscode16.languages.registerCodeLensProvider({ language: "python", scheme: "file" }, codeLensProvider),
+    import_vscode16.languages.registerInlayHintsProvider({ language: "python", scheme: "file" }, inlayProvider),
+    import_vscode16.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("semipy")) {
         codeLensProvider.refresh();
         inlayProvider.refresh();
+        refreshAllDecorations(import_vscode16.window.activeTextEditor);
       }
     }),
-    import_vscode14.window.onDidChangeTextEditorSelection((e) => {
+    import_vscode16.window.onDidChangeTextEditorSelection((e) => {
       refreshPortalForUri(e.textEditor.document.uri.fsPath, portalState);
       linked.onSelectionOrPortal(e.textEditor, portalState.portal, portalState.portalCacheDir);
     }),
-    import_vscode14.window.onDidChangeActiveTextEditor((ed) => {
+    import_vscode16.window.onDidChangeActiveTextEditor((ed) => {
       if (ed) {
         signFlip.seedDocument(ed.document);
       }
       refreshAllDecorations(ed);
     }),
-    import_vscode14.languages.registerHoverProvider(
+    import_vscode16.languages.registerHoverProvider(
       { language: "python", scheme: "file" },
       createPhraseHoverProvider(
         () => portalState.portal,
         () => portalState.portalCacheDir,
-        () => import_vscode14.workspace.workspaceFolders?.map((w) => w.uri.fsPath) ?? []
+        () => import_vscode16.workspace.workspaceFolders?.map((w) => w.uri.fsPath) ?? []
       )
     ),
     registerCommitTextProvider(),
-    import_vscode14.commands.registerCommand("semipy.noop", () => {
+    import_vscode16.commands.registerCommand("semipy.noop", () => {
     }),
-    import_vscode14.commands.registerCommand("semipy.openSplitView", async () => {
-      const ed = import_vscode14.window.activeTextEditor;
+    import_vscode16.commands.registerCommand("semipy.showOutput", () => {
+      getSemipyOutputChannel().show(true);
+    }),
+    import_vscode16.commands.registerCommand("semipy.openSplitView", async () => {
+      const ed = import_vscode16.window.activeTextEditor;
       if (!ed) {
         return;
       }
       refreshPortalForUri(ed.document.uri.fsPath, portalState);
       if (!portalState.portal || !portalState.portalCacheDir) {
-        void import_vscode14.window.showWarningMessage("Semipy: no portal for this file.");
+        void import_vscode16.window.showWarningMessage("Semipy: no portal for this file.");
         return;
       }
       await openDispatchSplitView(portalState.portalCacheDir, portalState.portal.module_name);
     }),
-    import_vscode14.commands.registerCommand("semipy.refreshHistory", () => {
-      const ed = import_vscode14.window.activeTextEditor;
+    import_vscode16.commands.registerCommand("semipy.refreshHistory", () => {
+      const ed = import_vscode16.window.activeTextEditor;
       refreshAllDecorations(ed);
       tree.refresh();
     }),
-    import_vscode14.commands.registerCommand("semipy.pickSlotVersion", async (slotId) => {
-      const ed = import_vscode14.window.activeTextEditor;
+    import_vscode16.commands.registerCommand("semipy.pickSlotVersion", async (slotId) => {
+      const ed = import_vscode16.window.activeTextEditor;
       if (!ed) {
         return;
       }
@@ -2138,7 +2335,7 @@ function activate(context) {
       const root = portalState.workspaceRoot;
       const portalPath = portalState.portalPath;
       if (!portal || !root || !portalPath) {
-        void import_vscode14.window.showWarningMessage("Semipy: no portal for this file.");
+        void import_vscode16.window.showWarningMessage("Semipy: no portal for this file.");
         return;
       }
       const slot = portal.slots[slotId];
@@ -2146,7 +2343,7 @@ function activate(context) {
         return;
       }
       const commits = Object.values(slot.commits).sort((a, b) => b.timestamp - a.timestamp);
-      const picked = await import_vscode14.window.showQuickPick(
+      const picked = await import_vscode16.window.showQuickPick(
         commits.map((c) => ({
           label: c.commit_id.slice(0, 8),
           description: `${c.decision} ${(c.message || "").slice(0, 48)}`,
@@ -2164,23 +2361,23 @@ function activate(context) {
         root
       );
       if (r.code !== 0 && r.code !== null) {
-        void import_vscode14.window.showErrorMessage(
+        void import_vscode16.window.showErrorMessage(
           `Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "rollback failed")}`
         );
         return;
       }
-      void import_vscode14.window.showInformationMessage("Semipy: rollback complete. Re-run code to rebuild dispatch if needed.");
+      void import_vscode16.window.showInformationMessage("Semipy: rollback complete. Re-run code to rebuild dispatch if needed.");
       refreshAllDecorations(ed);
     }),
-    import_vscode14.commands.registerCommand("semipy.lockSlotVersion", async (slotId, commitId) => {
-      const ed = import_vscode14.window.activeTextEditor;
+    import_vscode16.commands.registerCommand("semipy.lockSlotVersion", async (slotId, commitId) => {
+      const ed = import_vscode16.window.activeTextEditor;
       if (ed) {
         refreshPortalForUri(ed.document.uri.fsPath, portalState);
       }
       const root = portalState.workspaceRoot;
       const portalPath = portalState.portalPath;
       if (!root || !portalPath || !commitId) {
-        void import_vscode14.window.showErrorMessage("Semipy: no portal or commit for lock.");
+        void import_vscode16.window.showErrorMessage("Semipy: no portal or commit for lock.");
         return;
       }
       const rel = path8.relative(root, portalPath);
@@ -2189,43 +2386,43 @@ function activate(context) {
         root
       );
       if (r.code !== 0 && r.code !== null) {
-        void import_vscode14.window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "lock failed")}`);
+        void import_vscode16.window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "lock failed")}`);
         return;
       }
-      void import_vscode14.window.showInformationMessage((r.stderr || r.stdout || "Lock saved.").trim().slice(0, 400));
-      refreshAllDecorations(import_vscode14.window.activeTextEditor);
+      void import_vscode16.window.showInformationMessage((r.stderr || r.stdout || "Lock saved.").trim().slice(0, 400));
+      refreshAllDecorations(import_vscode16.window.activeTextEditor);
     }),
-    import_vscode14.commands.registerCommand("semipy.unlockSlotVersion", async (slotId) => {
-      const ed = import_vscode14.window.activeTextEditor;
+    import_vscode16.commands.registerCommand("semipy.unlockSlotVersion", async (slotId) => {
+      const ed = import_vscode16.window.activeTextEditor;
       if (ed) {
         refreshPortalForUri(ed.document.uri.fsPath, portalState);
       }
       const root = portalState.workspaceRoot;
       const portalPath = portalState.portalPath;
       if (!root || !portalPath) {
-        void import_vscode14.window.showWarningMessage("Semipy: no portal for this file.");
+        void import_vscode16.window.showWarningMessage("Semipy: no portal for this file.");
         return;
       }
       const rel = path8.relative(root, portalPath);
       const r = await runSemipyCli(["unlock", "--portal", rel, "--slot-id", slotId], root);
       if (r.code !== 0 && r.code !== null) {
-        void import_vscode14.window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "unlock failed")}`);
+        void import_vscode16.window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "unlock failed")}`);
         return;
       }
-      void import_vscode14.window.showInformationMessage((r.stderr || r.stdout || "Unlocked.").trim().slice(0, 400));
-      refreshAllDecorations(import_vscode14.window.activeTextEditor);
+      void import_vscode16.window.showInformationMessage((r.stderr || r.stdout || "Unlocked.").trim().slice(0, 400));
+      refreshAllDecorations(import_vscode16.window.activeTextEditor);
     }),
-    import_vscode14.commands.registerCommand(
+    import_vscode16.commands.registerCommand(
       "semipy.viewGeneratedCode",
       async (slotId, commitId) => {
-        const ed = import_vscode14.window.activeTextEditor;
+        const ed = import_vscode16.window.activeTextEditor;
         const fsPath = ed?.document.uri.fsPath;
         const portalPath = fsPath && findPortalJsonPathForEditor(fsPath, sessionSourceOpts()) || portalState.portalPath;
         const portal = portalPath ? loadPortalJson(portalPath) : portalState.portal;
         const slot = portal?.slots[slotId];
         const src = slot?.commits[commitId]?.generated_source;
         if (!src) {
-          void import_vscode14.window.showWarningMessage(
+          void import_vscode16.window.showWarningMessage(
             "Semipy: commit source not loaded. Refresh history or open the source file that owns this portal."
           );
           return;
@@ -2233,7 +2430,7 @@ function activate(context) {
         await viewGeneratedCode(slotId, commitId, src);
       }
     ),
-    import_vscode14.commands.registerCommand(
+    import_vscode16.commands.registerCommand(
       "semipy.regenerateSlotDiagnostic",
       async (ws, portalRel, slotId) => {
         const r = await runSemipyCli(
@@ -2241,16 +2438,16 @@ function activate(context) {
           ws
         );
         if (r.code !== 0 && r.code !== null) {
-          void import_vscode14.window.showErrorMessage(
+          void import_vscode16.window.showErrorMessage(
             `Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "regenerate failed")}`
           );
           return;
         }
-        void import_vscode14.window.showInformationMessage(r.stderr || r.stdout || "semipy regenerate finished.");
+        void import_vscode16.window.showInformationMessage(r.stderr || r.stdout || "semipy regenerate finished.");
         diag.refresh();
       }
     ),
-    import_vscode14.languages.registerCodeActionsProvider(
+    import_vscode16.languages.registerCodeActionsProvider(
       { language: "python", scheme: "file" },
       createRegenerateCodeActionProvider(
         () => portalState.workspaceRoot,
@@ -2258,13 +2455,13 @@ function activate(context) {
       )
     )
   );
-  const ed0 = import_vscode14.window.activeTextEditor;
+  const ed0 = import_vscode16.window.activeTextEditor;
   if (ed0) {
     signFlip.seedDocument(ed0.document);
   }
   refreshAllDecorations(ed0);
-  if (import_vscode14.workspace.workspaceFolders?.length) {
-    const wf = import_vscode14.workspace.workspaceFolders[0].uri.fsPath;
+  if (import_vscode16.workspace.workspaceFolders?.length) {
+    const wf = import_vscode16.workspace.workspaceFolders[0].uri.fsPath;
     let timer;
     const fire = () => {
       if (timer) {
@@ -2272,11 +2469,11 @@ function activate(context) {
       }
       timer = setTimeout(() => {
         timer = void 0;
-        refreshAllDecorations(import_vscode14.window.activeTextEditor);
+        refreshAllDecorations(import_vscode16.window.activeTextEditor);
       }, debounceMs());
     };
-    const wPortal = import_vscode14.workspace.createFileSystemWatcher(new import_vscode14.RelativePattern(wf, "**/*.portal.json"));
-    const wSemi = import_vscode14.workspace.createFileSystemWatcher(new import_vscode14.RelativePattern(wf, "**/*.semi.py"));
+    const wPortal = import_vscode16.workspace.createFileSystemWatcher(new import_vscode16.RelativePattern(wf, "**/*.portal.json"));
+    const wSemi = import_vscode16.workspace.createFileSystemWatcher(new import_vscode16.RelativePattern(wf, "**/*.semi.py"));
     wPortal.onDidChange(fire);
     wPortal.onDidCreate(fire);
     wPortal.onDidDelete(fire);
@@ -2289,13 +2486,13 @@ function activate(context) {
 function subscribeOpacityWrapper(types, debounceMs, onRefresh) {
   let timer;
   const tick = () => {
-    onRefresh(import_vscode14.window.activeTextEditor);
+    onRefresh(import_vscode16.window.activeTextEditor);
   };
-  const sub1 = import_vscode14.window.onDidChangeActiveTextEditor(() => {
+  const sub1 = import_vscode16.window.onDidChangeActiveTextEditor(() => {
     tick();
   });
-  const sub2 = import_vscode14.workspace.onDidChangeTextDocument((ev) => {
-    const ed = import_vscode14.window.activeTextEditor;
+  const sub2 = import_vscode16.workspace.onDidChangeTextDocument((ev) => {
+    const ed = import_vscode16.window.activeTextEditor;
     if (!ed || ev.document !== ed.document) {
       return;
     }

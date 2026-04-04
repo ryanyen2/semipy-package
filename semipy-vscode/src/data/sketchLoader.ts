@@ -99,3 +99,36 @@ export function bindingById(
   }
   return lib.bindings[bindingId];
 }
+
+/**
+ * Prefer `commit.binding_id`; if missing, find a sketch whose `source_commit_ids` contains this
+ * commit and use its `binding_id` (matches sketch_library.json when async portal patch did not run,
+ * e.g. demo `_sync_sketch_from_function` historically only saved the library file).
+ */
+export function resolveBindingIdForCommit(
+  lib: SketchLibraryJson | undefined,
+  commitId: string,
+  explicitBindingId: string | undefined,
+): string | undefined {
+  const e = (explicitBindingId || "").trim();
+  if (e) {
+    return e;
+  }
+  if (!lib?.sketches || !commitId) {
+    return undefined;
+  }
+  for (const sk of Object.values(lib.sketches)) {
+    if (!sk || typeof sk !== "object") {
+      continue;
+    }
+    const ids = sk.source_commit_ids || [];
+    if (!ids.includes(commitId)) {
+      continue;
+    }
+    const bid = (sk.binding_id || "").trim();
+    if (bid) {
+      return bid;
+    }
+  }
+  return undefined;
+}

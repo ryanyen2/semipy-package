@@ -2,7 +2,11 @@ import type { HoverProvider, Position, TextDocument } from "vscode";
 import { Hover } from "vscode";
 import { MarkdownString } from "vscode";
 import type { PortalJson } from "../../data/types";
-import { bindingById, loadSketchLibraryMerged } from "../../data/sketchLoader";
+import {
+  bindingById,
+  loadSketchLibraryMerged,
+  resolveBindingIdForCommit,
+} from "../../data/sketchLoader";
 import { hashArrowSpecSuffixFromLine } from "../../util/hashArrowDetect";
 import { activeCommitFromPortalSlot } from "../splitEditor/portalCommit";
 import { resolveSourceBlockRange } from "../splitEditor/correspondenceMap";
@@ -37,7 +41,8 @@ export function createPhraseHoverProvider(
 
       for (const slot of Object.values(portal.slots)) {
         const head = activeCommitFromPortalSlot(slot);
-        const bid = head?.binding_id || "";
+        const cid = head?.commit_id || "";
+        const bid = resolveBindingIdForCommit(lib, cid, head?.binding_id) || "";
         if (!bid) {
           continue;
         }

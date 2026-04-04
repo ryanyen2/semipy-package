@@ -40,16 +40,18 @@ function codeLensLineIndexStale(doc: TextDocument, spec: SlotSpecJson | null | u
     return undefined;
   }
   const firstSpecLine = Math.max(0, start1 - 1);
-  for (let i = firstSpecLine; i >= 0 && i >= firstSpecLine - 80; i--) {
+  let semiformalLine: number | undefined;
+  let defLine: number | undefined;
+  for (let i = firstSpecLine; i >= 0 && i >= firstSpecLine - 120; i--) {
     const t = doc.lineAt(i).text.trim();
-    if (t.startsWith("def ") || t.startsWith("async def")) {
-      return i;
-    }
     if (t.startsWith("@semiformal")) {
-      return i;
+      semiformalLine = i;
+    }
+    if (t.startsWith("def ") || t.startsWith("async def")) {
+      defLine = i;
     }
   }
-  return Math.max(0, firstSpecLine - 1);
+  return semiformalLine ?? defLine ?? Math.max(0, firstSpecLine - 1);
 }
 
 export class SemipyCodeLensProvider implements CodeLensProvider {

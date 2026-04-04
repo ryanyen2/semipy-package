@@ -42,6 +42,10 @@
       {
         "command": "semipy.regenerateSlotDiagnostic",
         "title": "Semipy: Regenerate this spec (CLI)"
+      },
+      {
+        "command": "semipy.showOutput",
+        "title": "Semipy: Show output log"
       }
     ],
     "views": {
@@ -84,6 +88,16 @@
           "type": "boolean",
           "default": true,
           "description": "Show last resolution (decision, commit id) as inlay hints on spec lines."
+        },
+        "semipy.enableSpecLineSyntax": {
+          "type": "boolean",
+          "default": true,
+          "description": "Paint #> / #< marker and body colors via editor decorations (reliable even when TextMate injection is overridden by Python/Pylance)."
+        },
+        "semipy.tracePhraseDecorations": {
+          "type": "boolean",
+          "default": false,
+          "description": "Append phrase/binding resolution details to Output > Semipy (enable when debugging pattern-learning highlights)."
         },
         "semipy.sessionSource": {
           "type": "string",

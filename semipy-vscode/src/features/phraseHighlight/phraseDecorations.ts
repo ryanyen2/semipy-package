@@ -4,9 +4,15 @@ import {
   Position,
   Range as VsRange,
   window,
+  workspace,
 } from "vscode";
 import type { PortalJson, SpecPhraseJson } from "../../data/types";
-import { bindingById, loadSketchLibraryMerged } from "../../data/sketchLoader";
+import {
+  bindingById,
+  loadSketchLibraryMerged,
+  resolveBindingIdForCommit,
+} from "../../data/sketchLoader";
+import { appendSemipyLog } from "../../logging/semipyOutputChannel";
 import { hashArrowSpecSuffixFromLine } from "../../util/hashArrowDetect";
 import { activeCommitFromPortalSlot } from "../splitEditor/portalCommit";
 import { resolveSourceBlockRange } from "../splitEditor/correspondenceMap";
@@ -113,6 +119,15 @@ export function refreshPhraseDecorations(
   const doc = editor.document;
   const full = doc.getText();
   const lines = full.split(/\r?\n/);
+  const trace =
+    workspace.getConfiguration("semipy").get<boolean>("tracePhraseDecorations") ?? false;
+
+  if (trace) {
+    appendSemipyLog(`[phrase] refresh ${doc.uri.fsPath}`);
+    appendSemipyLog(
+      `  cacheDir=${portalCacheDir} lib=${lib ? "ok" : "missing"} bindingKeys=${lib?.bindings ? Object.keys(lib.bindings).length : 0}`,
+    );
+  }
 
   const rangesByRole: Record<string, Range[]> = {};
   for (const r of ROLE_ORDER) {
@@ -121,19 +136,32 @@ export function refreshPhraseDecorations(
 
   for (const slot of Object.values(portal.slots)) {
     const head = activeCommitFromPortalSlot(slot);
-    const bid = head?.binding_id || "";
+    const cid = head?.commit_id || "";
+    const bid = resolveBindingIdForCommit(lib, cid, head?.binding_id) || "";
+    if (trace) {
+      appendSemipyLog(
+        `  slot ${slot.slot_id.slice(0, 8)} commit ${cid.slice(0, 12) || "?"} resolved binding_id=${bid || "none"}`,
+      );
+    }
     if (!bid) {
       continue;
     }
     const binding = bindingById(lib, bid);
     if (!binding?.phrases?.length) {
+      if (trace) {
+        appendSemipyLog(`    no phrases for binding ${bid.slice(0, 8)}`);
+      }
       continue;
     }
     const block = resolveSourceBlockRange(full, slot);
     if (!block) {
+      if (trace) {
+        appendSemipyLog(`    no source block range`);
+      }
       continue;
     }
     const { startLine1: start1, endLine1: end1 } = block;
+    let spanTotal = 0;
     for (let lineIdx = start1 - 1; lineIdx <= end1 - 1; lineIdx++) {
       if (lineIdx < 0 || lineIdx >= lines.length) {
         continue;
@@ -145,6 +173,7 @@ export function refreshPhraseDecorations(
       }
       const suffix = specRegion.suffix;
       const spans = phraseSpansInSuffix(suffix, binding.phrases);
+      spanTotal += spans.length;
       const lineObj = doc.lineAt(lineIdx);
       for (const sp of spans) {
         const role = ROLE_ORDER.includes(sp.role) ? sp.role : "param";
@@ -156,6 +185,9 @@ export function refreshPhraseDecorations(
         );
         rangesByRole[role]!.push(r);
       }
+    }
+    if (trace) {
+      appendSemipyLog(`    block lines ${start1}-${end1} phraseSpans=${spanTotal}`);
     }
   }
 

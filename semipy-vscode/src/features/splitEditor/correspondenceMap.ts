@@ -35,6 +35,22 @@ export function findSlotForSourceLine(
   return undefined;
 }
 
+/** 1-based line -> char offset of line start in buffer (handles \\r\\n). */
+function offsetOfLine1(fullText: string, line1: number): number {
+  if (line1 <= 1) {
+    return 0;
+  }
+  let pos = 0;
+  for (let k = 1; k < line1; k++) {
+    const nl = fullText.indexOf("\n", pos);
+    if (nl < 0) {
+      return pos;
+    }
+    pos = nl + 1;
+  }
+  return pos;
+}
+
 /** If portal span text does not match file, search for spec_text substring (handles line drift). */
 export function resolveSourceBlockRange(
   fullText: string,
@@ -52,7 +68,11 @@ export function resolveSourceBlockRange(
     return { startLine1: start, endLine1: end };
   }
   if (specText) {
-    const idx = fullText.indexOf(specText);
+    const staleCharHint = offsetOfLine1(fullText, start);
+    let idx = fullText.indexOf(specText, Math.max(0, staleCharHint - 400));
+    if (idx < 0) {
+      idx = fullText.indexOf(specText);
+    }
     if (idx >= 0) {
       const before = fullText.slice(0, idx);
       const startLine1 = before.split(/\r?\n/).length;

@@ -43,17 +43,17 @@ export function resolveSlotUiLines(
   }
 
   const start0 = startLine1 - 1;
+  let semiformalLine: number | undefined;
+  let defLine: number | undefined;
   for (let i = start0; i >= 0 && i >= start0 - 200; i--) {
     const t = document.lineAt(i).text.trim();
-    if (t.startsWith("def ") || t.startsWith("async def")) {
-      return { codeLensLine0: i, inlayLine0: inlayLine1 - 1 };
-    }
     if (t.startsWith("@semiformal")) {
-      return { codeLensLine0: i, inlayLine0: inlayLine1 - 1 };
+      semiformalLine = i;
+    }
+    if (t.startsWith("def ") || t.startsWith("async def")) {
+      defLine = i;
     }
   }
-  return {
-    codeLensLine0: Math.max(0, start1 - 1),
-    inlayLine0: inlayLine1 - 1,
-  };
+  const codeLensLine0 = semiformalLine ?? defLine ?? Math.max(0, start1 - 1);
+  return { codeLensLine0, inlayLine0: inlayLine1 - 1 };
 }

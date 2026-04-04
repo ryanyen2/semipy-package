@@ -58,10 +58,17 @@ export interface SemanticBindingJson {
   phrases: SpecPhraseJson[];
 }
 
+export interface SketchRecordJson {
+  binding_id?: string;
+  sketch_id?: string;
+  /** Commits that produced this sketch; used to link portal commits to bindings when `commit.binding_id` was never written. */
+  source_commit_ids?: string[];
+}
+
 export interface SketchLibraryJson {
   version?: number;
   bindings?: Record<string, SemanticBindingJson>;
-  sketches?: Record<string, { binding_id?: string; sketch_id?: string }>;
+  sketches?: Record<string, SketchRecordJson>;
 }
 
 export interface DiagnosticEntryJson {
