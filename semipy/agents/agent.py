@@ -354,6 +354,11 @@ class SemiAgent:
                     "identity return), fix the logic for the new input shape while "
                     "preserving handling of previously working inputs."
                 )
+            sc = getattr(spec, "sketch_context", None)
+            if isinstance(sc, str) and sc.strip():
+                parts.append("")
+                parts.append("Pattern sketch context (from a prior template match attempt):")
+                parts.append(sc.strip())
             parts.append("```python")
             parts.append(spec.parent_sources[0].strip())
             parts.append("```")

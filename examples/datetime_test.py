@@ -17,15 +17,12 @@ configure(
 
 @semiformal
 def infer_datetime_formatter(date_str: str) -> str:
-    #< [Task] infer parse shape, then normalize label
+    #< [Task] infer parse format before display
     input_pattern = ... #> infer the input date regex/strptime pattern from the observed string format in this session.
-    #< [Given] parser depends on session-specific pattern
+    #< [Given] session examples define accepted shapes
     output_pattern = "%b %Y"
-    #> [But] mismatched tokens raise parse warnings
-    #> [Verify] avoid re.error: redefinition of group name 'S' as group 7
-    #< [But] prefer strptime tokens over regex groups
-
-    #< [Verify] stringify input before parsing attempt
+    #< [But] ambiguous numeric order can misparse
+    #< [Verify] parser and formatter use matching pattern
     return datetime.strptime(str(date_str), input_pattern).strftime(output_pattern)
 
 
@@ -36,6 +33,7 @@ data = pd.DataFrame(
             "03/20/2025",
             "04/05/2025",
             "04/18/2025",
+            "01 12",
             "05-01-2025",
             "05-12-2025 11:30",
             "08-18-2025 09:30:00",
@@ -43,7 +41,7 @@ data = pd.DataFrame(
             "June 21 2025",
             "July 09 2026",
             "Aug 2026",
-            "01 01"
+            "01/01/2026",
             "04/21/2025",
         ]
     }
@@ -55,27 +53,26 @@ print(data["formatted_signup_date"].value_counts())
 
 
 
-new_data = pd.DataFrame(
-    {
-        "signup_date": [
-            "06/18/2025 11:30",
-            "09-21-2025",
-            "09-21-2025 11:30",
-            "01-01-2025",
-            "12/01/2025 11:30:00",
-            "01/01/2025 11:30:00",
-            "12/01/2025 11:30",
-            "January 1 2025",
-            "Sep 2025",
-            "01.21.2025 11:30:00",
-            "02.21.2025 11:30:00:00",
-            "02.21.2025 11:30:00:00:00",
+# new_data = pd.DataFrame(
+#     {
+#         "signup_date": [
+#             "06/18/2025 11:30",
+#             "09-21-2025",
+#             "09-21-2025 11:30",
+#             "01-01-2025",
+#             "12/01/2025 11:30:00",
+#             "01/01/2025 11:30:00",
+#             "12/01/2025 11:30",
+#             "January 1 2025",
+#             "Sep 2025",
+#             "01.21.2025 11:30:00",
+#             "02.21.2025 09:12:00",
             
-        ]
-    }
-)
+#         ]
+#     }
+# )
 
-new_data["formatted_signup_date"] = new_data["signup_date"].apply(infer_datetime_formatter)
-print(new_data["formatted_signup_date"].value_counts())
+# new_data["formatted_signup_date"] = new_data["signup_date"].apply(infer_datetime_formatter)
+# print(new_data["formatted_signup_date"].value_counts())
 
 

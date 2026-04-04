@@ -8,10 +8,14 @@ Demonstrates two styles of semiformal specification side by side:
   parameter. The generated function receives ``(self, body)`` and returns
   ``{"family": str}``.
 
-- ``infer_templates`` uses standalone ``semi()`` (EXPRESSION). The prompt is an
-  f-string whose text changes when the set of families changes. A new family set
-  produces a **different** ``spec_equivalence_key`` -> a **new slot** -> **GENERATE**.
-  The same family set at the same call site -> **REUSE** + verify.
+- ``infer_templates`` uses ``@semiformal`` with a ``#>`` STATEMENT_BLOCK (ellipsis
+  assignment). Spec text is static; ``bodies`` carries the grouped families. Same
+  spec + new data -> **REUSE** + verify (or ADAPT on verify failure).
+
+- Optional workflow (**STAGE 6** in ``apache-log-usecase.md``): after GENERATE,
+  promote important ``#<`` reasoning lines into ``#>`` lines so they become part
+  of the slot spec and are preserved across skeleton updates; re-run with
+  ``--fresh`` or let ADAPT pick up the new contract.
 
 The formal parts (prefix regex, ``CompiledParser``, batch parsing, error reporting)
 never invoke the agent. They are ordinary Python.
@@ -34,6 +38,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from dataclasses import dataclass
 from semipy import configure, semi, semiformal
 
 # ---------------------------------------------------------------------------
@@ -144,6 +149,12 @@ def print_status_report(events: list[dict[str, Any]], *, label: str = "") -> Non
 # Semiformal pipeline class
 # ---------------------------------------------------------------------------
 
+@dataclass
+class FamilyTemplate:
+    family: str
+    pattern: str
+    fields: dict[str, str]
+
 
 class ApacheLogPipeline:
     """
@@ -154,32 +165,43 @@ class ApacheLogPipeline:
 
     @semiformal
     def classify_body(self, body: str) -> str:
+        #< [Task] normalize first, classify by signatures
         text = "" if body is None else str(body).strip()
         lower = text.lower()
+        #< [Given] casing noise should not affect matches
         
         #> Classify this Apache error log body into a short snake_case event family name.
         if not lower:
+            #> [When] ....
             return "unknown"
-        #> other conditions for other families like worker_init, jk_error, scoreboard_found, etc.
+        elif ...:
+            #< [But] prefer specific patterns before generic ones
+            return ... #> other conditions for other families
         
-        return family  # type: ignore[name-defined]
+        #< [Verify] fallback family exists on unmatched bodies
+        return family
 
-    def infer_templates(self, families_and_bodies: dict[str, list[str]]) -> list[dict]:
-        families_text = ""
-        for fam, fam_bodies in sorted(families_and_bodies.items()):
-            samples = "\n".join(f"    - {b}" for b in sorted(set(fam_bodies))[:15])
-            families_text += f"\n  {fam}:\n{samples}"
 
-        return semi(f"""
-            For each event family, create a Python regex that matches the entire body string.
-            Use named capture groups for variable parts only (keep stable tokens literal).
-            Return a list of dicts with keys: family (str), pattern (str),
-            fields (dict mapping group name to type like 'int' or 'str').
+    @semiformal
+    def infer_templates(self, bodies: dict[str, list[str]]) -> list[FamilyTemplate]:
+        templates = ... #> For each event family, create a Python regex that matches the entire body string.
+
+        #> Return a list of dicts with keys: family (str), pattern (str), fields (dict mapping group name to type like 'int' or 'str').
+        return [
+            FamilyTemplate(family=fam, pattern=pattern, fields=fields)
+            for fam, pattern, fields in templates
+        ]
+
+        # return semi(f"""
+        #     For each event family, create a Python regex that matches the entire body string.
+        #     Use named capture groups for variable parts only (keep stable tokens literal).
+        #     Return a list of dicts with keys: family (str), pattern (str),
+        #     fields (dict mapping group name to type like 'int' or 'str').
             
-            Families and example bodies:{families_text}
-            """,
-            expected_type=list,
-        )
+        #     Families and example bodies:{families_text}
+        #     """,
+        #     expected_type=list,
+        # )
 
 
 # ---------------------------------------------------------------------------
@@ -236,7 +258,7 @@ def run_stage_2(family_map: dict[str, str]) -> list[dict]:
     templates = pipeline.infer_templates(grouped)
     print(f"\n[STAGE 2] {len(templates)} templates generated.")
     for t in templates:
-        print(f"  {t.get('family', '?')}: {t.get('pattern', '?')[:60]}...")
+        print(f"  {t.family}: {t.pattern[:60]}...")
     return templates
 
 
@@ -338,7 +360,7 @@ def main() -> None:
     parser.add_argument("--log", type=Path, default=DEFAULT_LOG)
     args = parser.parse_args()
 
-    configure(verbose=False)
+    configure(verbose=True)
     if args.fresh:
         _clear_cache()
 

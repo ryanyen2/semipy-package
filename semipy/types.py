@@ -146,6 +146,7 @@ class Decision(Enum):
     FORK = "fork"
     GENERATE = "generate"
     MERGE = "merge"
+    INSTANTIATE = "instantiate"
 
 
 @dataclass
@@ -198,6 +199,8 @@ class GenerationSpec:
     # When ADAPT is triggered by verify_runtime_execution failure, this carries the error so the
     # generation prompt can explain *why* the previous implementation was rejected.
     verify_failure_context: str | None = None
+    # Optional: prior sketch / pattern context when ADAPT follows a failed INSTANTIATE or operator mismatch.
+    sketch_context: str | None = None
 
 
 @dataclass

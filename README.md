@@ -1,6 +1,6 @@
 # semipy
 
-Runtime semiformal system: use the `@semiformal` decorator and `semi()` to express underspecified logic (e.g. natural-language conditions or extraction rules). The first time a `semi()` expression runs, an **agentic pipeline** (OpenRouter + pydantic_ai with tools) generates a Python function; that function is validated and cached. Later calls reuse the cached implementation, so there are no per-row LLM invocations.
+Runtime semiformal system: use the `@semiformal` decorator and `semi()` to express underspecified logic (natural-language conditions, extraction rules, ellipsis regions in methods). The first time a slot runs, an **agentic pipeline** (OpenRouter + pydantic_ai with tools) generates a Python function; it is validated, committed to a versioned portal, and written to a dispatch module. Later calls **reuse** that implementation with optional runtime verification, so routine work is not re-sent to the model.
 
 ## Setup with uv
 
@@ -28,6 +28,7 @@ uv run python examples/use_csv_kit.py
 uv run python examples/use_weather_kit.py
 uv run python examples/use_sponsorship_canonicalizer.py
 uv run python examples/use_contract_intelligence.py
+uv run python examples/apache_log_semiformal_stages.py --stage 1
 ```
 
 To run without activating the venv:
@@ -38,9 +39,12 @@ uv run python examples/use_csv_kit.py
 
 ## Configuration
 
-- Set **OPENROUTER_API_KEY** in the environment or in a `.env` file in the project root (required for generation).
+- **OPENROUTER_API_KEY** in the environment or in a `.env` file at the project root (required for generation).
 - Optional: **E2B_API_KEY** for sandboxed gist execution; without it, a subprocess fallback is used.
-- Optional: `semipy.configure(...)` to set `openrouter_model`, `validator_model`, `cache_dir`, `max_retries`, `use_e2b`, `gist_timeout`, `verbose`, `session_source`, etc. Unknown keys are ignored.
+- Optional: **SEMIPY_PIPELINE_TRACE** (`1` / `true` / `yes`) for full prompt, reasoning, and tool-call dumps after each generation (environment only).
+- Optional: **SEMIPY_SESSION_SOURCE** to pin portal identity for notebooks (see `CLAUDE.md`).
+- Optional: **SEMIPY_DOCUMENT_PDF_BACKEND**, **SEMIPY_DOCUMENT_LAYOUT_HEAVY** when passing PDF paths into slots (see `CLAUDE.md`).
+- `semipy.configure(...)` for `openrouter_model`, `validator_model`, `cache_dir`, `max_retries`, `use_e2b`, `gist_timeout`, `verbose`, `session_source`, and other `SemiConfig` fields. Unknown keys are ignored.
 
 ## Usage
 
@@ -51,20 +55,30 @@ from semipy import semiformal, semi
 def filter_errors(rows):
     return [r for r in rows if semi(f"is {repr(r['level'])} an error or warning?")]
 
-# First run: agent generates and caches a predicate (streaming reasoning and tool calls in the terminal).
-# Later runs: use cached function only.
+# First run: agent generates, validates, and caches a predicate (streaming output in the terminal by default).
+# Later runs: load cached implementation from the dispatch module; verify when inputs change.
 ```
 
-See `examples/use_csv_kit.py`, `examples/csv_kit/table.py`, `examples/use_weather_kit.py`, `examples/weather_kit/ops.py`, `examples/use_sponsorship_canonicalizer.py`, and `examples/use_contract_intelligence.py` for patterns.
+In `@semiformal` methods you can use `#>` comment blocks and inline `#>` on `...` placeholders for STATEMENT_BLOCK slots, optional `#<` reasoning lines (see `CLAUDE.md`), and `semi(...)` for EXPRESSION slots.
 
-## Cache
+See `examples/use_csv_kit.py`, `examples/csv_kit/table.py`, `examples/use_weather_kit.py`, `examples/weather_kit/ops.py`, `examples/use_sponsorship_canonicalizer.py`, `examples/use_contract_intelligence.py`, and `examples/apache-log-usecase.md` (with `examples/apache_log_semiformal_stages.py`) for fuller patterns.
 
-Generated functions are stored under `.semiformal/runtime/` (by default) as one `.semi.py` file per source file (session), plus a JSON portal (`.semiformal/{session_id}.portal.json`). Each call-site slot keeps one active implementation; all usages in that slot map to it. Delete `.semiformal/` to force regeneration.
+## Artifacts and cache
+
+- **Portal**: `.semiformal/{session_id}.portal.json` stores the DAG (slots, commits, branches, refs).
+- **Dispatch module**: `.semiformal/runtime/{module_name}.semi.py` holds generated function source for import.
+- Deleting `.semiformal/` forces regeneration (use the library’s cache-clear helpers where provided in examples).
 
 ## Architecture (summary)
 
-- **Resolution**: Cache key is (site_id, template hash, constants). Resolution yields REUSE (cached), ADAPT (same structure, new params), or GENERATE (new implementation).
-- **Generation**: When not REUSE, a pydantic_ai Agent (OpenRouter) runs with tools: profile_data_and_flow, read_upstream_context, read_file_context, build_and_run_gist, validate_output. Reasoning and tool calls stream to the terminal. The agent produces a Python function; it is validated (AST, type, execution) and then cached.
-- **Gist validation**: Optional sandbox run (E2B or subprocess) assembles a minimal script from user context + generated function and executes it for extra confidence.
+- **Lowering** (`semipy/lowering.py`): Finds `#>` blocks, inline specs, and `semi()` calls; builds `SlotSpec` (including `spec_equivalence_key` for durable meaning). `#<` lines are stripped for identity so annotations do not churn slot ids.
+- **Resolution** (`semipy/resolver.py`, `semipy/slot_resolver.py`): REUSE cached implementation when equivalence and verification allow; ADAPT from a parent commit when verify fails; GENERATE when needed. Cross-call-site **donor** REUSE matches the same equivalence key. Runtime PDF paths can be materialized to text at the slot boundary (`semipy/documents.py`).
+- **Generation** (`semipy/agents/`): `SemiAgent.generate` runs a pydantic_ai agent with tools (`profile_data_and_flow`, `read_upstream_context`, `read_file_context`, `read_document_context`, `build_and_run_gist`, `validate_output`, etc.). Output is validated (`agents/validator.py`) and committed (`semipy/history/version_control.py`).
+- **Reactivity** (`semipy/reactivity/`): Optional `DependencyGraph`, `DataFlow`, and `attach_producer_flow` for downstream tracking.
+- **Library** (`semipy/library/`): Optional abstraction primitives (`load_library`, `AbstractionLibrary`, …).
 
-**Package layout**: Core entry points and types live in `semipy/` root; agentic pipeline in `semipy/agents/`, version control (Merkle DAG) in `semipy/history/`, and reactive data flow in `semipy/reactivity/`. See `CLAUDE.md` for full architecture and module roles.
+For slot identity, verify gates, Jupyter anchoring, STATEMENT_BLOCK typing, and `#<` / `#>` behavior, see **`CLAUDE.md`**.
+
+## Code conventions
+
+Use `from __future__ import annotations`, type hints, and `pathlib.Path` for I/O. Follow project rules in `.cursor/rules/` and `CLAUDE.md` (data-agnostic logic, no placeholder code, no emoji in code or docs).

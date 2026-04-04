@@ -305,10 +305,11 @@ class FluPipeCompiler:
         self.bootstrap_headers = bootstrap_headers
 
     def role_map(self) -> dict[str, int]:
-        #> For each string in self.bootstrap_headers, strip a leading ">" then split on "|" into tokens.
-        #> Map roles to token indices 0..n-1: strain_name, accession, subtype, collection_date, host, region, country, city.
-        #> Use -1 only if absent. Invariant tag: inv=2025-03-21-a.
-        return role_to_index  # type: ignore[name-defined]
+        for header in self.bootstrap_headers:
+            tokens = header.lstrip(">").split("|")
+            role_to_index = ... #> map the sequence of tokens based on their category
+        
+        return role_to_index
 
     def date_policy(self) -> str:
         #> One line: preferred date interpretation for this family (ISO vs partial vs flag ambiguous).

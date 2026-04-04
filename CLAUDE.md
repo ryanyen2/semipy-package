@@ -16,6 +16,8 @@ A runtime semiformal system. The `@semiformal` decorator and `semi()` let users 
 
 **Jupyter / IPython:** Code runs from a temp file whose basename changes every kernel restart (`.../ipykernel_*/NNNNNNNN.py`), which used to produce a new portal each time. `execute_slot` now resolves the portal anchor with `session_anchor.resolve_portal_anchor`: for paths containing `ipykernel`, the anchor is `os.getcwd()` (so the same working directory shares one portal and dispatch module). Override with `configure(session_source="/path/to/notebook.ipynb")` or env `SEMIPY_SESSION_SOURCE` when multiple notebooks share one cwd and need separate caches.
 
+**Reasoning surfaces (`#<`) vs slot spec (`#>`):** For `@semiformal` functions, `lowering.scan_informal_specs` builds `SlotSpec` from contiguous `#>` comment blocks, inline `#>` on `...` statements, and `semi(...)` calls. Text on `#<` lines is **not** part of `spec_text`. Before compilation, `strip_skeleton_lines` replaces each `#<` line with a single `#` placeholder line so absolute line numbers stay aligned and `_make_slot_id` can key slots by **ordinal** inside the function (inserting or refreshing `#<` lines does not mint a new slot id). After GENERATE/ADAPT, `agents/skeleton_writer` may write new `#<` lines into the user’s source file; `#>` lines are never overwritten by that pass. Users who want to **lock in** an inference note as contract text edit `#<` into `#>` (or add a `#>` line in the same contiguous block): that changes `spec_text` and thus `spec_equivalence_key`, so the next resolution may GENERATE or ADAPT. See `examples/apache-log-usecase.md` (STAGE 6) for a domain-motivated walkthrough.
+
 ## Commands
 
 ```bash
@@ -46,10 +48,11 @@ Pipeline messages use plain language (e.g. "No reusable implementation; creating
 
 ## Package layout
 
-- **Root** (`semipy/`): `types.py`, `models.py`, `decorator.py`, `template.py`, `semi_fn.py`, `resolver.py`, `store.py`, `documents.py` (internal: `load_document_text`, `materialize_runtime_document_inputs` at slot boundary; agent `read_document_context` uses the same loader). Not exported from `semipy.__init__`.
-- **agents/** (`semipy/agents/`): Agentic pipeline: config, agent, generator, gist, executor, validator, profiler, tools, console_io, console_messages (tool line formatters), console_view (terminal Live timeline + peek), compiler, resolution_advisor (stub schedule; cross-slot guard is execution verify). All LLM, tools, validation, and UX live here.
-- **history/** (`semipy/history/`): Version control (Merkle DAG): `version_control.py` with Commit, Branch, Slot, Portal; create_commit, add_commit_to_slot, walk_history, find_branch_by_fingerprint, etc.
-- **reactivity/** (`semipy/reactivity/`): Data flow and reactive invalidation: `reactive.py` (DependencyGraph, SlotRef, add_dependency, is_stale, mark_downstream_stale, persistence); `flow.py` (DataFlow, create_flow, extract_flow, profile_output, `attach_producer_flow` so list outputs can carry `_semi_flow` for downstream slot edges).
+- **Root** (`semipy/`): Core types (`types.py`, `models.py`, `domain_models.py`), entry points (`decorator.py`, `semi_fn.py`), lowering (`lowering.py`: `#>` / `#<`, `scan_informal_specs`, scaffolds), templates (`template.py`), resolution (`resolver.py`), orchestration (`slot_resolver.py`: `execute_slot`, portal load, verify, materialize documents), persistence (`store.py`: dispatch module, active commit), documents (`documents.py`), session identity (`session_anchor.py`), fingerprints (`runtime_fingerprint.py`), pydantic helpers (`type_adapter.py`), utilities (`dataclass_utils.py`), optional inspection (`portal_inspect.py`). Most are not exported from `semipy.__init__`; see each module’s docstrings.
+- **agents/** (`semipy/agents/`): Agentic pipeline: `config`, `agent` (`SemiAgent.generate`), `generator` (pydantic_ai Agent + tools), `gist` / `executor`, `validator`, `profiler`, `tools`, `compiler`, `slot_call` (bind + invoke), `skeleton_writer` (`#<` file updates), `decision` (evidence helpers), `source_context`, `console_io`, `console_messages`, `console_view`, `resolution_advisor` (stub schedule; cross-slot guard is execution verify), `llm_utils`.
+- **history/** (`semipy/history/`): Version control (Merkle DAG): `version_control.py` (Commit, Branch, Slot, Portal; create_commit, add_commit_to_slot, walk_history, branch heads).
+- **library/** (`semipy/library/`): Optional abstraction library: `abstractions.py`, `compression.py`, `pattern_mining.py`, `injection.py`, `sleep.py`, `store.py`; loaded via `load_library` (exported).
+- **reactivity/** (`semipy/reactivity/`): Data flow: `reactive.py` (DependencyGraph, SlotRef, staleness, persistence), `flow.py` (DataFlow, `attach_producer_flow`), `observer.py`, `events.py`, `propagation.py`, `impact.py`.
 
 ## Architecture
 
@@ -87,9 +90,17 @@ Pipeline messages use plain language (e.g. "No reusable implementation; creating
 
 ### Cache model (DAG versioning)
 
-- One portal per session: `.semiformal/{session_id}.portal.json` with full DAG.
-- Dispatch module: `.semiformal/runtime/{module_name}.semi.py`; **one implementation per slot** (active commit = head of default_branch or most recent ref'd commit); all usage_ids in the slot map to that one function name.
-- Resolution: refs[usage_id] -> REUSE; else operation_signature match -> REUSE (and add ref); else branch with same fingerprint -> ADAPT; else GENERATE.
+- One portal per session: `.semiformal/{session_id}.portal.json` with full DAG (slots, commits, branches, refs).
+- Dispatch module: `.semiformal/runtime/{module_name}.semi.py`; **one active implementation per slot** (newest branch head across branches); compiled Python for each commit is emitted here for import.
+- Resolution (simplified): match `spec_equivalence_key` for cross-slot **donor** REUSE; same slot with existing commits -> REUSE if verify passes (optionally skip verify when runtime input fingerprint matches); fingerprint or signature mismatch on a branch -> ADAPT; empty slot / no match -> GENERATE. `refs[usage_id]` short-circuits to a known commit when present.
+
+### End-user flow (typical)
+
+1. Author `@semiformal` code with `#>` blocks and/or `semi(f"...")`, or standalone `semi()` in normal functions.
+2. First execution: `execute_slot` -> `resolver.resolve` -> GENERATE -> `SemiAgent.generate` -> validate -> `create_commit` -> save portal -> write dispatch module -> run generated function.
+3. Later executions: REUSE imported function; optional `verify_runtime_execution` unless fingerprint matches; on failure, ADAPT with `verify_failure_context` in the prompt.
+4. Optional: skeleton writer adds `#<` lines for traceability; user may promote lines to `#>` to change the contract.
+5. Jupyter users rely on `session_anchor` (cwd for `ipykernel`); file-backed scripts use normalized source path for portal identity.
 
 ### Public API
 
@@ -106,7 +117,7 @@ Exports from `semipy/__init__.py`: `semiformal`, `semi`, `SemiConfig`, `configur
 - LLM model references: use OpenRouter model ids (e.g. anthropic/claude-sonnet-4-6); see config.validator_model for fast validation model.
 - Use Context7 MCP for library/API documentation when needed.
 - Prefer existing dependencies; introduce new ones only with user awareness.
-- **Type checking**: Generated function return values are validated with `isinstance`; when pydantic is available, `TypeAdapter(expected_type)` is used to produce clearer validation errors.
+- **Type checking**: Generated function return values are validated with `isinstance`; when pydantic is available, prefer `semipy.type_adapter.type_adapter_for(expected_type)` over raw `TypeAdapter` so namespaces match the defining module (see STATEMENT_BLOCK section above).
 - When testing the code, act an user and actually using theagentic tool you builtin to run, inspect ande debug; the goal is not to see if the code runs, but to see if the output is what you expected.
 
 ## Rules

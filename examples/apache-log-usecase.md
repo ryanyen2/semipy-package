@@ -18,7 +18,7 @@ or regenerate.
 
 | File | Purpose |
 |------|---------|
-| `apache_log_semiformal_stages.py` | Single-file demo: formal helpers + `ApacheLogPipeline` class with `@semiformal` and `semi()` slots, five stages |
+| `apache_log_semiformal_stages.py` | Single-file demo: formal helpers + `ApacheLogPipeline` with two `@semiformal` methods (`#>` blocks + optional `#<` reasoning), six documented stages (stage 6 is a manual spec-refinement workflow) |
 | `data/Apache_2k.log` | 2000-line Apache error log |
 
 ## Pipeline decomposition
@@ -37,6 +37,13 @@ The pipeline has two layers:
 
 ### Semiformal layer (LLM on first call, then cached)
 
+**`#>` vs `#<`:** Lines starting with `#>` are the **durable natural-language spec**
+for a STATEMENT_BLOCK (hashed into `spec_text` / `spec_equivalence_key`). Lines
+starting with `#<` are **reasoning surfaces** the pipeline may insert after
+generation; they are stripped when lowering so they do not change slot identity.
+You can **promote** content from `#<` to `#>` to lock it into the contract (see
+STAGE 6).
+
 Two specs, two different styles:
 
 1. **`classify_body`** -- `@semiformal` decorator with `#>` STATEMENT_BLOCK.
@@ -46,18 +53,19 @@ Two specs, two different styles:
    - Source: [`semipy/decorator.py`](../semipy/decorator.py) (decorator),
      [`semipy/lowering.py`](../semipy/lowering.py) (scan `#>` blocks)
 
-2. **`infer_templates`** -- standalone `semi()` with f-string EXPRESSION.
-   The prompt text changes when the family set changes (different `families_text`
-   value interpolated into the f-string). However, the static template parts and
-   variable name (`families_text`) remain the same, so the
-   `spec_equivalence_key` stays constant. This means:
-   - Same call site, same input -> REUSE (same fingerprint, skip verify)
-   - Same call site, different input -> REUSE + verify (fingerprint differs)
-   - Verify passes -> reuse the cached function with new data
-   - Verify fails -> ADAPT (regenerate from the parent implementation)
-   - Source: [`semipy/semi_fn.py`](../semipy/semi_fn.py) (template decomposition),
-     [`semipy/resolver.py`](../semipy/resolver.py) (REUSE / ADAPT / GENERATE logic),
-     [`semipy/slot_resolver.py`](../semipy/slot_resolver.py) (verify + fingerprint)
+2. **`infer_templates`** -- `@semiformal` with a `#>` STATEMENT_BLOCK (ellipsis
+   assignment to `templates`). The **spec text** is the contiguous `#>` comment
+   block plus inline `#>` tails; it is **static** in source. The **family set and
+   example bodies** arrive as the `bodies` parameter, so new data still resolves
+   to REUSE with the same `spec_equivalence_key`, then verify runs unless the
+   runtime input fingerprint matches the commit:
+   - Same call site, same `bodies` shape/content fingerprint -> REUSE (may skip verify)
+   - Same call site, different grouped bodies -> REUSE + verify
+   - Verify passes -> cached function runs on the new data
+   - Verify fails -> ADAPT (regenerate with parent source + failure context)
+   - Source: [`semipy/lowering.py`](../semipy/lowering.py) (`#>` blocks),
+     [`semipy/resolver.py`](../semipy/resolver.py),
+     [`semipy/slot_resolver.py`](../semipy/slot_resolver.py)
 
 ## Decision map
 
@@ -104,7 +112,7 @@ Two specs, two different styles:
 | Same template, same input fingerprint | REUSE (skip verify) | No |
 | Same template, different input values | REUSE + verify | No |
 | Verify fails (execution error, type mismatch, empty output) | ADAPT | Yes |
-| f-string text changes (new families in prompt) | same slot (static template unchanged) | depends on verify |
+| Edited `#>` spec text (e.g. promoted a line from `#<`) | new `spec_equivalence_key` | GENERATE or ADAPT |
 | New call site, same `spec_equivalence_key` | REUSE (donor slot) | No |
 | Malformed log lines | Formal parser (PREFIX_FAIL) | No |
 | Body has no matching regex | Formal parser (UNSEEN_TEMPLATE) | No |
@@ -154,6 +162,41 @@ NOT re-invoked. The formal parser reports PREFIX_FAIL for unparseable lines.
 
 **Expected output**: 4 PREFIX_FAIL for bad lines, rest unchanged.
 
+### STAGE 6 -- Promote `#<` reasoning into durable `#>` spec (manual)
+
+This stage is **not** a separate CLI flag; it is the workflow for turning
+**inference annotations** into **contract text** the pipeline will always see.
+
+After a GENERATE (or ADAPT), the agent may write **reasoning surfaces** into your
+source as `#< ...` comments via [`semipy/agents/skeleton_writer.py`](../semipy/agents/skeleton_writer.py).
+Those lines are **not** part of the slot’s `spec_text`: lowering only hashes
+contiguous `#>` lines (and inline `#>` tails) for the STATEMENT_BLOCK. Before each
+run, `#<` lines are **stripped** to single-character `#` placeholders in
+[`strip_skeleton_lines`](../semipy/lowering.py) so line numbers and slot
+**ordinals** stay stable without minting a new slot id when annotations churn.
+
+**Why promote?** In the Apache demo, `classify_body` might get `#< [But] prefer
+specific mod_jk signatures before generic worker init` after the first compile.
+That is useful narrative, but it is **ephemeral** in the sense above until you
+**commit it to the spec**: add the same idea as a **`#>` line** in the same
+contiguous `#>` block as the main classifier prompt (or change a `#<` prefix to
+`#>` **if** that line sits next to other `#>` lines so it becomes part of the
+block). Then:
+
+- The text is **preserved** as user spec: the skeleton writer does not overwrite
+  `#>` lines; only `#<` is managed.
+- `spec_text` changes, so `spec_equivalence_key` changes: the next run is a new
+  contract---typically **GENERATE** if you cleared the cache, or **ADAPT** when
+  verification fails against the old implementation under the new spec.
+
+**Concrete SRE motivation**: you reviewed misclassified bootstrap bodies and
+want the classifier to treat **scoreboard** lines and **mod_jk child** lines as
+distinct families before falling back. You move that disambiguation from a `#<`
+note into a `#>` line so every future generation and adaptation sees it as part
+of the formal NL contract, not as optional commentary.
+
+Re-run classification after editing (e.g. `uv run python apache_log_semiformal_stages.py --fresh --stage 1`) so the portal picks up the richer `#>` spec.
+
 ## Data patterns in Apache_2k.log
 
 The first ~120 lines contain three body families:
@@ -188,7 +231,9 @@ Edge cases added in STAGE 4:
 | [`semipy/agents/agent.py`](../semipy/agents/agent.py) | `SemiAgent.generate`: build prompt, stream LLM, validate |
 | [`semipy/agents/validator.py`](../semipy/agents/validator.py) | `validate` (generation time) and `verify_runtime_execution` (reuse time) |
 | [`semipy/agents/slot_call.py`](../semipy/agents/slot_call.py) | `bind_slot_arguments`, `invoke_slot`: positional fallback for name mismatch |
+| [`semipy/agents/skeleton_writer.py`](../semipy/agents/skeleton_writer.py) | Optional post-commit write of `#<` reasoning lines into user source |
 | [`semipy/runtime_fingerprint.py`](../semipy/runtime_fingerprint.py) | `compute_runtime_input_fingerprint`: hash runtime values for verify gating |
+| [`semipy/session_anchor.py`](../semipy/session_anchor.py) | Portal anchor for Jupyter (`ipykernel`) vs file-backed sessions |
 | [`semipy/history/version_control.py`](../semipy/history/version_control.py) | Commit, Slot, Portal DAG, branch management |
 
 ## Running

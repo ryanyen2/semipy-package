@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import ast
+import json
+import threading
+import traceback
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -8,6 +12,7 @@ from semipy.agents.agent import SemiAgent
 from semipy.agents.slot_call import invoke_slot
 from semipy.agents.config import get_config
 from semipy.agents.console_io import print_pipeline_log
+from semipy.agents.compiler import _compile_source
 from semipy.agents.validator import verify_runtime_execution
 from semipy.history.version_control import (
     Slot,
@@ -36,6 +41,14 @@ import inspect as _inspect
 
 from semipy.agents.profiler import _is_collection_like
 from semipy.documents import materialize_runtime_document_inputs
+from semipy.library.binding import extract_binding_async
+from semipy.library.sketch import (
+    build_code_sketch_from_commit,
+    instantiate_sketch_code,
+    merge_sketch_into_library,
+    validate_instantiated_source,
+)
+from semipy.library.sketch_store import load_sketch_library, save_sketch_library
 from semipy.store import (
     function_name_for_commit,
     load_function_from_dispatch_by_slot_id,
@@ -61,6 +74,50 @@ from semipy.types import (
 _dispatch_globals_cache: dict[str, dict[str, Any]] = {}
 
 _OBSERVATION_MAX_PER_KEY = 100
+_REUSE_VERIFY_MAX_SAMPLES = 50
+_REUSE_VERIFY_MAX_PER_KEY = 40
+
+
+def _sample_input_signature(sample_input: dict[str, Any]) -> str:
+    try:
+        return json.dumps(
+            {"args": sample_input.get("args"), "kwargs": sample_input.get("kwargs")},
+            default=str,
+            sort_keys=True,
+        )
+    except Exception:
+        return repr(sample_input)
+
+
+def _reuse_verify_sample_inputs(
+    slot_spec: SlotSpec,
+    slot: Any,
+    runtime_values: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Build distinct sample_input dicts: current invocation plus recorded observations per free variable."""
+    primary = _runtime_sample_input(slot_spec, runtime_values)
+    samples: list[dict[str, Any]] = [primary]
+    seen: set[str] = {_sample_input_signature(primary)}
+    obs = getattr(slot, "input_observation_samples", None)
+    if not isinstance(obs, dict):
+        return samples
+    for name in slot_spec.free_variables:
+        if name not in obs:
+            continue
+        vals = obs[name]
+        if not isinstance(vals, list):
+            continue
+        for v in vals[:_REUSE_VERIFY_MAX_PER_KEY]:
+            rv = dict(runtime_values)
+            rv[name] = v
+            si = _runtime_sample_input(slot_spec, rv)
+            sig = _sample_input_signature(si)
+            if sig not in seen:
+                seen.add(sig)
+                samples.append(si)
+                if len(samples) >= _REUSE_VERIFY_MAX_SAMPLES:
+                    return samples
+    return samples
 
 
 def _runtime_value_observation_str(val: Any) -> str:
@@ -442,6 +499,7 @@ def build_generation_spec(
     current_slot_ref: SlotRef,
     source_file_imports: list[str],
     verify_failure_context: str | None = None,
+    sketch_context: str | None = None,
 ) -> GenerationSpec:
     call_site = _call_site_from_slot(slot_spec)
 
@@ -488,6 +546,7 @@ def build_generation_spec(
         session_input_observations=session_obs,
         runtime_profile_scalar_only=_runtime_profile_is_scalar_only(runtime_values),
         verify_failure_context=verify_failure_context,
+        sketch_context=sketch_context,
     )
 
 
@@ -496,6 +555,50 @@ def _runtime_sample_input(slot_spec: SlotSpec, runtime_values: dict[str, Any]) -
         args = [runtime_values.get(n) for n in slot_spec.free_variables]
         return {"args": tuple(args), "kwargs": {}, "runtime_values": dict(runtime_values)}
     return {"args": tuple(), "kwargs": {}, "runtime_values": {}}
+
+
+def _schedule_sketch_binding_extraction(
+    *,
+    spec_text: str,
+    generated_source: str,
+    commit_id: str,
+    slot_spec: SlotSpec,
+    cache_dir: Path,
+    session_id: str,
+    portal_anchor: str,
+    module_name: str,
+    slot_id: str,
+) -> None:
+    """Background LLM binding extraction; failures are ignored."""
+
+    def _worker() -> None:
+        try:
+            import asyncio
+
+            binding = asyncio.run(extract_binding_async(spec_text, generated_source))
+            if binding is None:
+                return
+            lib = load_sketch_library(cache_dir)
+            sketch = build_code_sketch_from_commit(
+                binding,
+                generated_source,
+                commit_id,
+                slot_spec.expected_category.value,
+                tuple(slot_spec.free_variables),
+            )
+            merge_sketch_into_library(lib, sketch, binding)
+            save_sketch_library(cache_dir, lib)
+            portal = load_portal(cache_dir, session_id, portal_anchor, module_name)
+            sl = portal.slots.get(slot_id)
+            if sl and commit_id in sl.commits:
+                c = sl.commits[commit_id]
+                sl.commits[commit_id] = replace(c, binding_id=binding.binding_id)
+                save_portal(cache_dir, portal)
+                write_dispatch_module(cache_dir, portal, sketch_library=lib)
+        except Exception:
+            pass
+
+    threading.Thread(target=_worker, daemon=True, name="semipy-sketch-binding").start()
 
 
 def _call_generated_fn(
@@ -580,11 +683,138 @@ def execute_slot(
         slot.advisor_state = adv
         save_portal(cache_dir, portal)
 
-    resolution = resolve(portal, slot_spec, force_regenerate=force_regenerate)
+    sketch_library = load_sketch_library(cache_dir)
+    resolution = resolve(
+        portal,
+        slot_spec,
+        force_regenerate=force_regenerate,
+        sketch_library=sketch_library,
+    )
 
     source_file_imports = _extract_source_file_imports(source_file)
 
     _verify_failure_msg: str | None = None
+    _sketch_context: str | None = None
+
+    if resolution.decision == Decision.INSTANTIATE and resolution.sketch_id:
+        sk = sketch_library.sketches.get(resolution.sketch_id)
+        hv = resolution.sketch_hole_values or {}
+        src = ""
+        instant_ok = False
+        fn_try = None
+        if sk is not None:
+            src = instantiate_sketch_code(sk, hv)
+            if validate_instantiated_source(src):
+                try:
+                    fn_try = _compile_source(src)
+                except Exception as ex:
+                    _verify_failure_msg = str(ex).strip()
+                if fn_try is not None:
+                    vr_last = None
+                    for sample_in in _reuse_verify_sample_inputs(
+                        slot_spec, slot, runtime_values
+                    ):
+                        vr_last = verify_runtime_execution(
+                            fn=fn_try,
+                            expected_type=slot_spec.expected_type,
+                            sample_input=sample_in,
+                            slot_category=slot_spec.expected_category,
+                            output_names=list(slot_spec.output_names or []),
+                            enable_execution=True,
+                            free_variables=list(slot_spec.free_variables),
+                            usage_hints=list(slot_spec.usage_hints or []),
+                        )
+                        if not vr_last.passed:
+                            break
+                    if vr_last is not None and vr_last.passed:
+                        instant_ok = True
+                    elif vr_last is not None:
+                        _verify_failure_msg = (vr_last.error_message or "").strip()
+            else:
+                _verify_failure_msg = "instantiated sketch source failed syntax validation"
+        if instant_ok and sk is not None and fn_try is not None:
+            dispatch_path = _dispatch_module_path(cache_dir, module_name)
+            try:
+                result = _call_generated_fn(
+                    fn=fn_try,
+                    slot_spec=slot_spec,
+                    runtime_values=runtime_values,
+                    prompt_preview=slot_spec.spec_text,
+                    generated_path=str(dispatch_path),
+                )
+            except SemiCallError as e:
+                cause = e.__cause__
+                if cause is not None:
+                    _verify_failure_msg = "".join(
+                        traceback.format_exception_only(type(cause), cause)
+                    ).strip()
+                else:
+                    _verify_failure_msg = str(e)
+                instant_ok = False
+            else:
+                parent_ids = tuple(sk.source_commit_ids[-1:]) if sk.source_commit_ids else ()
+                branch_name = "main" if not slot.commits else f"b_{slot_spec.spec_hash[:8]}"
+                commit = create_commit(
+                    parent_ids,
+                    src,
+                    slot_spec.spec_hash,
+                    freeze_constants({}),
+                    slot_spec.spec_text,
+                    Decision.INSTANTIATE.name,
+                    usage_id=slot_spec.slot_id,
+                    runtime_input_fingerprint=compute_runtime_input_fingerprint(runtime_values),
+                    binding_id=sk.binding_id or "",
+                )
+                add_commit_to_slot(slot, commit, branch_name, usage_id=slot_spec.slot_id)
+                slot.spec_hash = slot_spec.spec_hash
+                slot.slot_spec = _slot_spec_snapshot(slot_spec)
+                sk2 = sketch_library.sketches.get(sk.sketch_id)
+                if sk2 is not None:
+                    sk2.instantiation_count += 1
+                    sk2.validated = True
+                save_sketch_library(cache_dir, sketch_library)
+                if dep_graph is not None:
+                    update_slot_commit(dep_graph, current_slot_ref, commit.commit_id)
+                    clear_stale(dep_graph, current_slot_ref)
+                    save_dependency_graph(cache_dir, dep_graph)
+                write_dispatch_module(cache_dir, portal, sketch_library=sketch_library)
+                save_portal(cache_dir, portal)
+                _dispatch_globals_cache.pop(module_name, None)
+                if config.verbose:
+                    print_pipeline_log(
+                        _call_site_from_slot(slot_spec),
+                        "instantiate",
+                        "Reusing learned pattern with parameter substitution; no generation needed.",
+                    )
+                if dep_graph is not None:
+                    upstream_chain = []
+                    for val in runtime_values.values():
+                        flow = extract_flow(val)
+                        if flow is not None:
+                            upstream_chain.append(flow.producing_slot)
+                    result = attach_producer_flow(
+                        result,
+                        create_flow(
+                            session_id=session_id,
+                            slot_id=slot_spec.slot_id,
+                            commit_id=commit.commit_id,
+                            upstream_chain=upstream_chain,
+                            output_profile=profile_output(result),
+                        ),
+                    )
+                return result
+        if not instant_ok:
+            tmpl = getattr(sk, "spec_template", "") if sk is not None else ""
+            _sketch_context = (
+                f"Sketch spec template: {tmpl}\n"
+                f"Instantiated source:\n{src[:8000]}"
+            )
+            resolution = resolve(
+                portal,
+                slot_spec,
+                force_regenerate=True,
+                sketch_library=sketch_library,
+            )
 
     if resolution.decision == Decision.REUSE and resolution.commit_id is not None:
         dispatch_slot_id = resolution.reuse_dispatch_slot_id or slot_spec.slot_id
@@ -616,19 +846,26 @@ def execute_slot(
                 skip_verify = bool(stored_fp) and stored_fp == current_fp
 
                 if do_verify and not skip_verify:
-                    sample_in = _runtime_sample_input(slot_spec, runtime_values)
-                    vr = verify_runtime_execution(
-                        fn=fn,
-                        expected_type=slot_spec.expected_type,
-                        sample_input=sample_in,
-                        slot_category=slot_spec.expected_category,
-                        output_names=list(slot_spec.output_names or []),
-                        enable_execution=True,
-                        free_variables=list(slot_spec.free_variables),
-                        usage_hints=list(slot_spec.usage_hints or []),
-                    )
-                    if not vr.passed:
-                        _verify_failure_msg = (vr.error_message or "").strip()
+                    vr_last = None
+                    for sample_in in _reuse_verify_sample_inputs(
+                        slot_spec, slot, runtime_values
+                    ):
+                        vr_last = verify_runtime_execution(
+                            fn=fn,
+                            expected_type=slot_spec.expected_type,
+                            sample_input=sample_in,
+                            slot_category=slot_spec.expected_category,
+                            output_names=list(slot_spec.output_names or []),
+                            enable_execution=True,
+                            free_variables=list(slot_spec.free_variables),
+                            usage_hints=list(slot_spec.usage_hints or []),
+                        )
+                        if not vr_last.passed:
+                            break
+                    if vr_last is None or not vr_last.passed:
+                        _verify_failure_msg = (
+                            (vr_last.error_message or "").strip() if vr_last else ""
+                        )
                         if config.verbose:
                             err = _verify_failure_msg.replace("\n", " ")
                             if len(err) > 160:
@@ -709,48 +946,72 @@ def execute_slot(
                         )
 
                 if not force_regenerate:
-                    result = _call_generated_fn(
-                        fn=fn,
-                        slot_spec=slot_spec,
-                        runtime_values=runtime_values,
-                        prompt_preview=slot_spec.spec_text,
-                        generated_path=str(dispatch_path),
-                    )
-
-                    if dep_graph is not None:
-                        upstream_chain = []
-                        for val in runtime_values.values():
-                            flow = extract_flow(val)
-                            if flow is not None:
-                                upstream_chain.append(flow.producing_slot)
-                        result = attach_producer_flow(
-                            result,
-                            create_flow(
-                                session_id=session_id,
-                                slot_id=slot_spec.slot_id,
-                                commit_id=commit.commit_id,
-                                upstream_chain=upstream_chain,
-                                output_profile=profile_output(result),
-                            ),
+                    try:
+                        result = _call_generated_fn(
+                            fn=fn,
+                            slot_spec=slot_spec,
+                            runtime_values=runtime_values,
+                            prompt_preview=slot_spec.spec_text,
+                            generated_path=str(dispatch_path),
                         )
-                        update_slot_commit(dep_graph, current_slot_ref, commit.commit_id)
-                        clear_stale(dep_graph, current_slot_ref)
-                        save_dependency_graph(cache_dir, dep_graph)
-                    if resolution.reuse_dispatch_slot_id:
-                        from semipy.resolver import list_equivalence_donors
-
-                        donors = list_equivalence_donors(portal, slot_spec, slot_spec.slot_id)
-                        summaries: list[str] = []
-                        for s, c in donors[:12]:
-                            ci = s.call_site_info or {}
-                            summaries.append(
-                                f"commit_id={c.commit_id} slot_id={s.slot_id} "
-                                f"file={ci.get('filename', '')} line={ci.get('lineno', 0)}"
+                    except SemiCallError as e:
+                        cause = e.__cause__
+                        if cause is not None:
+                            _verify_failure_msg = "".join(
+                                traceback.format_exception_only(type(cause), cause)
+                            ).strip()
+                        else:
+                            _verify_failure_msg = str(e)
+                        if config.verbose:
+                            err = _verify_failure_msg.replace("\n", " ")
+                            if len(err) > 160:
+                                err = err[:157] + "..."
+                            print_pipeline_log(
+                                call_site,
+                                "reuse_verify",
+                                f"Cached implementation raised at runtime; adapting. {err}",
                             )
-                    return result
+                        force_regenerate = True
+                    else:
+                        if dep_graph is not None:
+                            upstream_chain = []
+                            for val in runtime_values.values():
+                                flow = extract_flow(val)
+                                if flow is not None:
+                                    upstream_chain.append(flow.producing_slot)
+                            result = attach_producer_flow(
+                                result,
+                                create_flow(
+                                    session_id=session_id,
+                                    slot_id=slot_spec.slot_id,
+                                    commit_id=commit.commit_id,
+                                    upstream_chain=upstream_chain,
+                                    output_profile=profile_output(result),
+                                ),
+                            )
+                            update_slot_commit(dep_graph, current_slot_ref, commit.commit_id)
+                            clear_stale(dep_graph, current_slot_ref)
+                            save_dependency_graph(cache_dir, dep_graph)
+                        if resolution.reuse_dispatch_slot_id:
+                            from semipy.resolver import list_equivalence_donors
+
+                            donors = list_equivalence_donors(portal, slot_spec, slot_spec.slot_id)
+                            summaries: list[str] = []
+                            for s, c in donors[:12]:
+                                ci = s.call_site_info or {}
+                                summaries.append(
+                                    f"commit_id={c.commit_id} slot_id={s.slot_id} "
+                                    f"file={ci.get('filename', '')} line={ci.get('lineno', 0)}"
+                                )
+                        return result
 
         if force_regenerate:
-            resolution = resolve(portal, slot_spec, force_regenerate=True)
+            resolution = resolve(
+                portal,
+                slot_spec,
+                force_regenerate=True,
+                sketch_library=sketch_library,
+            )
 
     # ADAPT / GENERATE
     generation_spec = build_generation_spec(
@@ -762,6 +1023,7 @@ def execute_slot(
         current_slot_ref=current_slot_ref,
         source_file_imports=source_file_imports,
         verify_failure_context=_verify_failure_msg,
+        sketch_context=_sketch_context,
     )
     entry = SemiAgent().generate(generation_spec)
 
@@ -795,13 +1057,24 @@ def execute_slot(
         clear_stale(dep_graph, current_slot_ref)
         save_dependency_graph(cache_dir, dep_graph)
 
-    write_dispatch_module(cache_dir, portal)
+    write_dispatch_module(cache_dir, portal, sketch_library=sketch_library)
     save_portal(cache_dir, portal)
     if resolution.decision in (Decision.GENERATE, Decision.ADAPT):
         from semipy.agents.skeleton_writer import surface_skeleton as _surface_skeleton
 
         # Run synchronously so script termination cannot drop the surface write.
         _surface_skeleton(slot_spec, entry, portal.source_file)
+        _schedule_sketch_binding_extraction(
+            spec_text=slot_spec.spec_text,
+            generated_source=entry.generated_source,
+            commit_id=commit.commit_id,
+            slot_spec=slot_spec,
+            cache_dir=cache_dir,
+            session_id=session_id,
+            portal_anchor=portal_anchor,
+            module_name=module_name,
+            slot_id=slot_spec.slot_id,
+        )
     _dispatch_globals_cache.pop(module_name, None)
 
     fn_name = function_name_for_commit(slot, commit)

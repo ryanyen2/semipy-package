@@ -10,6 +10,24 @@ from semipy.library.abstractions import AbstractionLibrary
 from semipy.library.compression import compress_pattern_async
 from semipy.library.pattern_mining import mine_patterns
 from semipy.library.store import load_library, save_library, write_library_runtime_module
+from semipy.library.sketch_store import load_sketch_library, save_sketch_library
+
+
+def _dedupe_sketch_structural_index(cache_dir: Path) -> None:
+    """Normalize structural_index lists (unique sketch ids per signature)."""
+    lib = load_sketch_library(cache_dir)
+    si: dict[str, list[str]] = {}
+    for sig, ids in lib.structural_index.items():
+        seen: set[str] = set()
+        out: list[str] = []
+        for i in ids:
+            if i not in seen:
+                seen.add(i)
+                out.append(i)
+        si[sig] = out
+    lib.structural_index = si
+    lib.version += 1
+    save_sketch_library(cache_dir, lib)
 
 
 def _collect_commits_from_portals(cache_dir: Path) -> list[tuple[str, str, str, str]]:
@@ -77,6 +95,10 @@ async def run_sleep_phase_async(
     library.version += 1
     save_library(cache_dir, library)
     write_library_runtime_module(cache_dir, library)
+    try:
+        _dedupe_sketch_structural_index(cache_dir)
+    except Exception:
+        pass
     if emit_event is not None:
         try:
             from semipy.reactivity.events import EventType, ReactiveEvent

@@ -75,6 +75,7 @@ def _commit_to_dict(c: Commit) -> dict[str, Any]:
         "decision": c.decision,
         "usage_id": c.usage_id or "",
         "runtime_input_fingerprint": getattr(c, "runtime_input_fingerprint", "") or "",
+        "binding_id": getattr(c, "binding_id", "") or "",
     }
 
 
@@ -93,6 +94,7 @@ def _commit_from_dict(d: dict[str, Any]) -> Commit:
         decision=d.get("decision", "GENERATE"),
         usage_id=d.get("usage_id", "") or "",
         runtime_input_fingerprint=str(d.get("runtime_input_fingerprint", "") or ""),
+        binding_id=str(d.get("binding_id", "") or ""),
     )
 
 
@@ -217,7 +219,11 @@ def _get_active_commit(slot: Slot) -> Optional[Commit]:
     return None
 
 
-def write_dispatch_module(cache_dir: Path, portal: Portal) -> tuple[Path, dict[str, tuple[int, int]]]:
+def write_dispatch_module(
+    cache_dir: Path,
+    portal: Portal,
+    sketch_library: Any | None = None,
+) -> tuple[Path, dict[str, tuple[int, int]]]:
     """
     Write dispatch module with one implementation per slot (active commit).
 
@@ -227,6 +233,14 @@ def write_dispatch_module(cache_dir: Path, portal: Portal) -> tuple[Path, dict[s
     Also populates `portal.spec_map[slot_id] = "<function_name>:<start>-<end>"`.
     Returns (path, fn_line_map).
     """
+    if sketch_library is None:
+        try:
+            from semipy.library.sketch_store import load_sketch_library
+
+            sketch_library = load_sketch_library(cache_dir)
+        except Exception:
+            sketch_library = None
+
     path = _dispatch_module_path(cache_dir, portal.module_name)
     _dispatch_dir(cache_dir).mkdir(parents=True, exist_ok=True)
 
@@ -256,6 +270,17 @@ def write_dispatch_module(cache_dir: Path, portal: Portal) -> tuple[Path, dict[s
         lines.append(
             f"# slot: {slot.slot_id} | category: {slot_cat or 'unknown'} | commit: {active.commit_id[:8]} | {active.decision} | spec: {spec_preview}"
         )
+        bid = getattr(active, "binding_id", "") or ""
+        if sketch_library is not None and bid:
+            sk = None
+            for cand in sketch_library.sketches.values():
+                if getattr(cand, "binding_id", "") == bid:
+                    sk = cand
+                    break
+            if sk is not None:
+                lines.append(
+                    f"# sketch: {sk.sketch_id[:8]} | binding: {bid[:8]} | template: {sk.spec_template[:160]}"
+                )
         start_line = len(lines) + 1
         source_only = _dispatch_source_only(active.generated_source)
         fn_source = _source_with_function_name(source_only, fn_name)

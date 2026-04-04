@@ -96,6 +96,8 @@ def decision_description(decision: Decision) -> str:
         return "Generate new implementation"
     if decision == Decision.MERGE:
         return "Merge branches"
+    if decision == Decision.INSTANTIATE:
+        return "Instantiate from learned pattern"
     return str(decision.value)
 
 
@@ -113,6 +115,8 @@ def pipeline_resolution_message(decision: Decision) -> str:
         return "No reusable implementation; creating a new one."
     if decision == Decision.MERGE:
         return "Merging branches; generating code."
+    if decision == Decision.INSTANTIATE:
+        return "Matching a learned pattern; substituting parameters without generation."
     return decision_description(decision)
 
 

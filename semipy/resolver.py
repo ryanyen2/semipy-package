@@ -1,4 +1,4 @@
-"""Resolve SlotSpec to REUSE / ADAPT / GENERATE using spec hash and cross-slot equivalence."""
+"""Resolve SlotSpec to REUSE / INSTANTIATE / ADAPT / GENERATE using spec hash and cross-slot equivalence."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -19,6 +19,8 @@ class ResolutionResult:
     commit_id: Optional[str]
     """When reusing another slot's dispatch entry, load the function via this slot_id."""
     reuse_dispatch_slot_id: Optional[str] = None
+    sketch_id: Optional[str] = None
+    sketch_hole_values: Optional[dict[str, str]] = None
 
 
 def _head_commit(slot: Slot) -> Optional[Commit]:
@@ -95,21 +97,48 @@ def list_equivalence_donors(
     return _donor_commits_for_equivalence(portal, slot_spec, current_slot_id)
 
 
+def _try_sketch_instantiation(
+    slot_spec: SlotSpec,
+    sketch_library: Any,
+) -> ResolutionResult | None:
+    if sketch_library is None:
+        return None
+    try:
+        from semipy.library.sketch import find_sketch_match
+    except Exception:
+        return None
+    m = find_sketch_match(slot_spec, sketch_library)
+    if m is None:
+        return None
+    sk, hv = m
+    return ResolutionResult(
+        decision=Decision.INSTANTIATE,
+        slot=None,
+        branch_name=None,
+        parent_commit_ids=[],
+        parent_sources=[],
+        lineage_summary=None,
+        commit_id=None,
+        sketch_id=sk.sketch_id,
+        sketch_hole_values=dict(hv),
+    )
+
+
 def resolve(
     portal: Any,
     slot_spec: SlotSpec,
     *,
     force_regenerate: bool = False,
+    sketch_library: Any | None = None,
 ) -> ResolutionResult:
     """
     Resolution precedence:
-    1. No slot in portal -> try cross-slot donor (same spec_equivalence_key) -> REUSE donor dispatch;
-       else GENERATE
+    1. No slot in portal -> GENERATE
     2. force_regenerate: ADAPT from local head if commits exist; else ADAPT from best donor if any;
        else GENERATE
     3. Local commits exist, stored equivalence matches current, not forced -> REUSE local head
-    4. Local commits exist, equivalence mismatch -> ADAPT from local head
-    5. Local slot empty (no commits): cross-slot donor -> REUSE donor dispatch; else GENERATE
+    4. Local commits exist, equivalence mismatch -> try sketch INSTANTIATE; else ADAPT
+    5. Local slot empty (no commits): cross-slot donor REUSE; else sketch INSTANTIATE; else GENERATE
     """
     slot = portal.slots.get(slot_spec.slot_id)
     if slot is None:
@@ -162,6 +191,17 @@ def resolve(
             commit_id=None,
         )
 
+    if has_commits and equiv_ok:
+        return ResolutionResult(
+            decision=Decision.REUSE,
+            slot=slot,
+            branch_name=None,
+            parent_commit_ids=[],
+            parent_sources=[],
+            lineage_summary=None,
+            commit_id=head.commit_id if head is not None else None,
+        )
+
     if not has_commits:
         donor = _best_donor(portal, slot_spec, slot_spec.slot_id)
         if donor is not None:
@@ -176,6 +216,10 @@ def resolve(
                 commit_id=dc.commit_id,
                 reuse_dispatch_slot_id=ds.slot_id,
             )
+        sk_r = _try_sketch_instantiation(slot_spec, sketch_library)
+        if sk_r is not None:
+            sk_r.slot = slot
+            return sk_r
         return ResolutionResult(
             decision=Decision.GENERATE,
             slot=slot,
@@ -186,16 +230,10 @@ def resolve(
             commit_id=None,
         )
 
-    if equiv_ok:
-        return ResolutionResult(
-            decision=Decision.REUSE,
-            slot=slot,
-            branch_name=None,
-            parent_commit_ids=[],
-            parent_sources=[],
-            lineage_summary=None,
-            commit_id=head.commit_id if head is not None else None,
-        )
+    sk_r = _try_sketch_instantiation(slot_spec, sketch_library)
+    if sk_r is not None:
+        sk_r.slot = slot
+        return sk_r
 
     lineage = _lineage_summary(slot, head.commit_id) if head is not None else None
     return ResolutionResult(

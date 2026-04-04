@@ -45,6 +45,8 @@ def message_for_decision(decision: str) -> str:
         return "new branch, structure changed"
     if decision == "MERGE":
         return "merge branches"
+    if decision == "INSTANTIATE":
+        return "instantiate from learned pattern"
     return decision.lower()
 
 
@@ -64,6 +66,8 @@ class Commit:
     usage_id: str = ""
     # SHA256[:16] of normalized runtime_values from the last successful verify or generation.
     runtime_input_fingerprint: str = ""
+    # Optional link to SemanticBinding in sketch library (pattern learning).
+    binding_id: str = ""
 
 
 @dataclass
@@ -110,6 +114,7 @@ def create_commit(
     usage_id: str = "",
     *,
     runtime_input_fingerprint: str = "",
+    binding_id: str = "",
 ) -> Commit:
     """Build a new Commit and compute its id, source_hash, and operation_signature."""
     source_hash = compute_source_hash(generated_source)
@@ -130,6 +135,7 @@ def create_commit(
         decision=decision,
         usage_id=usage_id,
         runtime_input_fingerprint=runtime_input_fingerprint or "",
+        binding_id=(binding_id or ""),
     )
 
 
