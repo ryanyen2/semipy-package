@@ -2,13 +2,15 @@ import type { HoverProvider, Position, TextDocument } from "vscode";
 import { Hover } from "vscode";
 import { MarkdownString } from "vscode";
 import type { PortalJson } from "../../data/types";
-import { bindingById, loadSketchLibrary } from "../../data/sketchLoader";
-import { hashArrowPrefixRange } from "../../util/hashArrowDetect";
+import { bindingById, loadSketchLibraryMerged } from "../../data/sketchLoader";
+import { hashArrowSpecSuffixFromLine } from "../../util/hashArrowDetect";
 import { activeCommitFromPortalSlot } from "../splitEditor/portalCommit";
+import { resolveSourceBlockRange } from "../splitEditor/correspondenceMap";
 
 export function createPhraseHoverProvider(
   getPortal: () => PortalJson | undefined,
-  getSemiformalRoot: () => string | undefined,
+  getPortalCacheDir: () => string | undefined,
+  getWorkspaceRoots: () => readonly string[] | undefined,
 ): HoverProvider {
   return {
     provideHover(document: TextDocument, pos: Position): Hover | undefined {
@@ -16,19 +18,22 @@ export function createPhraseHoverProvider(
         return undefined;
       }
       const portal = getPortal();
-      const root = getSemiformalRoot();
-      if (!portal || !root) {
+      const cacheDir = getPortalCacheDir();
+      if (!portal || !cacheDir) {
         return undefined;
       }
       const line1 = pos.line + 1;
+      const fullText = document.getText();
       const lineText = document.lineAt(pos.line).text;
-      const pref = hashArrowPrefixRange(lineText);
-      if (!pref || pos.character < pref.end) {
+      const specRegion = hashArrowSpecSuffixFromLine(lineText);
+      if (!specRegion || pos.character < specRegion.baseCol) {
         return undefined;
       }
-      const lib = loadSketchLibrary(root);
-      const suffix = lineText.slice(pref.end);
-      const rel = pos.character - pref.end;
+      const lib = loadSketchLibraryMerged(cacheDir, getWorkspaceRoots());
+      const suffix = specRegion.suffix;
+      const rel = pos.character - specRegion.baseCol;
+
+      const lowerSuffix = suffix.toLowerCase();
 
       for (const slot of Object.values(portal.slots)) {
         const head = activeCommitFromPortalSlot(slot);
@@ -40,12 +45,8 @@ export function createPhraseHoverProvider(
         if (!binding?.phrases?.length) {
           continue;
         }
-        const span = slot.slot_spec?.source_span;
-        if (!span || span.length < 3) {
-          continue;
-        }
-        const [, a, b] = span;
-        if (line1 < a || line1 > b) {
+        const block = resolveSourceBlockRange(fullText, slot);
+        if (!block || line1 < block.startLine1 || line1 > block.endLine1) {
           continue;
         }
         const sorted = [...binding.phrases].sort((x, y) => y.text.length - x.text.length);
@@ -54,11 +55,16 @@ export function createPhraseHoverProvider(
           if (!t) {
             continue;
           }
+          const tl = t.toLowerCase();
           let idx = 0;
-          while (idx < suffix.length) {
-            const at = suffix.indexOf(t, idx);
+          while (idx <= lowerSuffix.length) {
+            const at = lowerSuffix.indexOf(tl, idx);
             if (at < 0) {
               break;
+            }
+            if (suffix.slice(at, at + t.length).toLowerCase() !== tl) {
+              idx = at + 1;
+              continue;
             }
             if (rel >= at && rel < at + t.length) {
               const md = new MarkdownString();

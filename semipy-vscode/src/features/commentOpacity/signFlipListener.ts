@@ -1,6 +1,10 @@
 import * as Diff from "diff";
 import type { TextDocument, TextDocumentChangeEvent } from "vscode";
-import { TextDocumentChangeReason, WorkspaceEdit, workspace } from "vscode";
+import {
+  TextDocumentChangeReason,
+  WorkspaceEdit,
+  workspace,
+} from "vscode";
 import { isReasoningLine } from "../../util/hashArrowDetect";
 
 function splitLines(text: string): string[] {
@@ -9,6 +13,35 @@ function splitLines(text: string): string[] {
     return [];
   }
   return t.split("\n");
+}
+
+/** Heuristic: tool/skeleton edits are usually multi-line, large, or many chunks. */
+export function shouldSkipSignFlipForBulkEdit(
+  e: TextDocumentChangeEvent,
+  before: string,
+  after: string,
+): boolean {
+  const oldL = before.split(/\r?\n/).length;
+  const newL = after.split(/\r?\n/).length;
+  if (Math.abs(newL - oldL) > 4) {
+    return true;
+  }
+  let total = 0;
+  let maxNl = 0;
+  for (const c of e.contentChanges) {
+    total += c.text.length;
+    maxNl = Math.max(maxNl, (c.text.match(/\n/g) || []).length);
+  }
+  if (total > 500) {
+    return true;
+  }
+  if (maxNl >= 4) {
+    return true;
+  }
+  if (e.contentChanges.length > 12) {
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -32,7 +65,10 @@ export class SignFlipCoordinator {
   private previousText = new Map<string, string>();
   private applying = new Set<string>();
 
-  constructor(private readonly enabled: () => boolean) {}
+  constructor(
+    private readonly enabled: () => boolean,
+    private readonly skipApiEdits: () => boolean,
+  ) {}
 
   attach(): { dispose: () => void } {
     const sub = workspace.onDidChangeTextDocument((e) => this.onChange(e));
@@ -50,6 +86,11 @@ export class SignFlipCoordinator {
       this.previousText.set(uriKey, e.document.getText());
       return;
     }
+    const reasonApi = 3 as const;
+    if (this.skipApiEdits() && e.reason === reasonApi) {
+      this.previousText.set(uriKey, e.document.getText());
+      return;
+    }
     if (this.applying.has(uriKey)) {
       this.previousText.set(uriKey, e.document.getText());
       return;
@@ -60,10 +101,15 @@ export class SignFlipCoordinator {
     }
     const before = this.previousText.get(uriKey);
     const after = e.document.getText();
-    this.previousText.set(uriKey, after);
     if (before === undefined || before === after) {
+      this.previousText.set(uriKey, after);
       return;
     }
+    if (shouldSkipSignFlipForBulkEdit(e, before, after)) {
+      this.previousText.set(uriKey, after);
+      return;
+    }
+    this.previousText.set(uriKey, after);
     const flips = collectFlipLineNumbers1Based(before, after);
     if (flips.length === 0) {
       return;

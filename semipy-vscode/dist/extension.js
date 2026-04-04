@@ -34,8 +34,8 @@ __export(extension_exports, {
   deactivate: () => deactivate
 });
 module.exports = __toCommonJS(extension_exports);
-var path7 = __toESM(require("path"));
-var import_vscode13 = require("vscode");
+var path8 = __toESM(require("path"));
+var import_vscode14 = require("vscode");
 
 // src/data/portalLoader.ts
 var fs = __toESM(require("fs"));
@@ -59,23 +59,53 @@ function sessionIdFromFilename(filename) {
 }
 
 // src/data/portalLoader.ts
-function findWorkspaceRootContainingSemiformal(filePath) {
-  let dir = path.dirname(filePath);
-  const { root } = path.parse(filePath);
-  while (true) {
-    const candidate = path.join(dir, ".semiformal");
+function pathsEqualRobust(a, b) {
+  try {
+    const na = path.normalize(a);
+    const nb = path.normalize(b);
+    if (na === nb) {
+      return true;
+    }
+    if (na.toLowerCase() === nb.toLowerCase()) {
+      return true;
+    }
     try {
-      if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
-        return dir;
+      const ra = fs.realpathSync(na);
+      const rb = fs.realpathSync(nb);
+      if (ra === rb || ra.toLowerCase() === rb.toLowerCase()) {
+        return true;
       }
     } catch {
     }
-    if (dir === root) {
-      break;
-    }
-    dir = path.dirname(dir);
+  } catch {
+    return false;
   }
-  return void 0;
+  return false;
+}
+function portalReferencesEditorPath(portal, editorFsPath) {
+  try {
+    for (const slot of Object.values(portal.slots)) {
+      const spec = slot.slot_spec;
+      if (!spec || typeof spec !== "object") {
+        continue;
+      }
+      const src = spec.source_span;
+      if (Array.isArray(src) && typeof src[0] === "string") {
+        if (pathsEqualRobust(src[0], editorFsPath)) {
+          return true;
+        }
+      }
+      const enc = spec.enclosing_function_span;
+      if (Array.isArray(enc) && typeof enc[0] === "string") {
+        if (pathsEqualRobust(enc[0], editorFsPath)) {
+          return true;
+        }
+      }
+    }
+  } catch {
+    return false;
+  }
+  return false;
 }
 function resolvePortalAnchorSourcePath(actualFilename) {
   const env = (process.env.SEMIPY_SESSION_SOURCE || "").trim();
@@ -96,24 +126,17 @@ function resolvePortalAnchorSourcePath(actualFilename) {
     return actualFilename;
   }
 }
-function expectedPortalJsonPath(sourceFilePath) {
-  const root = findWorkspaceRootContainingSemiformal(sourceFilePath);
-  if (!root) {
-    return void 0;
-  }
-  const anchor = resolvePortalAnchorSourcePath(sourceFilePath);
-  const sid = sessionIdFromFilename(anchor);
-  return path.join(root, ".semiformal", `${sid}.portal.json`);
-}
-function loadPortalJson(portalPath) {
+function isDirectory(p) {
   try {
-    const raw = fs.readFileSync(portalPath, "utf8");
-    return JSON.parse(raw);
+    return fs.statSync(p).isDirectory();
   } catch {
-    return void 0;
+    return false;
   }
 }
 function portalMatchesEditorFile(portal, editorFsPath) {
+  if (portalReferencesEditorPath(portal, editorFsPath)) {
+    return true;
+  }
   const anchor = resolvePortalAnchorSourcePath(editorFsPath);
   const sid = sessionIdFromFilename(anchor);
   if (portal.session_id && portal.session_id === sid) {
@@ -124,16 +147,157 @@ function portalMatchesEditorFile(portal, editorFsPath) {
     return false;
   }
   try {
-    if (path.normalize(sf) === path.normalize(editorFsPath)) {
+    const normEditor = path.normalize(editorFsPath);
+    const normSf = path.normalize(sf);
+    if (pathsEqualRobust(normSf, normEditor)) {
       return true;
     }
-    if (path.basename(sf) === path.basename(editorFsPath)) {
+    if (path.basename(normSf).toLowerCase() === path.basename(normEditor).toLowerCase()) {
       return true;
+    }
+    if (isDirectory(normSf)) {
+      const withSep = normSf.endsWith(path.sep) ? normSf : normSf + path.sep;
+      if (normEditor === normSf || normEditor.startsWith(withSep)) {
+        return true;
+      }
     }
   } catch {
     return false;
   }
   return false;
+}
+function collectPortalCacheDirsNearSource(sourceFilePath) {
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  const push = (p) => {
+    try {
+      const n = path.resolve(p);
+      if (!seen.has(n)) {
+        seen.add(n);
+        out.push(n);
+      }
+    } catch {
+    }
+  };
+  let dir = path.dirname(path.resolve(sourceFilePath));
+  const { root } = path.parse(sourceFilePath);
+  while (true) {
+    try {
+      const names = fs.readdirSync(dir);
+      if (names.some((f) => f.endsWith(".portal.json"))) {
+        push(dir);
+      }
+    } catch {
+    }
+    const legacy = path.join(dir, ".semiformal");
+    try {
+      if (fs.existsSync(legacy) && fs.statSync(legacy).isDirectory()) {
+        push(legacy);
+      }
+    } catch {
+    }
+    try {
+      for (const name of fs.readdirSync(dir)) {
+        if (!name.startsWith(".semiformal") || name === ".semiformal") {
+          continue;
+        }
+        const sub = path.join(dir, name);
+        try {
+          if (fs.statSync(sub).isDirectory()) {
+            push(sub);
+          }
+        } catch {
+        }
+      }
+    } catch {
+    }
+    if (dir === root) {
+      break;
+    }
+    dir = path.dirname(dir);
+  }
+  return out;
+}
+function findPortalJsonPathForEditor(sourceFilePath, opts) {
+  const resolved = path.resolve(sourceFilePath);
+  const parentDir = path.dirname(resolved);
+  const cacheDirs = collectPortalCacheDirsNearSource(sourceFilePath);
+  if (!cacheDirs.length) {
+    return void 0;
+  }
+  const sessionIds = [];
+  const pushId = (compute) => {
+    try {
+      const s = compute();
+      if (s && !sessionIds.includes(s)) {
+        sessionIds.push(s);
+      }
+    } catch {
+    }
+  };
+  const fromSettings = (opts?.sessionSourceFromSettings || "").trim();
+  if (fromSettings) {
+    pushId(() => sessionIdFromFilename(path.resolve(fromSettings)));
+  }
+  const env = (process.env.SEMIPY_SESSION_SOURCE || "").trim();
+  if (env) {
+    pushId(() => sessionIdFromFilename(path.resolve(env)));
+  }
+  pushId(() => sessionIdFromFilename(resolvePortalAnchorSourcePath(sourceFilePath)));
+  pushId(() => sessionIdFromFilename(parentDir));
+  pushId(() => sessionIdFromFilename(resolved));
+  const candidates = [];
+  const push = (p) => {
+    if (!candidates.includes(p)) {
+      candidates.push(p);
+    }
+  };
+  for (const cacheDir of cacheDirs) {
+    for (const sid of sessionIds) {
+      try {
+        push(path.join(cacheDir, `${sid}.portal.json`));
+      } catch {
+      }
+    }
+  }
+  for (const c of candidates) {
+    try {
+      if (fs.existsSync(c)) {
+        const raw = fs.readFileSync(c, "utf8");
+        const portal = JSON.parse(raw);
+        if (portalMatchesEditorFile(portal, sourceFilePath)) {
+          return c;
+        }
+      }
+    } catch {
+    }
+  }
+  for (const cacheDir of cacheDirs) {
+    try {
+      const files = fs.readdirSync(cacheDir).filter((f) => f.endsWith(".portal.json"));
+      for (const f of files) {
+        const full = path.join(cacheDir, f);
+        try {
+          const raw = fs.readFileSync(full, "utf8");
+          const portal = JSON.parse(raw);
+          if (portalMatchesEditorFile(portal, sourceFilePath)) {
+            return full;
+          }
+        } catch {
+        }
+      }
+    } catch {
+    }
+  }
+  return void 0;
+}
+function loadPortalJson(portalPath) {
+  try {
+    const raw = fs.readFileSync(portalPath, "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return void 0;
+  }
 }
 
 // src/features/commentOpacity/opacityDecorations.ts
@@ -144,14 +308,13 @@ function isReasoningLine(line) {
   const stripped = line.replace(/^\s+/, "");
   return stripped.startsWith("#<") || stripped.startsWith("# <");
 }
-function hashArrowPrefixRange(line) {
-  const m = line.match(/^(\s*)((?:#\s*>))/);
+function hashArrowSpecSuffixFromLine(line) {
+  const m = /#\s*>/.exec(line);
   if (!m || m.index === void 0) {
     return null;
   }
-  const lead = m[1].length;
-  const pref = m[2].length;
-  return { start: lead, end: lead + pref };
+  const baseCol = m.index + m[0].length;
+  return { baseCol, suffix: line.slice(baseCol) };
 }
 
 // src/features/commentOpacity/opacityDecorations.ts
@@ -286,11 +449,11 @@ Diff.prototype = {
       }
     }
   },
-  addToPath: function addToPath(path8, added, removed, oldPosInc) {
-    var last = path8.lastComponent;
+  addToPath: function addToPath(path9, added, removed, oldPosInc) {
+    var last = path9.lastComponent;
     if (last && last.added === added && last.removed === removed) {
       return {
-        oldPos: path8.oldPos + oldPosInc,
+        oldPos: path9.oldPos + oldPosInc,
         lastComponent: {
           count: last.count + 1,
           added,
@@ -300,7 +463,7 @@ Diff.prototype = {
       };
     } else {
       return {
-        oldPos: path8.oldPos + oldPosInc,
+        oldPos: path9.oldPos + oldPosInc,
         lastComponent: {
           count: 1,
           added,
@@ -544,6 +707,29 @@ function splitLines(text) {
   }
   return t.split("\n");
 }
+function shouldSkipSignFlipForBulkEdit(e, before, after) {
+  const oldL = before.split(/\r?\n/).length;
+  const newL = after.split(/\r?\n/).length;
+  if (Math.abs(newL - oldL) > 4) {
+    return true;
+  }
+  let total = 0;
+  let maxNl = 0;
+  for (const c of e.contentChanges) {
+    total += c.text.length;
+    maxNl = Math.max(maxNl, (c.text.match(/\n/g) || []).length);
+  }
+  if (total > 500) {
+    return true;
+  }
+  if (maxNl >= 4) {
+    return true;
+  }
+  if (e.contentChanges.length > 12) {
+    return true;
+  }
+  return false;
+}
 function rewriteReasoningPrefixToSpec(line) {
   const m = line.match(/^(\s*)(#\s*<)/);
   if (!m) {
@@ -554,8 +740,9 @@ function rewriteReasoningPrefixToSpec(line) {
   return line.slice(0, leadLen) + "#>" + line.slice(leadLen + prefixLen);
 }
 var SignFlipCoordinator = class {
-  constructor(enabled) {
+  constructor(enabled, skipApiEdits) {
     this.enabled = enabled;
+    this.skipApiEdits = skipApiEdits;
   }
   previousText = /* @__PURE__ */ new Map();
   applying = /* @__PURE__ */ new Set();
@@ -574,6 +761,11 @@ var SignFlipCoordinator = class {
       this.previousText.set(uriKey, e.document.getText());
       return;
     }
+    const reasonApi = 3;
+    if (this.skipApiEdits() && e.reason === reasonApi) {
+      this.previousText.set(uriKey, e.document.getText());
+      return;
+    }
     if (this.applying.has(uriKey)) {
       this.previousText.set(uriKey, e.document.getText());
       return;
@@ -584,10 +776,15 @@ var SignFlipCoordinator = class {
     }
     const before = this.previousText.get(uriKey);
     const after = e.document.getText();
-    this.previousText.set(uriKey, after);
     if (before === void 0 || before === after) {
+      this.previousText.set(uriKey, after);
       return;
     }
+    if (shouldSkipSignFlipForBulkEdit(e, before, after)) {
+      this.previousText.set(uriKey, after);
+      return;
+    }
+    this.previousText.set(uriKey, after);
     const flips = collectFlipLineNumbers1Based(before, after);
     if (flips.length === 0) {
       return;
@@ -681,17 +878,72 @@ var import_vscode4 = require("vscode");
 // src/data/sketchLoader.ts
 var fs2 = __toESM(require("fs"));
 var path2 = __toESM(require("path"));
-function sketchLibraryPath(semiformalRoot) {
-  return path2.join(semiformalRoot, ".semiformal", "sketch_library.json");
+function sketchLibraryPath(cacheDir) {
+  return path2.join(cacheDir, "sketch_library.json");
 }
-function loadSketchLibrary(semiformalRoot) {
-  const p = sketchLibraryPath(semiformalRoot);
+function loadSketchLibraryFile(p) {
   try {
     const raw = fs2.readFileSync(p, "utf8");
     return JSON.parse(raw);
   } catch {
     return void 0;
   }
+}
+function loadSketchLibraryMerged(cacheDir, workspaceRoots) {
+  const merged = { version: 1, sketches: {}, bindings: {} };
+  let any = false;
+  const absorb = (lib) => {
+    if (!lib) {
+      return;
+    }
+    any = true;
+    Object.assign(merged.bindings ||= {}, lib.bindings || {});
+    Object.assign(merged.sketches ||= {}, lib.sketches || {});
+    if (lib.version !== void 0) {
+      merged.version = lib.version;
+    }
+  };
+  absorb(loadSketchLibraryFile(sketchLibraryPath(cacheDir)));
+  const scanDir = (dir) => {
+    let names;
+    try {
+      names = fs2.readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      if (!name.startsWith(".semiformal")) {
+        continue;
+      }
+      const sub = path2.join(dir, name);
+      let isDir = false;
+      try {
+        isDir = fs2.statSync(sub).isDirectory();
+      } catch {
+        continue;
+      }
+      if (!isDir) {
+        continue;
+      }
+      absorb(loadSketchLibraryFile(path2.join(sub, "sketch_library.json")));
+    }
+  };
+  for (const root of workspaceRoots ?? []) {
+    scanDir(root);
+    let entries;
+    try {
+      entries = fs2.readdirSync(root, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const ent of entries) {
+      if (!ent.isDirectory() || ent.name.startsWith(".")) {
+        continue;
+      }
+      scanDir(path2.join(root, ent.name));
+    }
+  }
+  return any ? merged : void 0;
 }
 function bindingById(lib, bindingId) {
   if (!lib?.bindings || !bindingId) {
@@ -701,7 +953,12 @@ function bindingById(lib, bindingId) {
 }
 
 // src/features/splitEditor/portalCommit.ts
+var LOCK_REF = "__locked__";
 function activeCommitFromPortalSlot(slot) {
+  const locked = slot.refs?.[LOCK_REF];
+  if (locked && slot.commits[locked]) {
+    return slot.commits[locked];
+  }
   let best;
   let bestTs = -1;
   for (const b of Object.values(slot.branches)) {
@@ -717,7 +974,9 @@ function activeCommitFromPortalSlot(slot) {
   if (!slot.refs || !slot.commits) {
     return void 0;
   }
-  const ids = new Set(Object.values(slot.refs));
+  const ids = new Set(
+    Object.entries(slot.refs).filter(([k]) => k !== LOCK_REF).map(([, v]) => v)
+  );
   const candidates = [...ids].map((id) => slot.commits[id]).filter(Boolean);
   if (candidates.length === 0) {
     return void 0;
@@ -725,27 +984,117 @@ function activeCommitFromPortalSlot(slot) {
   return candidates.reduce((a, b) => a.timestamp >= b.timestamp ? a : b);
 }
 
+// src/features/splitEditor/correspondenceMap.ts
+var path3 = __toESM(require("path"));
+
+// src/data/dispatchLoader.ts
+function parseSpecMapEntry(entry) {
+  const idx = entry.indexOf(":");
+  if (idx <= 0) {
+    return void 0;
+  }
+  const fn = entry.slice(0, idx);
+  const rest = entry.slice(idx + 1);
+  const m = rest.match(/^(\d+)-(\d+)$/);
+  if (!m) {
+    return void 0;
+  }
+  return {
+    fn,
+    startLine: parseInt(m[1], 10),
+    endLine: parseInt(m[2], 10)
+  };
+}
+
+// src/features/splitEditor/correspondenceMap.ts
+function pathsEqual(a, b) {
+  return pathsEqualRobust(a, b);
+}
+function findSlotForSourceLine(portal, sourceFsPath, line1, fullText) {
+  for (const slot of Object.values(portal.slots)) {
+    const sp = slot.slot_spec;
+    const span = sp?.source_span;
+    if (!span || span.length < 3) {
+      continue;
+    }
+    const [fn] = span;
+    if (!pathsEqualRobust(fn, sourceFsPath)) {
+      continue;
+    }
+    const block = resolveSourceBlockRange(fullText, slot);
+    if (!block) {
+      continue;
+    }
+    if (line1 >= block.startLine1 && line1 <= block.endLine1) {
+      return slot;
+    }
+  }
+  return void 0;
+}
+function resolveSourceBlockRange(fullText, slot) {
+  const sp = slot.slot_spec;
+  if (!sp?.source_span || sp.source_span.length < 3) {
+    return void 0;
+  }
+  const [, start, end] = sp.source_span;
+  const lines = fullText.split(/\r?\n/);
+  const slice = lines.slice(start - 1, end).join("\n");
+  const specText = (sp.spec_text || "").trim();
+  if (specText && slice.trim() === specText) {
+    return { startLine1: start, endLine1: end };
+  }
+  if (specText) {
+    const idx = fullText.indexOf(specText);
+    if (idx >= 0) {
+      const before = fullText.slice(0, idx);
+      const startLine1 = before.split(/\r?\n/).length;
+      const spanLines = specText.split(/\r?\n/).length;
+      return { startLine1, endLine1: startLine1 + spanLines - 1 };
+    }
+  }
+  return { startLine1: start, endLine1: end };
+}
+function dispatchRangeForSlot(portal, slotId, portalCacheDir) {
+  const raw = portal.spec_map[slotId];
+  if (!raw) {
+    return void 0;
+  }
+  const parsed = parseSpecMapEntry(raw);
+  if (!parsed) {
+    return void 0;
+  }
+  const mod = portal.module_name || "unknown";
+  const runtimePath = path3.join(portalCacheDir, "runtime", `${mod}.semi.py`);
+  return {
+    uriPath: runtimePath,
+    startLine1: parsed.startLine,
+    endLine1: parsed.endLine
+  };
+}
+
 // src/features/phraseHighlight/phraseHoverProvider.ts
-function createPhraseHoverProvider(getPortal, getSemiformalRoot) {
+function createPhraseHoverProvider(getPortal, getPortalCacheDir, getWorkspaceRoots) {
   return {
     provideHover(document, pos) {
       if (document.languageId !== "python") {
         return void 0;
       }
       const portal = getPortal();
-      const root = getSemiformalRoot();
-      if (!portal || !root) {
+      const cacheDir = getPortalCacheDir();
+      if (!portal || !cacheDir) {
         return void 0;
       }
       const line1 = pos.line + 1;
+      const fullText = document.getText();
       const lineText = document.lineAt(pos.line).text;
-      const pref = hashArrowPrefixRange(lineText);
-      if (!pref || pos.character < pref.end) {
+      const specRegion = hashArrowSpecSuffixFromLine(lineText);
+      if (!specRegion || pos.character < specRegion.baseCol) {
         return void 0;
       }
-      const lib = loadSketchLibrary(root);
-      const suffix = lineText.slice(pref.end);
-      const rel = pos.character - pref.end;
+      const lib = loadSketchLibraryMerged(cacheDir, getWorkspaceRoots());
+      const suffix = specRegion.suffix;
+      const rel = pos.character - specRegion.baseCol;
+      const lowerSuffix = suffix.toLowerCase();
       for (const slot of Object.values(portal.slots)) {
         const head = activeCommitFromPortalSlot(slot);
         const bid = head?.binding_id || "";
@@ -756,12 +1105,8 @@ function createPhraseHoverProvider(getPortal, getSemiformalRoot) {
         if (!binding?.phrases?.length) {
           continue;
         }
-        const span = slot.slot_spec?.source_span;
-        if (!span || span.length < 3) {
-          continue;
-        }
-        const [, a, b] = span;
-        if (line1 < a || line1 > b) {
+        const block = resolveSourceBlockRange(fullText, slot);
+        if (!block || line1 < block.startLine1 || line1 > block.endLine1) {
           continue;
         }
         const sorted = [...binding.phrases].sort((x, y) => y.text.length - x.text.length);
@@ -770,11 +1115,16 @@ function createPhraseHoverProvider(getPortal, getSemiformalRoot) {
           if (!t) {
             continue;
           }
+          const tl = t.toLowerCase();
           let idx = 0;
-          while (idx < suffix.length) {
-            const at = suffix.indexOf(t, idx);
+          while (idx <= lowerSuffix.length) {
+            const at = lowerSuffix.indexOf(tl, idx);
             if (at < 0) {
               break;
+            }
+            if (suffix.slice(at, at + t.length).toLowerCase() !== tl) {
+              idx = at + 1;
+              continue;
             }
             if (rel >= at && rel < at + t.length) {
               const md = new import_vscode4.MarkdownString();
@@ -806,12 +1156,32 @@ function createPhraseHoverProvider(getPortal, getSemiformalRoot) {
 // src/features/phraseHighlight/phraseDecorations.ts
 var import_vscode5 = require("vscode");
 var ROLE_ORDER = ["operation", "param", "operator", "connective"];
+var ROLE_STYLES = {
+  operation: {
+    light: { color: "#00639c", backgroundColor: "rgba(0, 99, 156, 0.14)" },
+    dark: { color: "#4ec9b0", backgroundColor: "rgba(78, 201, 176, 0.18)" }
+  },
+  param: {
+    light: { color: "#a31515", backgroundColor: "rgba(163, 21, 21, 0.1)" },
+    dark: { color: "#ce9178", backgroundColor: "rgba(206, 145, 120, 0.18)" }
+  },
+  operator: {
+    light: { color: "#811f3f", backgroundColor: "rgba(129, 31, 63, 0.1)" },
+    dark: { color: "#dcdcaa", backgroundColor: "rgba(220, 220, 170, 0.14)" }
+  },
+  connective: {
+    light: { color: "#444444", backgroundColor: "rgba(68, 68, 68, 0.08)" },
+    dark: { color: "#9cdcfe", backgroundColor: "rgba(156, 220, 254, 0.12)" }
+  }
+};
 function createPhraseDecorationTypes() {
   const out = {};
   for (const role of ROLE_ORDER) {
+    const st = ROLE_STYLES[role] ?? ROLE_STYLES.param;
     out[role] = import_vscode5.window.createTextEditorDecorationType({
       rangeBehavior: import_vscode5.DecorationRangeBehavior.ClosedClosed,
-      fontWeight: role === "operation" ? "bold" : void 0
+      light: { ...st.light, fontWeight: role === "operation" ? "600" : void 0 },
+      dark: { ...st.dark, fontWeight: role === "operation" ? "600" : void 0 }
     });
   }
   return out;
@@ -824,18 +1194,24 @@ function phraseSpansInSuffix(suffix, phrases) {
   const used = [];
   const spans = [];
   const overlaps = (s, e) => used.some((u) => !(e <= u.start || s >= u.end));
+  const lowerSuffix = suffix.toLowerCase();
   for (const p of sorted) {
     const t = (p.text || "").trim();
     if (!t) {
       continue;
     }
+    const tl = t.toLowerCase();
     let search = 0;
-    while (search < suffix.length) {
-      const pos = suffix.indexOf(t, search);
+    while (search <= lowerSuffix.length) {
+      const pos = lowerSuffix.indexOf(tl, search);
       if (pos < 0) {
         break;
       }
       const end = pos + t.length;
+      if (suffix.slice(pos, end).toLowerCase() !== tl) {
+        search = pos + 1;
+        continue;
+      }
       if (!overlaps(pos, end)) {
         used.push({ start: pos, end });
         spans.push({ start: pos, end, role: p.role || "param" });
@@ -846,14 +1222,14 @@ function phraseSpansInSuffix(suffix, phrases) {
   }
   return spans;
 }
-function refreshPhraseDecorations(editor, portal, semiformalRoot, types) {
+function refreshPhraseDecorations(editor, portal, portalCacheDir, types, workspaceRoots) {
   for (const t of Object.values(types)) {
     editor.setDecorations(t, []);
   }
-  if (!portal || !semiformalRoot) {
+  if (!portal || !portalCacheDir) {
     return;
   }
-  const lib = loadSketchLibrary(semiformalRoot);
+  const lib = loadSketchLibraryMerged(portalCacheDir, workspaceRoots);
   const doc = editor.document;
   const full = doc.getText();
   const lines = full.split(/\r?\n/);
@@ -871,30 +1247,30 @@ function refreshPhraseDecorations(editor, portal, semiformalRoot, types) {
     if (!binding?.phrases?.length) {
       continue;
     }
-    const span = slot.slot_spec?.source_span;
-    if (!span || span.length < 3) {
+    const block = resolveSourceBlockRange(full, slot);
+    if (!block) {
       continue;
     }
-    const [, start1, end1] = span;
+    const { startLine1: start1, endLine1: end1 } = block;
     for (let lineIdx = start1 - 1; lineIdx <= end1 - 1; lineIdx++) {
       if (lineIdx < 0 || lineIdx >= lines.length) {
         continue;
       }
       const line = lines[lineIdx];
-      const pref = hashArrowPrefixRange(line);
-      if (!pref) {
+      const specRegion = hashArrowSpecSuffixFromLine(line);
+      if (!specRegion) {
         continue;
       }
-      const suffix = line.slice(pref.end);
+      const suffix = specRegion.suffix;
       const spans = phraseSpansInSuffix(suffix, binding.phrases);
       const lineObj = doc.lineAt(lineIdx);
       for (const sp of spans) {
         const role = ROLE_ORDER.includes(sp.role) ? sp.role : "param";
-        const startCol = pref.end + sp.start;
-        const endCol = pref.end + sp.end;
+        const startCol = specRegion.baseCol + sp.start;
+        const endCol = specRegion.baseCol + sp.end;
         const r = new import_vscode5.Range(
           new import_vscode5.Position(lineIdx, startCol),
-          new import_vscode5.Position(lineIdx, endCol)
+          new import_vscode5.Position(lineIdx, Math.min(endCol, lineObj.text.length))
         );
         rangesByRole[role].push(r);
       }
@@ -911,73 +1287,6 @@ function refreshPhraseDecorations(editor, portal, semiformalRoot, types) {
 // src/features/splitEditor/linkedHighlight.ts
 var path4 = __toESM(require("path"));
 var import_vscode6 = require("vscode");
-
-// src/features/splitEditor/correspondenceMap.ts
-var path3 = __toESM(require("path"));
-
-// src/data/dispatchLoader.ts
-function parseSpecMapEntry(entry) {
-  const idx = entry.indexOf(":");
-  if (idx <= 0) {
-    return void 0;
-  }
-  const fn = entry.slice(0, idx);
-  const rest = entry.slice(idx + 1);
-  const m = rest.match(/^(\d+)-(\d+)$/);
-  if (!m) {
-    return void 0;
-  }
-  return {
-    fn,
-    startLine: parseInt(m[1], 10),
-    endLine: parseInt(m[2], 10)
-  };
-}
-
-// src/features/splitEditor/correspondenceMap.ts
-function pathsEqual(a, b) {
-  try {
-    return path3.normalize(a) === path3.normalize(b);
-  } catch {
-    return a === b;
-  }
-}
-function findSlotForSourceLine(portal, sourceFsPath, line1) {
-  for (const slot of Object.values(portal.slots)) {
-    const sp = slot.slot_spec;
-    const span = sp?.source_span;
-    if (!span || span.length < 3) {
-      continue;
-    }
-    const [fn, start, end] = span;
-    if (!pathsEqual(fn, sourceFsPath) && path3.basename(fn) !== path3.basename(sourceFsPath)) {
-      continue;
-    }
-    if (line1 >= start && line1 <= end) {
-      return slot;
-    }
-  }
-  return void 0;
-}
-function dispatchRangeForSlot(portal, slotId, workspaceRoot) {
-  const raw = portal.spec_map[slotId];
-  if (!raw) {
-    return void 0;
-  }
-  const parsed = parseSpecMapEntry(raw);
-  if (!parsed) {
-    return void 0;
-  }
-  const mod = portal.module_name || "unknown";
-  const runtimePath = path3.join(workspaceRoot, ".semiformal", "runtime", `${mod}.semi.py`);
-  return {
-    uriPath: runtimePath,
-    startLine1: parsed.startLine,
-    endLine1: parsed.endLine
-  };
-}
-
-// src/features/splitEditor/linkedHighlight.ts
 var LinkedHighlightCoordinator = class {
   constructor(fadeMs) {
     this.fadeMs = fadeMs;
@@ -994,7 +1303,7 @@ var LinkedHighlightCoordinator = class {
     }
     this.highlight.dispose();
   }
-  onSelectionOrPortal(editor, portal, workspaceRoot) {
+  onSelectionOrPortal(editor, portal, portalCacheDir) {
     if (this.fadeTimer) {
       clearTimeout(this.fadeTimer);
       this.fadeTimer = void 0;
@@ -1002,28 +1311,24 @@ var LinkedHighlightCoordinator = class {
     for (const ed of import_vscode6.window.visibleTextEditors) {
       ed.setDecorations(this.highlight, []);
     }
-    if (!editor || !portal || !workspaceRoot) {
+    if (!editor || !portal || !portalCacheDir) {
       return;
     }
     const doc = editor.document;
     const docPath = doc.uri.fsPath;
     const sel = editor.selection.active;
     const line1 = sel.line + 1;
-    const dispatchPath = path4.join(
-      workspaceRoot,
-      ".semiformal",
-      "runtime",
-      `${portal.module_name}.semi.py`
-    );
+    const fullText = doc.getText();
+    const dispatchPath = path4.join(portalCacheDir, "runtime", `${portal.module_name}.semi.py`);
     if (pathsEqual(docPath, dispatchPath) || doc.uri.fsPath.endsWith(".semi.py")) {
-      this.highlightDispatchToSource(editor, portal, workspaceRoot);
+      this.highlightDispatchToSource(editor, portal, portalCacheDir);
       return;
     }
-    const slot = findSlotForSourceLine(portal, docPath, line1);
+    const slot = findSlotForSourceLine(portal, docPath, line1, fullText);
     if (!slot) {
       return;
     }
-    const dr = dispatchRangeForSlot(portal, slot.slot_id, workspaceRoot);
+    const dr = dispatchRangeForSlot(portal, slot.slot_id, portalCacheDir);
     if (!dr) {
       return;
     }
@@ -1045,10 +1350,10 @@ var LinkedHighlightCoordinator = class {
     dispEd.setDecorations(this.highlight, ranges);
     this.scheduleFade();
   }
-  highlightDispatchToSource(editor, portal, workspaceRoot) {
+  highlightDispatchToSource(editor, portal, portalCacheDir) {
     const line1 = editor.selection.active.line + 1;
     for (const slot of Object.values(portal.slots)) {
-      const dr = dispatchRangeForSlot(portal, slot.slot_id, workspaceRoot);
+      const dr = dispatchRangeForSlot(portal, slot.slot_id, portalCacheDir);
       if (!dr) {
         continue;
       }
@@ -1060,7 +1365,7 @@ var LinkedHighlightCoordinator = class {
         if (!sp || sp.length < 3) {
           return;
         }
-        const [srcFile, a, b] = sp;
+        const [srcFile] = sp;
         const srcUri = import_vscode6.Uri.file(srcFile);
         const srcEd = import_vscode6.window.visibleTextEditors.find(
           (e) => e.document.uri.toString() === srcUri.toString()
@@ -1068,7 +1373,11 @@ var LinkedHighlightCoordinator = class {
         if (!srcEd) {
           return;
         }
+        const full = srcEd.document.getText();
+        const block = resolveSourceBlockRange(full, slot);
         const ranges = [];
+        const a = block?.startLine1 ?? sp[1];
+        const b = block?.endLine1 ?? sp[2];
         for (let i = a - 1; i <= b - 1; i++) {
           if (i < srcEd.document.lineCount) {
             ranges.push(srcEd.document.lineAt(i).range);
@@ -1094,9 +1403,8 @@ var LinkedHighlightCoordinator = class {
 // src/features/splitEditor/splitEditorCommand.ts
 var path5 = __toESM(require("path"));
 var import_vscode7 = require("vscode");
-async function openDispatchSplitView(workspaceRoot, moduleName) {
-  const rel = path5.join(".semiformal", "runtime", `${moduleName}.semi.py`);
-  const abs = path5.join(workspaceRoot, rel);
+async function openDispatchSplitView(portalCacheDir, moduleName) {
+  const abs = path5.join(portalCacheDir, "runtime", `${moduleName}.semi.py`);
   const uri = import_vscode7.Uri.file(abs);
   try {
     const doc = await import_vscode7.workspace.openTextDocument(uri);
@@ -1259,6 +1567,8 @@ var SlotHistoryProvider = class {
 
 // src/features/versionTree/versionActions.ts
 var import_child_process = require("child_process");
+var fs3 = __toESM(require("fs"));
+var path6 = __toESM(require("path"));
 var import_vscode10 = require("vscode");
 var previewSources = /* @__PURE__ */ new Map();
 function setCommitPreviewSource(slotId, commitId, source) {
@@ -1279,15 +1589,85 @@ async function viewGeneratedCode(slotId, commitId, source) {
   const doc = await import_vscode10.workspace.openTextDocument(uri);
   await import_vscode10.window.showTextDocument(doc, { preview: true });
 }
+function expandWorkspaceVars(s) {
+  let out = s;
+  const folders = import_vscode10.workspace.workspaceFolders ?? [];
+  if (out.includes("${workspaceFolder}")) {
+    const first = folders[0]?.uri.fsPath;
+    if (first) {
+      out = out.replace(/\$\{workspaceFolder\}/g, first);
+    }
+  }
+  return out;
+}
+function resolveConfiguredPythonPath(raw) {
+  let out = expandWorkspaceVars(raw.trim());
+  if (!out) {
+    return out;
+  }
+  if (!path6.isAbsolute(out)) {
+    const wf = import_vscode10.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (wf) {
+      out = path6.resolve(wf, out);
+    }
+  }
+  try {
+    return path6.normalize(out);
+  } catch {
+    return out;
+  }
+}
+function pushIfFile(out, p) {
+  try {
+    if (fs3.existsSync(p) && fs3.statSync(p).isFile()) {
+      out.push(p);
+    }
+  } catch {
+  }
+}
+function candidateVenvInterpreterPaths() {
+  const candidates = [];
+  const roots = /* @__PURE__ */ new Set();
+  for (const wf of import_vscode10.workspace.workspaceFolders ?? []) {
+    roots.add(wf.uri.fsPath);
+    roots.add(path6.dirname(wf.uri.fsPath));
+  }
+  for (const root of roots) {
+    pushIfFile(candidates, path6.join(root, ".venv", "bin", "python"));
+    pushIfFile(candidates, path6.join(root, ".venv", "bin", "python3"));
+    pushIfFile(candidates, path6.join(root, "venv", "bin", "python"));
+    pushIfFile(candidates, path6.join(root, "venv", "bin", "python3"));
+    pushIfFile(candidates, path6.join(root, ".venv", "Scripts", "python.exe"));
+    pushIfFile(candidates, path6.join(root, "venv", "Scripts", "python.exe"));
+  }
+  return candidates;
+}
+function resolvePythonExecutable() {
+  const cfg = import_vscode10.workspace.getConfiguration("semipy");
+  const explicit = resolveConfiguredPythonPath((cfg.get("pythonPath") || "").trim());
+  if (explicit) {
+    return explicit;
+  }
+  for (const p of candidateVenvInterpreterPaths()) {
+    return p;
+  }
+  const py = import_vscode10.workspace.getConfiguration("python");
+  const interpreter = expandWorkspaceVars((py.get("defaultInterpreterPath") || "").trim());
+  if (interpreter) {
+    return interpreter;
+  }
+  return process.platform === "win32" ? "python" : "python3";
+}
 function runSemipyCli(args, cwd) {
-  return new Promise((resolve2) => {
-    (0, import_child_process.execFile)("python3", ["-m", "semipy", ...args], { cwd }, (error, stdout, stderr) => {
+  return new Promise((resolve3) => {
+    const exe = resolvePythonExecutable();
+    (0, import_child_process.execFile)(exe, ["-m", "semipy", ...args], { cwd }, (error, stdout, stderr) => {
       let code = 0;
       if (error) {
         const c = error.code;
         code = typeof c === "number" ? c : 1;
       }
-      resolve2({
+      resolve3({
         stdout: String(stdout),
         stderr: String(stderr),
         code
@@ -1297,12 +1677,13 @@ function runSemipyCli(args, cwd) {
 }
 
 // src/features/diagnostics/diagnosticProvider.ts
-var fs3 = __toESM(require("fs"));
-var path6 = __toESM(require("path"));
+var fs4 = __toESM(require("fs"));
+var path7 = __toESM(require("path"));
 var import_vscode11 = require("vscode");
 var SemipyDiagnosticManager = class {
-  constructor(semiformalRoot) {
-    this.semiformalRoot = semiformalRoot;
+  /** semipy `cache_dir` (directory containing `diagnostics.json`). */
+  constructor(portalCacheDir) {
+    this.portalCacheDir = portalCacheDir;
   }
   collection = import_vscode11.languages.createDiagnosticCollection("semipy");
   dispose() {
@@ -1310,14 +1691,14 @@ var SemipyDiagnosticManager = class {
   }
   refresh() {
     this.collection.clear();
-    const root = this.semiformalRoot();
-    if (!root) {
+    const cacheDir = this.portalCacheDir();
+    if (!cacheDir) {
       return;
     }
-    const p = path6.join(root, ".semiformal", "diagnostics.json");
+    const p = path7.join(cacheDir, "diagnostics.json");
     let data;
     try {
-      const raw = fs3.readFileSync(p, "utf8");
+      const raw = fs4.readFileSync(p, "utf8");
       data = JSON.parse(raw);
     } catch {
       return;
@@ -1352,8 +1733,8 @@ var SemipyDiagnosticManager = class {
     d.relatedInformation = [];
     if (e.generated_path && e.generated_line_range?.length === 2) {
       const [a, b] = e.generated_line_range;
-      const root = this.semiformalRoot() || "";
-      const gp = path6.isAbsolute(e.generated_path) ? e.generated_path : path6.join(root, e.generated_path);
+      const root = this.portalCacheDir() || "";
+      const gp = path7.isAbsolute(e.generated_path) ? e.generated_path : path7.join(root, e.generated_path);
       d.relatedInformation.push({
         location: {
           uri: import_vscode11.Uri.file(gp),
@@ -1407,63 +1788,291 @@ function createRegenerateCodeActionProvider(getWorkspaceRoot, getPortalRelPath) 
   };
 }
 
+// src/features/slotAnnotations/slotEditorAnnotations.ts
+var import_vscode13 = require("vscode");
+
+// src/features/slotAnnotations/slotLineResolve.ts
+function resolveSlotUiLines(document, slot) {
+  const spec = slot.slot_spec;
+  if (!spec) {
+    return void 0;
+  }
+  const fsPath = document.uri.fsPath;
+  const src = spec.source_span;
+  if (!Array.isArray(src) || src.length < 3) {
+    return void 0;
+  }
+  const [fn, start1] = src;
+  if (!pathsEqualRobust(fn, fsPath)) {
+    return void 0;
+  }
+  const fullText = document.getText();
+  const block = resolveSourceBlockRange(fullText, slot);
+  if (!block) {
+    return void 0;
+  }
+  const { startLine1, endLine1 } = block;
+  const lines = fullText.split(/\r?\n/);
+  let inlayLine1 = startLine1;
+  for (let i = startLine1 - 1; i <= endLine1 - 1 && i < lines.length; i++) {
+    const raw = lines[i] ?? "";
+    if (/#\s*>/.test(raw)) {
+      inlayLine1 = i + 1;
+      break;
+    }
+  }
+  const start0 = startLine1 - 1;
+  for (let i = start0; i >= 0 && i >= start0 - 200; i--) {
+    const t = document.lineAt(i).text.trim();
+    if (t.startsWith("def ") || t.startsWith("async def")) {
+      return { codeLensLine0: i, inlayLine0: inlayLine1 - 1 };
+    }
+    if (t.startsWith("@semiformal")) {
+      return { codeLensLine0: i, inlayLine0: inlayLine1 - 1 };
+    }
+  }
+  return {
+    codeLensLine0: Math.max(0, start1 - 1),
+    inlayLine0: inlayLine1 - 1
+  };
+}
+
+// src/features/slotAnnotations/slotEditorAnnotations.ts
+function codeLensLineIndexStale(doc, spec) {
+  if (!spec) {
+    return void 0;
+  }
+  const fsPath = doc.uri.fsPath;
+  const enc = spec.enclosing_function_span;
+  if (Array.isArray(enc) && enc.length >= 2) {
+    const [fn2, start12] = enc;
+    if (pathsEqualRobust(fn2, fsPath)) {
+      return Math.max(0, start12 - 1);
+    }
+  }
+  const src = spec.source_span;
+  if (!Array.isArray(src) || src.length < 2) {
+    return void 0;
+  }
+  const [fn, start1] = src;
+  if (!pathsEqualRobust(fn, fsPath)) {
+    return void 0;
+  }
+  const firstSpecLine = Math.max(0, start1 - 1);
+  for (let i = firstSpecLine; i >= 0 && i >= firstSpecLine - 80; i--) {
+    const t = doc.lineAt(i).text.trim();
+    if (t.startsWith("def ") || t.startsWith("async def")) {
+      return i;
+    }
+    if (t.startsWith("@semiformal")) {
+      return i;
+    }
+  }
+  return Math.max(0, firstSpecLine - 1);
+}
+var SemipyCodeLensProvider = class {
+  constructor(getPortal, enabled) {
+    this.getPortal = getPortal;
+    this.enabled = enabled;
+  }
+  _onDidChange = new import_vscode13.EventEmitter();
+  onDidChangeCodeLenses = this._onDidChange.event;
+  refresh() {
+    this._onDidChange.fire();
+  }
+  provideCodeLenses(document) {
+    if (!this.enabled()) {
+      return [];
+    }
+    const portal = this.getPortal();
+    if (!portal || document.languageId !== "python") {
+      return [];
+    }
+    const fsPath = document.uri.fsPath;
+    const out = [];
+    for (const slot of Object.values(portal.slots)) {
+      const spec = slot.slot_spec;
+      const ui = resolveSlotUiLines(document, slot);
+      const lineIdx = ui?.codeLensLine0 ?? codeLensLineIndexStale(document, spec);
+      if (lineIdx === void 0 || lineIdx >= document.lineCount) {
+        continue;
+      }
+      const range = new import_vscode13.Range(lineIdx, 0, lineIdx, 0);
+      const commit = activeCommitFromPortalSlot(slot);
+      const idShort = commit?.commit_id?.slice(0, 8) ?? "?";
+      const decision = (commit?.decision || "?").toUpperCase();
+      const t = commit?.timestamp ? new Date(commit.timestamp * 1e3).toLocaleString() : "";
+      const locked = slot.refs?.["__locked__"];
+      const headline = locked ? `Semipy locked \xB7 ${idShort} \xB7 ${t}` : `Semipy ${decision} \xB7 ${idShort} \xB7 ${t}`;
+      out.push(
+        new import_vscode13.CodeLens(range, {
+          title: headline,
+          command: "semipy.noop"
+        }),
+        new import_vscode13.CodeLens(range, {
+          title: "Switch version",
+          command: "semipy.pickSlotVersion",
+          arguments: [slot.slot_id]
+        }),
+        new import_vscode13.CodeLens(range, {
+          title: locked ? "Unlock" : "Lock",
+          command: locked ? "semipy.unlockSlotVersion" : "semipy.lockSlotVersion",
+          arguments: locked ? [slot.slot_id] : [slot.slot_id, commit?.commit_id ?? ""]
+        })
+      );
+    }
+    return out;
+  }
+};
+var SemipyInlayHintsProvider = class {
+  constructor(getPortal, enabled) {
+    this.getPortal = getPortal;
+    this.enabled = enabled;
+  }
+  _onDidChange = new import_vscode13.EventEmitter();
+  onDidChangeInlayHints = this._onDidChange.event;
+  refresh() {
+    this._onDidChange.fire();
+  }
+  provideInlayHints(document, _range, _token) {
+    if (!this.enabled()) {
+      return void 0;
+    }
+    const portal = this.getPortal();
+    if (!portal || document.languageId !== "python") {
+      return void 0;
+    }
+    const fsPath = document.uri.fsPath;
+    const hints = [];
+    for (const slot of Object.values(portal.slots)) {
+      const spec = slot.slot_spec;
+      const src = spec?.source_span;
+      if (!Array.isArray(src) || src.length < 3) {
+        continue;
+      }
+      const [fn] = src;
+      if (!pathsEqualRobust(fn, fsPath)) {
+        continue;
+      }
+      const ui = resolveSlotUiLines(document, slot);
+      const lineNo = ui?.inlayLine0 ?? Math.max(0, src[1] - 1);
+      if (lineNo >= document.lineCount) {
+        continue;
+      }
+      const line = document.lineAt(lineNo);
+      const commit = activeCommitFromPortalSlot(slot);
+      const decision = (commit?.decision || "?").toUpperCase();
+      const idShort = commit?.commit_id?.slice(0, 8) ?? "?";
+      const label = ` semipy \xB7 ${decision} \xB7 ${idShort} `;
+      hints.push(
+        new import_vscode13.InlayHint(
+          new import_vscode13.Position(lineNo, line.text.length),
+          label,
+          import_vscode13.InlayHintKind.Type
+        )
+      );
+    }
+    return hints.length ? hints : void 0;
+  }
+};
+
 // src/extension.ts
+function semipyCliFailureMessage(stderr, stdout, fallback) {
+  let detail = (stderr || stdout || fallback).trim().slice(0, 500);
+  if (detail.includes("No module named 'semipy'") || detail.includes("No module named semipy")) {
+    detail += " Use Python: Select Interpreter for an environment that includes semipy, or set semipy.pythonPath.";
+  }
+  return detail;
+}
+function sessionSourceOpts() {
+  let raw = import_vscode14.workspace.getConfiguration("semipy").get("sessionSource")?.trim();
+  if (raw?.includes("${workspaceFolder}")) {
+    const folder = import_vscode14.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (folder) {
+      raw = raw.replace(/\$\{workspaceFolder\}/g, folder);
+    }
+  }
+  return { sessionSourceFromSettings: raw || void 0 };
+}
 function refreshPortalForUri(fsPath, state) {
-  state.workspaceRoot = findWorkspaceRootContainingSemiformal(fsPath);
-  if (!state.workspaceRoot) {
+  const found = findPortalJsonPathForEditor(fsPath, sessionSourceOpts());
+  if (!found) {
     state.portal = void 0;
     state.portalPath = void 0;
+    state.portalCacheDir = void 0;
+    state.workspaceRoot = void 0;
     return;
   }
-  const expected = expectedPortalJsonPath(fsPath);
-  if (!expected) {
+  const portal = loadPortalJson(found);
+  if (!portal) {
     state.portal = void 0;
     state.portalPath = void 0;
+    state.portalCacheDir = void 0;
+    state.workspaceRoot = void 0;
     return;
   }
-  state.portalPath = expected;
-  state.portal = loadPortalJson(expected);
-  if (state.portal && !portalMatchesEditorFile(state.portal, fsPath)) {
-    state.portal = void 0;
-  }
+  state.portalPath = found;
+  state.portal = portal;
+  state.portalCacheDir = path8.dirname(found);
+  const wf = import_vscode14.workspace.getWorkspaceFolder(import_vscode14.Uri.file(found));
+  state.workspaceRoot = wf?.uri.fsPath ?? path8.dirname(state.portalCacheDir);
 }
 function activate(context) {
   const portalState = {
     portal: void 0,
     portalPath: void 0,
+    portalCacheDir: void 0,
     workspaceRoot: void 0
   };
+  const cfg = () => import_vscode14.workspace.getConfiguration("semipy");
   const opacityTypes = createOpacityDecorationTypes();
   const phraseTypes = createPhraseDecorationTypes();
-  const debounceMs = () => import_vscode13.workspace.getConfiguration("semipy").get("debounceMs") ?? 200;
+  const debounceMs = () => cfg().get("debounceMs") ?? 200;
   const signFlip = new SignFlipCoordinator(
-    () => import_vscode13.workspace.getConfiguration("semipy").get("signFlipOnSkeletonEdit") ?? true
+    () => cfg().get("signFlipOnSkeletonEdit") ?? true,
+    () => cfg().get("signFlipSkipApiEdits") ?? true
+  );
+  const codeLensProvider = new SemipyCodeLensProvider(
+    () => portalState.portal,
+    () => cfg().get("enableCodeLens") ?? true
+  );
+  const inlayProvider = new SemipyInlayHintsProvider(
+    () => portalState.portal,
+    () => cfg().get("enableInlayHints") ?? true
   );
   const linked = new LinkedHighlightCoordinator(
-    () => import_vscode13.workspace.getConfiguration("semipy").get("linkedHighlightFadeMs") ?? 1500
+    () => cfg().get("linkedHighlightFadeMs") ?? 1500
   );
-  const diag = new SemipyDiagnosticManager(() => portalState.workspaceRoot);
+  const diag = new SemipyDiagnosticManager(() => portalState.portalCacheDir);
   const tree = new SlotHistoryProvider(() => portalState.portal);
-  const treeView = import_vscode13.window.createTreeView("semipy.slotHistory", {
+  const treeView = import_vscode14.window.createTreeView("semipy.slotHistory", {
     treeDataProvider: tree,
     showCollapseAll: true
   });
-  const status = import_vscode13.window.createStatusBarItem(import_vscode13.StatusBarAlignment.Left, 100);
+  const status = import_vscode14.window.createStatusBarItem(import_vscode14.StatusBarAlignment.Left, 100);
   status.command = "semipy.refreshHistory";
   function refreshAllDecorations(editor) {
     if (!editor) {
       return;
     }
     refreshPortalForUri(editor.document.uri.fsPath, portalState);
-    const root = portalState.workspaceRoot;
+    const cacheDir = portalState.portalCacheDir;
     refreshOpacityDecorations(editor, opacityTypes.reasoningDim);
-    refreshPhraseDecorations(editor, portalState.portal, root, phraseTypes);
+    refreshPhraseDecorations(
+      editor,
+      portalState.portal,
+      cacheDir,
+      phraseTypes,
+      import_vscode14.workspace.workspaceFolders?.map((w) => w.uri.fsPath) ?? []
+    );
     const n = portalState.portal ? Object.keys(portalState.portal.slots).length : 0;
     status.text = `Semipy: ${n} slot(s)`;
     status.show();
     tree.refresh();
     diag.refresh();
-    linked.onSelectionOrPortal(editor, portalState.portal, root);
+    codeLensProvider.refresh();
+    inlayProvider.refresh();
+    linked.onSelectionOrPortal(editor, portalState.portal, cacheDir);
   }
   const opacitySub = subscribeOpacityWrapper(opacityTypes, debounceMs, refreshAllDecorations);
   context.subscriptions.push(
@@ -1473,82 +2082,189 @@ function activate(context) {
     signFlip.attach(),
     { dispose: () => linked.dispose() },
     diag,
-    import_vscode13.window.onDidChangeTextEditorSelection((e) => {
-      refreshPortalForUri(e.textEditor.document.uri.fsPath, portalState);
-      linked.onSelectionOrPortal(e.textEditor, portalState.portal, portalState.workspaceRoot);
+    import_vscode14.languages.registerCodeLensProvider({ language: "python", scheme: "file" }, codeLensProvider),
+    import_vscode14.languages.registerInlayHintsProvider({ language: "python", scheme: "file" }, inlayProvider),
+    import_vscode14.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration("semipy")) {
+        codeLensProvider.refresh();
+        inlayProvider.refresh();
+      }
     }),
-    import_vscode13.window.onDidChangeActiveTextEditor((ed) => {
+    import_vscode14.window.onDidChangeTextEditorSelection((e) => {
+      refreshPortalForUri(e.textEditor.document.uri.fsPath, portalState);
+      linked.onSelectionOrPortal(e.textEditor, portalState.portal, portalState.portalCacheDir);
+    }),
+    import_vscode14.window.onDidChangeActiveTextEditor((ed) => {
       if (ed) {
         signFlip.seedDocument(ed.document);
       }
       refreshAllDecorations(ed);
     }),
-    import_vscode13.languages.registerHoverProvider(
+    import_vscode14.languages.registerHoverProvider(
       { language: "python", scheme: "file" },
       createPhraseHoverProvider(
         () => portalState.portal,
-        () => portalState.workspaceRoot
+        () => portalState.portalCacheDir,
+        () => import_vscode14.workspace.workspaceFolders?.map((w) => w.uri.fsPath) ?? []
       )
     ),
     registerCommitTextProvider(),
-    import_vscode13.commands.registerCommand("semipy.openSplitView", async () => {
-      const ed = import_vscode13.window.activeTextEditor;
+    import_vscode14.commands.registerCommand("semipy.noop", () => {
+    }),
+    import_vscode14.commands.registerCommand("semipy.openSplitView", async () => {
+      const ed = import_vscode14.window.activeTextEditor;
       if (!ed) {
         return;
       }
       refreshPortalForUri(ed.document.uri.fsPath, portalState);
-      if (!portalState.portal || !portalState.workspaceRoot) {
-        void import_vscode13.window.showWarningMessage("Semipy: no portal for this file.");
+      if (!portalState.portal || !portalState.portalCacheDir) {
+        void import_vscode14.window.showWarningMessage("Semipy: no portal for this file.");
         return;
       }
-      await openDispatchSplitView(portalState.workspaceRoot, portalState.portal.module_name);
+      await openDispatchSplitView(portalState.portalCacheDir, portalState.portal.module_name);
     }),
-    import_vscode13.commands.registerCommand("semipy.refreshHistory", () => {
-      const ed = import_vscode13.window.activeTextEditor;
+    import_vscode14.commands.registerCommand("semipy.refreshHistory", () => {
+      const ed = import_vscode14.window.activeTextEditor;
       refreshAllDecorations(ed);
       tree.refresh();
     }),
-    import_vscode13.commands.registerCommand(
+    import_vscode14.commands.registerCommand("semipy.pickSlotVersion", async (slotId) => {
+      const ed = import_vscode14.window.activeTextEditor;
+      if (!ed) {
+        return;
+      }
+      refreshPortalForUri(ed.document.uri.fsPath, portalState);
+      const portal = portalState.portal;
+      const root = portalState.workspaceRoot;
+      const portalPath = portalState.portalPath;
+      if (!portal || !root || !portalPath) {
+        void import_vscode14.window.showWarningMessage("Semipy: no portal for this file.");
+        return;
+      }
+      const slot = portal.slots[slotId];
+      if (!slot) {
+        return;
+      }
+      const commits = Object.values(slot.commits).sort((a, b) => b.timestamp - a.timestamp);
+      const picked = await import_vscode14.window.showQuickPick(
+        commits.map((c) => ({
+          label: c.commit_id.slice(0, 8),
+          description: `${c.decision} ${(c.message || "").slice(0, 48)}`,
+          detail: new Date(c.timestamp * 1e3).toLocaleString(),
+          cid: c.commit_id
+        })),
+        { placeHolder: "Activate commit (rollback branch head to here)" }
+      );
+      if (!picked || !("cid" in picked)) {
+        return;
+      }
+      const rel = path8.relative(root, portalPath);
+      const r = await runSemipyCli(
+        ["rollback", "--portal", rel, "--slot-id", slotId, "--commit-id", picked.cid],
+        root
+      );
+      if (r.code !== 0 && r.code !== null) {
+        void import_vscode14.window.showErrorMessage(
+          `Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "rollback failed")}`
+        );
+        return;
+      }
+      void import_vscode14.window.showInformationMessage("Semipy: rollback complete. Re-run code to rebuild dispatch if needed.");
+      refreshAllDecorations(ed);
+    }),
+    import_vscode14.commands.registerCommand("semipy.lockSlotVersion", async (slotId, commitId) => {
+      const ed = import_vscode14.window.activeTextEditor;
+      if (ed) {
+        refreshPortalForUri(ed.document.uri.fsPath, portalState);
+      }
+      const root = portalState.workspaceRoot;
+      const portalPath = portalState.portalPath;
+      if (!root || !portalPath || !commitId) {
+        void import_vscode14.window.showErrorMessage("Semipy: no portal or commit for lock.");
+        return;
+      }
+      const rel = path8.relative(root, portalPath);
+      const r = await runSemipyCli(
+        ["lock", "--portal", rel, "--slot-id", slotId, "--commit-id", commitId],
+        root
+      );
+      if (r.code !== 0 && r.code !== null) {
+        void import_vscode14.window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "lock failed")}`);
+        return;
+      }
+      void import_vscode14.window.showInformationMessage((r.stderr || r.stdout || "Lock saved.").trim().slice(0, 400));
+      refreshAllDecorations(import_vscode14.window.activeTextEditor);
+    }),
+    import_vscode14.commands.registerCommand("semipy.unlockSlotVersion", async (slotId) => {
+      const ed = import_vscode14.window.activeTextEditor;
+      if (ed) {
+        refreshPortalForUri(ed.document.uri.fsPath, portalState);
+      }
+      const root = portalState.workspaceRoot;
+      const portalPath = portalState.portalPath;
+      if (!root || !portalPath) {
+        void import_vscode14.window.showWarningMessage("Semipy: no portal for this file.");
+        return;
+      }
+      const rel = path8.relative(root, portalPath);
+      const r = await runSemipyCli(["unlock", "--portal", rel, "--slot-id", slotId], root);
+      if (r.code !== 0 && r.code !== null) {
+        void import_vscode14.window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "unlock failed")}`);
+        return;
+      }
+      void import_vscode14.window.showInformationMessage((r.stderr || r.stdout || "Unlocked.").trim().slice(0, 400));
+      refreshAllDecorations(import_vscode14.window.activeTextEditor);
+    }),
+    import_vscode14.commands.registerCommand(
       "semipy.viewGeneratedCode",
       async (slotId, commitId) => {
-        const fromDisk = portalState.portalPath !== void 0 ? loadPortalJson(portalState.portalPath) : void 0;
-        const portal = fromDisk ?? portalState.portal;
+        const ed = import_vscode14.window.activeTextEditor;
+        const fsPath = ed?.document.uri.fsPath;
+        const portalPath = fsPath && findPortalJsonPathForEditor(fsPath, sessionSourceOpts()) || portalState.portalPath;
+        const portal = portalPath ? loadPortalJson(portalPath) : portalState.portal;
         const slot = portal?.slots[slotId];
         const src = slot?.commits[commitId]?.generated_source;
         if (!src) {
-          void import_vscode13.window.showWarningMessage("Semipy: commit source not loaded; refresh history.");
+          void import_vscode14.window.showWarningMessage(
+            "Semipy: commit source not loaded. Refresh history or open the source file that owns this portal."
+          );
           return;
         }
         await viewGeneratedCode(slotId, commitId, src);
       }
     ),
-    import_vscode13.commands.registerCommand(
+    import_vscode14.commands.registerCommand(
       "semipy.regenerateSlotDiagnostic",
       async (ws, portalRel, slotId) => {
         const r = await runSemipyCli(
           ["regenerate", "--portal", portalRel, "--slot-id", slotId],
           ws
         );
-        void import_vscode13.window.showInformationMessage(r.stderr || r.stdout || "semipy regenerate finished.");
+        if (r.code !== 0 && r.code !== null) {
+          void import_vscode14.window.showErrorMessage(
+            `Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "regenerate failed")}`
+          );
+          return;
+        }
+        void import_vscode14.window.showInformationMessage(r.stderr || r.stdout || "semipy regenerate finished.");
         diag.refresh();
       }
     ),
-    import_vscode13.languages.registerCodeActionsProvider(
+    import_vscode14.languages.registerCodeActionsProvider(
       { language: "python", scheme: "file" },
       createRegenerateCodeActionProvider(
         () => portalState.workspaceRoot,
-        () => portalState.portalPath && portalState.workspaceRoot ? path7.relative(portalState.workspaceRoot, portalState.portalPath) : void 0
+        () => portalState.portalPath && portalState.workspaceRoot ? path8.relative(portalState.workspaceRoot, portalState.portalPath) : void 0
       )
     )
   );
-  const ed0 = import_vscode13.window.activeTextEditor;
+  const ed0 = import_vscode14.window.activeTextEditor;
   if (ed0) {
     signFlip.seedDocument(ed0.document);
   }
   refreshAllDecorations(ed0);
-  if (import_vscode13.workspace.workspaceFolders?.length) {
-    const wf = import_vscode13.workspace.workspaceFolders[0].uri.fsPath;
-    const w = import_vscode13.workspace.createFileSystemWatcher(new import_vscode13.RelativePattern(wf, ".semiformal/**/*"));
+  if (import_vscode14.workspace.workspaceFolders?.length) {
+    const wf = import_vscode14.workspace.workspaceFolders[0].uri.fsPath;
     let timer;
     const fire = () => {
       if (timer) {
@@ -1556,25 +2272,30 @@ function activate(context) {
       }
       timer = setTimeout(() => {
         timer = void 0;
-        refreshAllDecorations(import_vscode13.window.activeTextEditor);
+        refreshAllDecorations(import_vscode14.window.activeTextEditor);
       }, debounceMs());
     };
-    w.onDidChange(fire);
-    w.onDidCreate(fire);
-    w.onDidDelete(fire);
-    context.subscriptions.push(w);
+    const wPortal = import_vscode14.workspace.createFileSystemWatcher(new import_vscode14.RelativePattern(wf, "**/*.portal.json"));
+    const wSemi = import_vscode14.workspace.createFileSystemWatcher(new import_vscode14.RelativePattern(wf, "**/*.semi.py"));
+    wPortal.onDidChange(fire);
+    wPortal.onDidCreate(fire);
+    wPortal.onDidDelete(fire);
+    wSemi.onDidChange(fire);
+    wSemi.onDidCreate(fire);
+    wSemi.onDidDelete(fire);
+    context.subscriptions.push(wPortal, wSemi);
   }
 }
 function subscribeOpacityWrapper(types, debounceMs, onRefresh) {
   let timer;
   const tick = () => {
-    onRefresh(import_vscode13.window.activeTextEditor);
+    onRefresh(import_vscode14.window.activeTextEditor);
   };
-  const sub1 = import_vscode13.window.onDidChangeActiveTextEditor(() => {
+  const sub1 = import_vscode14.window.onDidChangeActiveTextEditor(() => {
     tick();
   });
-  const sub2 = import_vscode13.workspace.onDidChangeTextDocument((ev) => {
-    const ed = import_vscode13.window.activeTextEditor;
+  const sub2 = import_vscode14.workspace.onDidChangeTextDocument((ev) => {
+    const ed = import_vscode14.window.activeTextEditor;
     if (!ed || ev.document !== ed.document) {
       return;
     }

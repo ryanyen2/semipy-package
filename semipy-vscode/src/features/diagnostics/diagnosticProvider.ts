@@ -14,7 +14,8 @@ import type { DiagnosticEntryJson, DiagnosticsFileJson } from "../../data/types"
 export class SemipyDiagnosticManager {
   private collection = languages.createDiagnosticCollection("semipy");
 
-  constructor(private readonly semiformalRoot: () => string | undefined) {}
+  /** semipy `cache_dir` (directory containing `diagnostics.json`). */
+  constructor(private readonly portalCacheDir: () => string | undefined) {}
 
   dispose(): void {
     this.collection.dispose();
@@ -22,11 +23,11 @@ export class SemipyDiagnosticManager {
 
   refresh(): void {
     this.collection.clear();
-    const root = this.semiformalRoot();
-    if (!root) {
+    const cacheDir = this.portalCacheDir();
+    if (!cacheDir) {
       return;
     }
-    const p = path.join(root, ".semiformal", "diagnostics.json");
+    const p = path.join(cacheDir, "diagnostics.json");
     let data: DiagnosticsFileJson;
     try {
       const raw = fs.readFileSync(p, "utf8");
@@ -70,7 +71,7 @@ export class SemipyDiagnosticManager {
     d.relatedInformation = [];
     if (e.generated_path && e.generated_line_range?.length === 2) {
       const [a, b] = e.generated_line_range;
-      const root = this.semiformalRoot() || "";
+      const root = this.portalCacheDir() || "";
       const gp = path.isAbsolute(e.generated_path)
         ? e.generated_path
         : path.join(root, e.generated_path);

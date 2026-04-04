@@ -69,38 +69,67 @@
           "type": "boolean",
           "default": true,
           "description": "When you edit text on a #< line, rewrite the prefix to #> (user-owned spec)."
+        },
+        "semipy.signFlipSkipApiEdits": {
+          "type": "boolean",
+          "default": true,
+          "description": "Do not sign-flip on TextDocumentChangeReason.Api (programmatic edits such as tools writing #< lines)."
+        },
+        "semipy.enableCodeLens": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show Semipy commit/version CodeLens above @semiformal functions."
+        },
+        "semipy.enableInlayHints": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show last resolution (decision, commit id) as inlay hints on spec lines."
+        },
+        "semipy.sessionSource": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path matching semipy configure(session_source=...). Use ${workspaceFolder} when the portal is keyed to the opened folder (e.g. examples/)."
+        },
+        "semipy.pythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to python for `python -m semipy` (lock, unlock, rollback). May use ${workspaceFolder}. When empty, uses a workspace `.venv`/`venv` if present, then the Python extension interpreter. Set in Settings JSON under key `semipy.pythonPath` (UI \"@ext:\" search only finds marketplace IDs)."
         }
       }
     },
     "configurationDefaults": {
-      "editor.tokenColorCustomizations": {
-        "textMateRules": [
-          {
-            "scope": "string.unquoted.spec-text.semipy",
-            "settings": {
-              "foreground": "#4EC9B0"
+      "[python]": {
+        "editor.inlayHints.enabled": "on",
+        "editor.codeLens": true,
+        "editor.tokenColorCustomizations": {
+          "textMateRules": [
+            {
+              "scope": "string.unquoted.spec-text.semipy",
+              "settings": {
+                "foreground": "#4EC9B0"
+              }
+            },
+            {
+              "scope": "punctuation.definition.spec.semipy",
+              "settings": {
+                "foreground": "#4EC9B0",
+                "fontStyle": "bold"
+              }
+            },
+            {
+              "scope": "string.unquoted.reasoning-text.semipy",
+              "settings": {
+                "foreground": "#6A9955"
+              }
+            },
+            {
+              "scope": "punctuation.definition.reasoning.semipy",
+              "settings": {
+                "foreground": "#6A9955"
+              }
             }
-          },
-          {
-            "scope": "punctuation.definition.spec.semipy",
-            "settings": {
-              "foreground": "#4EC9B0",
-              "fontStyle": "bold"
-            }
-          },
-          {
-            "scope": "string.unquoted.reasoning-text.semipy",
-            "settings": {
-              "foreground": "#6A9955"
-            }
-          },
-          {
-            "scope": "punctuation.definition.reasoning.semipy",
-            "settings": {
-              "foreground": "#6A9955"
-            }
-          }
-        ]
+          ]
+        }
       }
     }
   },

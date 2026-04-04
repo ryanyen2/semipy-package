@@ -3,8 +3,10 @@ import pandas as pd
 from datetime import datetime
 from pathlib import Path
 
-CACHE_DIR = './semiformal-datetime-usecase'
-_SESSION_SOURCE = str((Path(CACHE_DIR).resolve().parent / "examples").resolve())
+# Portal session id matches this directory basename (same as VS Code workspace folder when you open `examples/`).
+_EXAMPLES_ROOT = Path(__file__).resolve().parent
+_SESSION_SOURCE = str(_EXAMPLES_ROOT)
+CACHE_DIR = str(_EXAMPLES_ROOT / ".semiformal")
 
 configure(
     cache_dir=CACHE_DIR,
@@ -14,12 +16,12 @@ configure(
 
 @semiformal
 def infer_datetime_formatter(date_str: str) -> str:
-    #< [Task] infer parse pattern before normalization
+    #< [Task] infer pattern, then normalize display
     input_pattern = ... #> infer the input date regex/strptime pattern from the observed string format in this session.
-    #< [Given] output collapses day-level detail
+    #< [Given] session context decides ambiguous order
     output_pattern = "%b %Y"
-    #< [But] parser must match session variant
-    #< [Verify] malformed inputs fail at parse
+    #> [But] parse must match separators exactly, skip invalid cases
+    #< [Verify] round-trip avoids partial date acceptance
     return datetime.strptime(str(date_str), input_pattern).strftime(output_pattern)
 
 
@@ -30,7 +32,6 @@ data = pd.DataFrame(
             "03/20/2025",
             "04/05/2025",
             "04/18/2025",
-            "01 12",
             "05-01-2025",
             "05-12-2025 11:30",
             "08-18-2025 09:30:00",

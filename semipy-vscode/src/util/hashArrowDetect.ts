@@ -70,6 +70,19 @@ export function hashArrowPrefixRange(line: string): { start: number; end: number
   return { start: lead, end: lead + pref };
 }
 
+/**
+ * Spec text after `#>` anywhere on the line (standalone comment or trailing inline spec).
+ * `baseCol` is the 0-based column where spec content begins (after `#>`).
+ */
+export function hashArrowSpecSuffixFromLine(line: string): { baseCol: number; suffix: string } | null {
+  const m = /#\s*>/.exec(line);
+  if (!m || m.index === undefined) {
+    return null;
+  }
+  const baseCol = m.index + m[0].length;
+  return { baseCol, suffix: line.slice(baseCol) };
+}
+
 /** Column range of `#<` or `# <` prefix, or null. */
 export function reasoningPrefixRange(line: string): { start: number; end: number } | null {
   const m = line.match(/^(\s*)((?:#\s*<))/);

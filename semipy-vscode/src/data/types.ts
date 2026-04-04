@@ -17,6 +17,9 @@ export interface SlotSpecJson {
   slot_id?: string;
   spec_text?: string;
   source_span?: [string, number, number];
+  /** [file, start_line, end_line] 1-based; function containing the slot */
+  enclosing_function_span?: [string, number, number];
+  enclosing_function_qualname?: string;
   expected_category?: string;
   [key: string]: unknown;
 }
@@ -56,6 +59,7 @@ export interface SemanticBindingJson {
 }
 
 export interface SketchLibraryJson {
+  version?: number;
   bindings?: Record<string, SemanticBindingJson>;
   sketches?: Record<string, { binding_id?: string; sketch_id?: string }>;
 }

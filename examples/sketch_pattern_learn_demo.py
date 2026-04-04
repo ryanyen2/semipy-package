@@ -34,7 +34,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
+# from dotenv import load_dotenv
 
 from semipy import configure, semiformal
 from semipy.agents.config import get_config
@@ -50,11 +50,12 @@ from semipy.session_anchor import resolve_portal_anchor
 from semipy.store import load_portal
 from semipy.types import session_id_from_filename, session_module_name_from_filename
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-CACHE_DIR = REPO_ROOT / ".semiformal-sketch-demo"
-_SESSION_SOURCE = str((REPO_ROOT / "examples").resolve())
 
-load_dotenv(REPO_ROOT / ".env")
+_EXAMPLES_ROOT = Path(__file__).resolve().parent
+CACHE_DIR = str(_EXAMPLES_ROOT / ".semiformal")
+_SESSION_SOURCE = str(_EXAMPLES_ROOT)
+
+# load_dotenv(REPO_ROOT / ".env")
 
 configure(
     cache_dir=str(CACHE_DIR),
@@ -163,8 +164,12 @@ def _sync_sketch_from_function(qualname: str) -> bool:
 
 @semiformal
 def filter_alpha(df):
+    #< [Task] prefer status-based subset only
     #> filter rows where "status" column equals "active"
+    #< [Given] status access may vary by container
+    #< [But] missing field should not silently broaden
     out = ...
+    #< [Verify] result preserves matching row shape
     return out
 
 
@@ -177,8 +182,12 @@ def filter_beta(df):
 
 @semiformal
 def filter_gamma(df):
+    #< [Task] prefer score-filter, tolerate bad inputs
     #> filter rows where "score" column is greater than 10
+    #< [Given] column access may fail by shape
     out = ...
+    #< [But] keep nullish cases from crashing
+    #< [Verify] threshold stays strictly greater
     return out
 
 

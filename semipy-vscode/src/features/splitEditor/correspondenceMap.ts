@@ -1,20 +1,18 @@
 import * as path from "path";
 import type { PortalJson, SlotJson } from "../../data/types";
 import { parseSpecMapEntry } from "../../data/dispatchLoader";
+import { pathsEqualRobust } from "../../data/portalLoader";
 
 export function pathsEqual(a: string, b: string): boolean {
-  try {
-    return path.normalize(a) === path.normalize(b);
-  } catch {
-    return a === b;
-  }
+  return pathsEqualRobust(a, b);
 }
 
-/** 1-based line in source file -> slot covering that line, if any. */
+/** 1-based line in source file -> slot covering that line, if any. Uses current buffer text when possible. */
 export function findSlotForSourceLine(
   portal: PortalJson,
   sourceFsPath: string,
   line1: number,
+  fullText: string,
 ): SlotJson | undefined {
   for (const slot of Object.values(portal.slots)) {
     const sp = slot.slot_spec;
@@ -22,11 +20,15 @@ export function findSlotForSourceLine(
     if (!span || span.length < 3) {
       continue;
     }
-    const [fn, start, end] = span;
-    if (!pathsEqual(fn, sourceFsPath) && path.basename(fn) !== path.basename(sourceFsPath)) {
+    const [fn] = span;
+    if (!pathsEqualRobust(fn, sourceFsPath)) {
       continue;
     }
-    if (line1 >= start && line1 <= end) {
+    const block = resolveSourceBlockRange(fullText, slot);
+    if (!block) {
+      continue;
+    }
+    if (line1 >= block.startLine1 && line1 <= block.endLine1) {
       return slot;
     }
   }
@@ -61,10 +63,11 @@ export function resolveSourceBlockRange(
   return { startLine1: start, endLine1: end };
 }
 
+/** semipy `cache_dir` (directory containing `*.portal.json`). */
 export function dispatchRangeForSlot(
   portal: PortalJson,
   slotId: string,
-  workspaceRoot: string,
+  portalCacheDir: string,
 ): { uriPath: string; startLine1: number; endLine1: number } | undefined {
   const raw = portal.spec_map[slotId];
   if (!raw) {
@@ -75,7 +78,7 @@ export function dispatchRangeForSlot(
     return undefined;
   }
   const mod = portal.module_name || "unknown";
-  const runtimePath = path.join(workspaceRoot, ".semiformal", "runtime", `${mod}.semi.py`);
+  const runtimePath = path.join(portalCacheDir, "runtime", `${mod}.semi.py`);
   return {
     uriPath: runtimePath,
     startLine1: parsed.startLine,

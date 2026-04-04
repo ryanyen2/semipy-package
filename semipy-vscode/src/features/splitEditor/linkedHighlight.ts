@@ -6,6 +6,7 @@ import {
   dispatchRangeForSlot,
   findSlotForSourceLine,
   pathsEqual,
+  resolveSourceBlockRange,
 } from "./correspondenceMap";
 
 export class LinkedHighlightCoordinator {
@@ -29,7 +30,7 @@ export class LinkedHighlightCoordinator {
   onSelectionOrPortal(
     editor: TextEditor | undefined,
     portal: PortalJson | undefined,
-    workspaceRoot: string | undefined,
+    portalCacheDir: string | undefined,
   ): void {
     if (this.fadeTimer) {
       clearTimeout(this.fadeTimer);
@@ -38,31 +39,27 @@ export class LinkedHighlightCoordinator {
     for (const ed of window.visibleTextEditors) {
       ed.setDecorations(this.highlight, []);
     }
-    if (!editor || !portal || !workspaceRoot) {
+    if (!editor || !portal || !portalCacheDir) {
       return;
     }
     const doc = editor.document;
     const docPath = doc.uri.fsPath;
     const sel = editor.selection.active;
     const line1 = sel.line + 1;
+    const fullText = doc.getText();
 
-    const dispatchPath = path.join(
-      workspaceRoot,
-      ".semiformal",
-      "runtime",
-      `${portal.module_name}.semi.py`,
-    );
+    const dispatchPath = path.join(portalCacheDir, "runtime", `${portal.module_name}.semi.py`);
 
     if (pathsEqual(docPath, dispatchPath) || doc.uri.fsPath.endsWith(".semi.py")) {
-      this.highlightDispatchToSource(editor, portal, workspaceRoot);
+      this.highlightDispatchToSource(editor, portal, portalCacheDir);
       return;
     }
 
-    const slot = findSlotForSourceLine(portal, docPath, line1);
+    const slot = findSlotForSourceLine(portal, docPath, line1, fullText);
     if (!slot) {
       return;
     }
-    const dr = dispatchRangeForSlot(portal, slot.slot_id, workspaceRoot);
+    const dr = dispatchRangeForSlot(portal, slot.slot_id, portalCacheDir);
     if (!dr) {
       return;
     }
@@ -85,10 +82,10 @@ export class LinkedHighlightCoordinator {
     this.scheduleFade();
   }
 
-  private highlightDispatchToSource(editor: TextEditor, portal: PortalJson, workspaceRoot: string): void {
+  private highlightDispatchToSource(editor: TextEditor, portal: PortalJson, portalCacheDir: string): void {
     const line1 = editor.selection.active.line + 1;
     for (const slot of Object.values(portal.slots)) {
-      const dr = dispatchRangeForSlot(portal, slot.slot_id, workspaceRoot);
+      const dr = dispatchRangeForSlot(portal, slot.slot_id, portalCacheDir);
       if (!dr) {
         continue;
       }
@@ -100,7 +97,7 @@ export class LinkedHighlightCoordinator {
         if (!sp || sp.length < 3) {
           return;
         }
-        const [srcFile, a, b] = sp;
+        const [srcFile] = sp;
         const srcUri = Uri.file(srcFile);
         const srcEd = window.visibleTextEditors.find(
           (e) => e.document.uri.toString() === srcUri.toString(),
@@ -108,7 +105,11 @@ export class LinkedHighlightCoordinator {
         if (!srcEd) {
           return;
         }
+        const full = srcEd.document.getText();
+        const block = resolveSourceBlockRange(full, slot);
         const ranges: Range[] = [];
+        const a = block?.startLine1 ?? (sp[1] as number);
+        const b = block?.endLine1 ?? (sp[2] as number);
         for (let i = a - 1; i <= b - 1; i++) {
           if (i < srcEd.document.lineCount) {
             ranges.push(srcEd.document.lineAt(i).range);

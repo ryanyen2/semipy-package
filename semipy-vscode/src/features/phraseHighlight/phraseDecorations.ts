@@ -6,18 +6,44 @@ import {
   window,
 } from "vscode";
 import type { PortalJson, SpecPhraseJson } from "../../data/types";
-import { bindingById, loadSketchLibrary } from "../../data/sketchLoader";
-import { hashArrowPrefixRange } from "../../util/hashArrowDetect";
+import { bindingById, loadSketchLibraryMerged } from "../../data/sketchLoader";
+import { hashArrowSpecSuffixFromLine } from "../../util/hashArrowDetect";
 import { activeCommitFromPortalSlot } from "../splitEditor/portalCommit";
+import { resolveSourceBlockRange } from "../splitEditor/correspondenceMap";
 
 const ROLE_ORDER = ["operation", "param", "operator", "connective"];
+
+/** Visible role colors (semantic binding / pattern-learning phrases); works on light and dark themes. */
+const ROLE_STYLES: Record<
+  string,
+  { light: { color: string; backgroundColor: string }; dark: { color: string; backgroundColor: string } }
+> = {
+  operation: {
+    light: { color: "#00639c", backgroundColor: "rgba(0, 99, 156, 0.14)" },
+    dark: { color: "#4ec9b0", backgroundColor: "rgba(78, 201, 176, 0.18)" },
+  },
+  param: {
+    light: { color: "#a31515", backgroundColor: "rgba(163, 21, 21, 0.1)" },
+    dark: { color: "#ce9178", backgroundColor: "rgba(206, 145, 120, 0.18)" },
+  },
+  operator: {
+    light: { color: "#811f3f", backgroundColor: "rgba(129, 31, 63, 0.1)" },
+    dark: { color: "#dcdcaa", backgroundColor: "rgba(220, 220, 170, 0.14)" },
+  },
+  connective: {
+    light: { color: "#444444", backgroundColor: "rgba(68, 68, 68, 0.08)" },
+    dark: { color: "#9cdcfe", backgroundColor: "rgba(156, 220, 254, 0.12)" },
+  },
+};
 
 export function createPhraseDecorationTypes(): Record<string, TextEditorDecorationType> {
   const out: Record<string, TextEditorDecorationType> = {};
   for (const role of ROLE_ORDER) {
+    const st = ROLE_STYLES[role] ?? ROLE_STYLES.param;
     out[role] = window.createTextEditorDecorationType({
       rangeBehavior: DecorationRangeBehavior.ClosedClosed,
-      fontWeight: role === "operation" ? "bold" : undefined,
+      light: { ...st.light, fontWeight: role === "operation" ? "600" : undefined },
+      dark: { ...st.dark, fontWeight: role === "operation" ? "600" : undefined },
     });
   }
   return out;
@@ -27,6 +53,7 @@ function sortPhrasesLongestFirst(phrases: SpecPhraseJson[]): SpecPhraseJson[] {
   return [...phrases].sort((a, b) => (b.text || "").length - (a.text || "").length);
 }
 
+/** Map NL phrases to columns in the spec suffix; case-independent substring match. */
 function phraseSpansInSuffix(
   suffix: string,
   phrases: SpecPhraseJson[],
@@ -38,18 +65,25 @@ function phraseSpansInSuffix(
   const overlaps = (s: number, e: number) =>
     used.some((u) => !(e <= u.start || s >= u.end));
 
+  const lowerSuffix = suffix.toLowerCase();
+
   for (const p of sorted) {
     const t = (p.text || "").trim();
     if (!t) {
       continue;
     }
+    const tl = t.toLowerCase();
     let search = 0;
-    while (search < suffix.length) {
-      const pos = suffix.indexOf(t, search);
+    while (search <= lowerSuffix.length) {
+      const pos = lowerSuffix.indexOf(tl, search);
       if (pos < 0) {
         break;
       }
       const end = pos + t.length;
+      if (suffix.slice(pos, end).toLowerCase() !== tl) {
+        search = pos + 1;
+        continue;
+      }
       if (!overlaps(pos, end)) {
         used.push({ start: pos, end });
         spans.push({ start: pos, end, role: p.role || "param" });
@@ -61,19 +95,21 @@ function phraseSpansInSuffix(
   return spans;
 }
 
+/** `portalCacheDir` is semipy `cache_dir` (where `sketch_library.json` and portals live). */
 export function refreshPhraseDecorations(
   editor: TextEditor,
   portal: PortalJson | undefined,
-  semiformalRoot: string | undefined,
+  portalCacheDir: string | undefined,
   types: Record<string, TextEditorDecorationType>,
+  workspaceRoots: readonly string[] | undefined,
 ): void {
   for (const t of Object.values(types)) {
     editor.setDecorations(t, []);
   }
-  if (!portal || !semiformalRoot) {
+  if (!portal || !portalCacheDir) {
     return;
   }
-  const lib = loadSketchLibrary(semiformalRoot);
+  const lib = loadSketchLibraryMerged(portalCacheDir, workspaceRoots);
   const doc = editor.document;
   const full = doc.getText();
   const lines = full.split(/\r?\n/);
@@ -93,30 +129,30 @@ export function refreshPhraseDecorations(
     if (!binding?.phrases?.length) {
       continue;
     }
-    const span = slot.slot_spec?.source_span;
-    if (!span || span.length < 3) {
+    const block = resolveSourceBlockRange(full, slot);
+    if (!block) {
       continue;
     }
-    const [, start1, end1] = span;
+    const { startLine1: start1, endLine1: end1 } = block;
     for (let lineIdx = start1 - 1; lineIdx <= end1 - 1; lineIdx++) {
       if (lineIdx < 0 || lineIdx >= lines.length) {
         continue;
       }
       const line = lines[lineIdx]!;
-      const pref = hashArrowPrefixRange(line);
-      if (!pref) {
+      const specRegion = hashArrowSpecSuffixFromLine(line);
+      if (!specRegion) {
         continue;
       }
-      const suffix = line.slice(pref.end);
+      const suffix = specRegion.suffix;
       const spans = phraseSpansInSuffix(suffix, binding.phrases);
       const lineObj = doc.lineAt(lineIdx);
       for (const sp of spans) {
         const role = ROLE_ORDER.includes(sp.role) ? sp.role : "param";
-        const startCol = pref.end + sp.start;
-        const endCol = pref.end + sp.end;
+        const startCol = specRegion.baseCol + sp.start;
+        const endCol = specRegion.baseCol + sp.end;
         const r = new VsRange(
           new Position(lineIdx, startCol),
-          new Position(lineIdx, endCol),
+          new Position(lineIdx, Math.min(endCol, lineObj.text.length)),
         );
         rangesByRole[role]!.push(r);
       }
