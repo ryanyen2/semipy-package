@@ -1,4 +1,4 @@
-"""Shared LLM utilities for classification, impact analysis, and pattern naming (OpenAI, same key as generator)."""
+"""Shared LLM utilities: classification and JSON-oriented calls (OpenAI Responses first, OpenRouter fallback)."""
 from __future__ import annotations
 
 import asyncio
@@ -11,7 +11,7 @@ from semipy.agents.config import get_config
 T = TypeVar("T")
 
 
-def _chat_completion_content(
+def _http_chat_completion(
     *,
     url: str,
     api_key: str,
@@ -47,6 +47,55 @@ def _chat_completion_content(
     return (choices[0].get("message", {}) or {}).get("content", "")
 
 
+def _openai_responses_text(
+    *,
+    api_key: str,
+    model_id: str,
+    prompt: str,
+    max_output_tokens: int,
+) -> Optional[str]:
+    """One-shot text via the Responses API (same as the main agent when using OpenAI)."""
+    from openai import OpenAI
+
+    client = OpenAI(api_key=api_key)
+    resp = client.responses.create(
+        model=model_id,
+        input=prompt,
+        max_output_tokens=max_output_tokens,
+    )
+    out = getattr(resp, "output_text", None)
+    if isinstance(out, str) and out.strip():
+        return out
+    parts: list[str] = []
+    for item in getattr(resp, "output", None) or []:
+        for block in getattr(item, "content", None) or []:
+            t = getattr(block, "text", None)
+            if isinstance(t, str) and t:
+                parts.append(t)
+    joined = "".join(parts).strip()
+    return joined or None
+
+
+def _openrouter_chat_text(
+    *,
+    api_key: str,
+    model_id: str,
+    prompt: str,
+    max_tokens: int,
+) -> Optional[str]:
+    return _http_chat_completion(
+        url="https://openrouter.ai/api/v1/chat/completions",
+        api_key=api_key,
+        model_id=model_id,
+        prompt=prompt,
+        max_tokens=max_tokens,
+        extra_headers={
+            "HTTP-Referer": "https://github.com/semipy",
+            "X-Title": "semipy-classify",
+        },
+    )
+
+
 async def classify_with_llm(
     prompt: str,
     parse_fn: Callable[[str], T],
@@ -56,47 +105,48 @@ async def classify_with_llm(
     max_tokens: int = 512,
 ) -> T:
     """
-    Call OpenAI chat completions when OPENAI_API_KEY is set; otherwise OpenRouter
-    when OPENROUTER_API_KEY is set. Parse with parse_fn; return default on error/timeout.
+    Try OpenAI Responses API with ``configure(openai_model=...)`` (e.g. gpt-5.4), then OpenRouter
+    chat completions with ``validator_model`` when OpenAI is unavailable or returns empty text.
+
+    Parse with ``parse_fn``; return ``default`` on error, empty response, or timeout.
     """
     config = get_config()
 
-    def _sync_openai() -> Optional[str]:
-        model_id = getattr(config, "openai_model", "gpt-5.4")
+    def _try_openai() -> Optional[str]:
         api_key = config.openai_api_key or os.getenv("OPENAI_API_KEY")
         if not api_key:
             return None
-        return _chat_completion_content(
-            url="https://api.openai.com/v1/chat/completions",
+        model_id = getattr(config, "openai_model", "gpt-5.4")
+        return _openai_responses_text(
             api_key=api_key,
             model_id=model_id,
             prompt=prompt,
-            max_tokens=max_tokens,
-            extra_headers=None,
+            max_output_tokens=max_tokens,
         )
 
-    def _sync_openrouter() -> Optional[str]:
+    def _try_openrouter() -> Optional[str]:
         api_key = config.openrouter_api_key or os.getenv("OPENROUTER_API_KEY")
         if not api_key:
             return None
-        model_id = getattr(config, "openrouter_model", "anthropic/claude-sonnet-4-6")
-        return _chat_completion_content(
-            url="https://openrouter.ai/api/v1/chat/completions",
+        model_id = getattr(config, "validator_model", None) or getattr(
+            config, "openrouter_model", "anthropic/claude-sonnet-4-6"
+        )
+        return _openrouter_chat_text(
             api_key=api_key,
             model_id=model_id,
             prompt=prompt,
             max_tokens=max_tokens,
-            extra_headers={
-                "HTTP-Referer": "https://github.com/semipy",
-                "X-Title": "semipy-classify",
-            },
         )
 
     def _sync_call() -> Optional[str]:
-        raw = _sync_openai()
-        if raw is not None:
-            return raw
-        return _sync_openrouter()
+        for fn in (_try_openai, _try_openrouter):
+            try:
+                raw = fn()
+                if raw:
+                    return raw
+            except Exception:
+                continue
+        return None
 
     try:
         raw = await asyncio.wait_for(asyncio.to_thread(_sync_call), timeout=timeout)

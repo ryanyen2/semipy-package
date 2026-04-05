@@ -58,6 +58,39 @@ class SemanticBinding:
     hole_code_referents: dict[str, str]
 
 
+def _extract_json_object(text: str) -> str | None:
+    """First top-level JSON object in ``text`` (handles preamble or trailing prose from models)."""
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_str = False
+    esc = False
+    quote: str | None = None
+    for i in range(start, len(text)):
+        c = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif quote and c == quote:
+                in_str = False
+                quote = None
+            continue
+        if c in "\"'":
+            in_str = True
+            quote = c
+            continue
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
+
+
 def _parse_binding_json(raw: str) -> dict[str, Any] | None:
     text = raw.strip()
     if not text:
@@ -65,13 +98,16 @@ def _parse_binding_json(raw: str) -> dict[str, Any] | None:
     fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", text, re.IGNORECASE)
     if fence:
         text = fence.group(1).strip()
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(data, dict):
-        return None
-    return data
+    for candidate in (text, _extract_json_object(text) or ""):
+        if not candidate.strip():
+            continue
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            return data
+    return None
 
 
 def _phrases_from_payload(data: dict[str, Any]) -> tuple[SpecPhrase, ...] | None:

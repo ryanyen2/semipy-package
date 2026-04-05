@@ -41,6 +41,11 @@ class SemiConfig:
     session_source: Optional[str] = None
     semantic_verify: bool = True
     semantic_verify_threshold: int = 10
+    #: After GENERATE/ADAPT, extract NL-to-code bindings and update ``sketch_library.json``.
+    sketch_library_learning: bool = True
+    #: If False, persist sketches before ``execute_slot`` returns (needed for INSTANTIATE in the same process).
+    #: If True, run extraction in a background thread (lower latency; same-run INSTANTIATE may not see new sketches).
+    sketch_library_learning_async: bool = False
 
 
 _config: Optional[SemiConfig] = None

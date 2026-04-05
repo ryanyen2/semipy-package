@@ -20,14 +20,13 @@ Demonstrates two styles of semiformal specification side by side:
 The formal parts (prefix regex, ``CompiledParser``, batch parsing, error reporting)
 never invoke the agent. They are ordinary Python.
 
-Run stages::
+Run stages (``cache_dir`` is ``examples/.semiformal``; cwd-independent)::
 
-    cd examples
-    uv run python apache_log_semiformal_stages.py --fresh --stage 1
-    uv run python apache_log_semiformal_stages.py --stage 2
-    uv run python apache_log_semiformal_stages.py --stage 3
-    uv run python apache_log_semiformal_stages.py --stage 4
-    uv run python apache_log_semiformal_stages.py --stage 5
+    uv run python examples/apache_log_semiformal_stages.py --fresh --stage 1
+
+**VS Code:** set User or Workspace setting ``semipy.sessionSource`` to the absolute ``examples``
+folder (e.g. ``${workspaceFolder}/examples``) so portals and decorations match
+``configure(session_source=...)`` when the repository root is the workspace folder.
 """
 from __future__ import annotations
 
@@ -45,8 +44,9 @@ from semipy import configure, semi, semiformal
 # Constants
 # ---------------------------------------------------------------------------
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_LOG = _REPO_ROOT / "examples" / "data" / "Apache_2k.log"
+_EXAMPLES_DIR = Path(__file__).resolve().parent
+_REPO_ROOT = _EXAMPLES_DIR.parent
+DEFAULT_LOG = _EXAMPLES_DIR / "data" / "Apache_2k.log"
 
 APACHE_ERROR_PREFIX = re.compile(
     r"^\[(?P<ts>[^\]]+)\]\s+\[(?P<level>[^\]]+)\]\s+(?P<body>.*)$"
@@ -163,16 +163,16 @@ class ApacheLogPipeline:
     - ``infer_templates``: standalone semi() call (EXPRESSION)
     """
 
+    
     @semiformal
     def classify_body(self, body: str) -> str:
-        #< [Task] normalize body before pattern matching
+        #< [Task] normalize body before family heuristics
         text = "" if body is None else str(body).strip()
-        #< [Given] casing noise should not affect family
+        #< [Given] whitespace-only should behave like empty
         lower = text.lower()
-        #< [When] body missing, prefer explicit fallback
-        
+        #< [When] matching, prefer stable lowercase cues
         #> Classify this Apache error log body into a short snake_case event family name.
-        #< [Verify] families stay stable across similar phrasings
+        #< [But] keep fallback broad for unseen variants
         return family
 
 
@@ -203,7 +203,9 @@ class ApacheLogPipeline:
 # ---------------------------------------------------------------------------
 
 def _clear_cache() -> None:
-    cache = Path(".semiformal")
+    from semipy.agents.config import get_config
+
+    cache = get_config().cache_dir
     if cache.exists():
         shutil.rmtree(cache)
         print(f"Cleared {cache}")
@@ -354,7 +356,11 @@ def main() -> None:
     parser.add_argument("--log", type=Path, default=DEFAULT_LOG)
     args = parser.parse_args()
 
-    configure(verbose=True)
+    configure(
+        cache_dir=str(_EXAMPLES_DIR / ".semiformal"),
+        session_source=str(_EXAMPLES_DIR),
+        verbose=True,
+    )
     if args.fresh:
         _clear_cache()
 

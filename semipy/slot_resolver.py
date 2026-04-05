@@ -557,6 +557,56 @@ def _runtime_sample_input(slot_spec: SlotSpec, runtime_values: dict[str, Any]) -
     return {"args": tuple(), "kwargs": {}, "runtime_values": {}}
 
 
+def _run_sketch_binding_extraction(
+    *,
+    spec_text: str,
+    generated_source: str,
+    commit_id: str,
+    slot_spec: SlotSpec,
+    cache_dir: Path,
+    session_id: str,
+    portal_anchor: str,
+    module_name: str,
+    slot_id: str,
+) -> None:
+    """LLM binding extraction and sketch library update; failures are ignored."""
+    try:
+        import asyncio
+        import sys
+
+        binding = asyncio.run(extract_binding_async(spec_text, generated_source))
+        if binding is None:
+            if get_config().verbose:
+                print(
+                    "[semipy] Sketch library: no binding extracted "
+                    "(model unavailable, parse failure, or empty response).",
+                    file=sys.stderr,
+                )
+            return
+        lib = load_sketch_library(cache_dir)
+        sketch = build_code_sketch_from_commit(
+            binding,
+            generated_source,
+            commit_id,
+            slot_spec.expected_category.value,
+            tuple(slot_spec.free_variables),
+        )
+        merge_sketch_into_library(lib, sketch, binding)
+        save_sketch_library(cache_dir, lib)
+        portal = load_portal(cache_dir, session_id, portal_anchor, module_name)
+        sl = portal.slots.get(slot_id)
+        if sl and commit_id in sl.commits:
+            c = sl.commits[commit_id]
+            sl.commits[commit_id] = replace(c, binding_id=binding.binding_id)
+            save_portal(cache_dir, portal)
+            write_dispatch_module(cache_dir, portal, sketch_library=lib)
+    except Exception as ex:
+        if get_config().verbose:
+            import sys
+
+            print(f"[semipy] Sketch library: extraction failed: {ex}", file=sys.stderr)
+
+
 def _schedule_sketch_binding_extraction(
     *,
     spec_text: str,
@@ -569,36 +619,28 @@ def _schedule_sketch_binding_extraction(
     module_name: str,
     slot_id: str,
 ) -> None:
-    """Background LLM binding extraction; failures are ignored."""
-
-    def _worker() -> None:
-        try:
-            import asyncio
-
-            binding = asyncio.run(extract_binding_async(spec_text, generated_source))
-            if binding is None:
-                return
-            lib = load_sketch_library(cache_dir)
-            sketch = build_code_sketch_from_commit(
-                binding,
-                generated_source,
-                commit_id,
-                slot_spec.expected_category.value,
-                tuple(slot_spec.free_variables),
-            )
-            merge_sketch_into_library(lib, sketch, binding)
-            save_sketch_library(cache_dir, lib)
-            portal = load_portal(cache_dir, session_id, portal_anchor, module_name)
-            sl = portal.slots.get(slot_id)
-            if sl and commit_id in sl.commits:
-                c = sl.commits[commit_id]
-                sl.commits[commit_id] = replace(c, binding_id=binding.binding_id)
-                save_portal(cache_dir, portal)
-                write_dispatch_module(cache_dir, portal, sketch_library=lib)
-        except Exception:
-            pass
-
-    threading.Thread(target=_worker, daemon=True, name="semipy-sketch-binding").start()
+    cfg = get_config()
+    if not cfg.sketch_library_learning:
+        return
+    kwargs = dict(
+        spec_text=spec_text,
+        generated_source=generated_source,
+        commit_id=commit_id,
+        slot_spec=slot_spec,
+        cache_dir=cache_dir,
+        session_id=session_id,
+        portal_anchor=portal_anchor,
+        module_name=module_name,
+        slot_id=slot_id,
+    )
+    if cfg.sketch_library_learning_async:
+        threading.Thread(
+            target=lambda: _run_sketch_binding_extraction(**kwargs),
+            daemon=True,
+            name="semipy-sketch-binding",
+        ).start()
+    else:
+        _run_sketch_binding_extraction(**kwargs)
 
 
 def _call_generated_fn(

@@ -1215,20 +1215,20 @@ function appendSemipyLog(line) {
 var ROLE_ORDER = ["operation", "param", "operator", "connective"];
 var ROLE_STYLES = {
   operation: {
-    light: { color: "#00639c", backgroundColor: "rgba(0, 99, 156, 0.14)" },
-    dark: { color: "#4ec9b0", backgroundColor: "rgba(78, 201, 176, 0.18)" }
+    light: { color: "#00639c", backgroundColor: "rgba(0, 99, 156, 0)" },
+    dark: { color: "#4ec9b0", backgroundColor: "rgba(78, 201, 176, 0)" }
   },
   param: {
-    light: { color: "#a31515", backgroundColor: "rgba(163, 21, 21, 0.1)" },
-    dark: { color: "#ce9178", backgroundColor: "rgba(206, 145, 120, 0.18)" }
+    light: { color: "#a31515", backgroundColor: "rgba(163, 21, 21, 0)" },
+    dark: { color: "#ce9178", backgroundColor: "rgba(206, 145, 120, 0)" }
   },
   operator: {
-    light: { color: "#811f3f", backgroundColor: "rgba(129, 31, 63, 0.1)" },
-    dark: { color: "#dcdcaa", backgroundColor: "rgba(220, 220, 170, 0.14)" }
+    light: { color: "#811f3f", backgroundColor: "rgba(129, 31, 63, 0)" },
+    dark: { color: "#dcdcaa", backgroundColor: "rgba(220, 220, 170, 0)" }
   },
   connective: {
-    light: { color: "#444444", backgroundColor: "rgba(68, 68, 68, 0.08)" },
-    dark: { color: "#9cdcfe", backgroundColor: "rgba(156, 220, 254, 0.12)" }
+    light: { color: "#444444", backgroundColor: "rgba(68, 68, 68, 0)" },
+    dark: { color: "#9cdcfe", backgroundColor: "rgba(156, 220, 254, 0)" }
   }
 };
 function createPhraseDecorationTypes() {
