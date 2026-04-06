@@ -435,6 +435,16 @@ class SemiAgent:
                 for k, v in reqs.items():
                     parts.append(f"  - {k}: {v}")
 
+        if getattr(spec, "user_source_code", None):
+            parts.append("")
+            parts.append(
+                "User source file (reference for understanding how the function "
+                "and its return value are consumed by callers -- infer the expected "
+                "output structure from key accesses, attribute usage, and downstream "
+                "function signatures):"
+            )
+            parts.append(f"```python\n{spec.user_source_code}\n```")
+
         if getattr(spec, "upstream_lineage", None):
             lineage = spec.upstream_lineage
             if lineage:

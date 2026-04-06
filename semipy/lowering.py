@@ -40,13 +40,35 @@ def _is_skeleton_placeholder_line(line: str) -> bool:
     return stripped[1:].strip() == ""
 
 
+def _is_slot_anchor_line(line: str) -> bool:
+    """True if the line contains an ellipsis assignment (``name = ...``) or a ``semi()`` call.
+
+    These are slot output anchors that delimit separate slot regions within
+    a function.  ``#>`` blocks separated by a slot anchor belong to different
+    slots and must not be merged.
+    """
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if re.match(r"\w+\s*=\s*\.\.\.", stripped):
+        return True
+    if "semi(" in stripped:
+        return True
+    return False
+
+
 def _collect_hash_arrow_block_ranges(source_lines: list[str]) -> list[tuple[int, int]]:
     """0-based inclusive (start, last_hash_arrow) per logical #> block.
 
     Lines that are only `#` (skeleton placeholders between `#<` and code) sit between
     `#>` lines without splitting the block.
+
+    After initial collection, adjacent blocks are **merged** when the lines
+    between them contain no slot anchors (no ``name = ...`` or ``semi()``).
+    This ensures a promoted ``#<`` line (now ``#>``) that is separated from
+    the main ``#>`` group by regular code still belongs to the same slot.
     """
-    blocks: list[tuple[int, int]] = []
+    raw_blocks: list[tuple[int, int]] = []
     i = 0
     n = len(source_lines)
     while i < n:
@@ -65,9 +87,25 @@ def _collect_hash_arrow_block_ranges(source_lines: list[str]) -> list[tuple[int,
                 j += 1
             else:
                 break
-        blocks.append((start, last_hash_arrow))
+        raw_blocks.append((start, last_hash_arrow))
         i = j
-    return blocks
+
+    if len(raw_blocks) <= 1:
+        return raw_blocks
+
+    merged: list[tuple[int, int]] = [raw_blocks[0]]
+    for blk in raw_blocks[1:]:
+        prev_start, prev_end = merged[-1]
+        curr_start, curr_end = blk
+        gap_has_anchor = any(
+            _is_slot_anchor_line(source_lines[k])
+            for k in range(prev_end + 1, curr_start)
+        )
+        if gap_has_anchor:
+            merged.append(blk)
+        else:
+            merged[-1] = (prev_start, curr_end)
+    return merged
 
 
 # usage_hints markers for end-of-line #> specs (not lines that start with #>)

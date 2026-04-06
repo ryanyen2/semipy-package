@@ -271,6 +271,27 @@ def _extract_source_file_imports(filename: str) -> list[str]:
         return []
 
 
+def _read_user_source_for_context(filename: str, *, max_chars: int = 12000) -> str | None:
+    """Read the user's source file to provide downstream usage context.
+
+    The LLM can see how the function output is consumed (key accesses,
+    passed to other functions, etc.) to infer the expected output shape
+    even when the return type annotation is generic (e.g. ``list[dict]``).
+    """
+    if not filename or filename == "<unknown>":
+        return None
+    try:
+        path = Path(filename).resolve()
+        if not path.exists() or not path.is_file():
+            return None
+        source = path.read_text(encoding="utf-8", errors="replace")
+        if len(source) > max_chars:
+            source = source[:max_chars] + "\n# ... (truncated)"
+        return source
+    except Exception:
+        return None
+
+
 _semantic_reuse_counters: dict[str, int] = {}
 _semantic_last_fingerprints: dict[str, str] = {}
 
@@ -365,9 +386,12 @@ def _should_semantic_check(
     if current_fp == stored_fp:
         return False
 
-    threshold = getattr(config, "semantic_verify_threshold", 3)
+    # New input patterns detected (fingerprint changed).  Trigger the
+    # semantic check after just 1 additional REUSE call so genuinely new
+    # patterns are evaluated quickly.  The full rate-limiter threshold
+    # only gates re-checks when observations haven't changed.
     reuse_count = _semantic_reuse_counters.get(counter_key, 0)
-    return reuse_count >= threshold
+    return reuse_count >= 1
 
 
 def _increment_semantic_reuse_counter(
@@ -525,6 +549,8 @@ def build_generation_spec(
 
     exec_ns = _execution_namespace_for_generation(slot_spec.source_span[0])
 
+    user_source_code = _read_user_source_for_context(slot_spec.source_span[0])
+
     return GenerationSpec(
         prompt=slot_spec.spec_text,
         call_site=call_site,
@@ -541,7 +567,7 @@ def build_generation_spec(
         upstream_lineage=upstream_lineage or None,
         downstream_requirements=downstream_requirements,
         enclosing_function_source=slot_spec.enclosing_function_source,
-        user_source_code=None,
+        user_source_code=user_source_code,
         execution_namespace=exec_ns or None,
         session_input_observations=session_obs,
         runtime_profile_scalar_only=_runtime_profile_is_scalar_only(runtime_values),

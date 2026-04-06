@@ -12,9 +12,16 @@ Demonstrates two styles of semiformal specification side by side:
   assignment). Spec text is static; ``bodies`` carries the grouped families. Same
   spec + new data -> **REUSE** + verify (or ADAPT on verify failure).
 
-- Optional workflow (**STAGE 6** in ``apache-log-usecase.md``): after GENERATE,
-  promote important ``#<`` reasoning lines into ``#>`` lines so they become part
-  of the slot spec and are preserved across skeleton updates; re-run with
+- **STAGE 6** -- Pattern learning (sketch library): two specs share the same
+  sentence shape; only a quoted substring changes (``"mod_jk"`` vs ``"scoreboard"``).
+  The first slot **GENERATE**s and records a sketch in ``sketch_library.json``; the
+  second slot **INSTANTIATE**s (parameter substitution, no full agent pass) when
+  binding extraction marks the substring as a param hole. Optional ``--pattern-gamma``
+  runs a third spec with a different shape (expect **GENERATE** / **ADAPT**, not
+  **INSTANTIATE**).
+
+- **STAGE 7** (manual, documented in ``apache-log-usecase.md``): promote ``#<``
+  reasoning into ``#>`` so the text becomes durable contract; re-run with
   ``--fresh`` or let ADAPT pick up the new contract.
 
 The formal parts (prefix regex, ``CompiledParser``, batch parsing, error reporting)
@@ -90,11 +97,11 @@ class CompiledParser:
         self._rules = rules
 
     @classmethod
-    def from_templates(cls, templates: list[dict]) -> CompiledParser:
+    def from_templates(cls, templates: list[any]) -> CompiledParser:
         rules = []
         for t in templates:
-            pat = re.compile(t["pattern"])
-            rules.append((t["family"], pat, t.get("fields", {})))
+            pat = re.compile(t['pattern'])
+            rules.append((t['family'], pat, t['fields']))
         return cls(rules)
 
     def parse_line(self, line: str) -> dict[str, Any]:
@@ -113,7 +120,7 @@ class CompiledParser:
             if m:
                 hits.append((fam, m))
         if not hits:
-            result["status"] = "UNSEEN_TEMPLATE"
+            result["status"] = "SEEN_TEMPLATE"
             return result
         if len(hits) > 1:
             result["status"] = "AMBIGUOUS"
@@ -149,53 +156,58 @@ def print_status_report(events: list[dict[str, Any]], *, label: str = "") -> Non
 # Semiformal pipeline class
 # ---------------------------------------------------------------------------
 
-@dataclass
-class FamilyTemplate:
-    family: str
-    pattern: str
-    fields: dict[str, str]
-
 
 class ApacheLogPipeline:
     """
-    Two inferential specs:
-    - ``classify_body``: @semiformal #> block (STATEMENT_BLOCK)
-    - ``infer_templates``: standalone semi() call (EXPRESSION)
+    Inferential specs:
+    - classify_body: classify a body into a family name (short snake_case string). This is the main
+    - infer_templates: deduce regex templates for each family, with named capture groups for fields. This is the main
+    - body_contains_literal_*: paired substring checks for pattern-learning (STAGE 6)
     """
-
     
     @semiformal
     def classify_body(self, body: str) -> str:
-        #< [Task] normalize body before family heuristics
+        #< [Task] normalize first, classify conservatively
         text = "" if body is None else str(body).strip()
-        #< [Given] whitespace-only should behave like empty
+        #< [Given] body may be nullish or dirty
         lower = text.lower()
-        #< [When] matching, prefer stable lowercase cues
         #> Classify this Apache error log body into a short snake_case event family name.
-        #< [But] keep fallback broad for unseen variants
+        #> [When] empty or noisy logs need fallback, return 'unknown_apache_event'
+        #< [When] prefer stable phrases over exact format
+        #< [But] broad severity buckets catch leftovers
+        family = ...
+        #< [Verify] output stays compact snake_case label
         return family
 
 
     @semiformal
-    def infer_templates(self, bodies: dict[str, list[str]]) -> list[FamilyTemplate]:
-        templates = ... #> For each event family, create a Python regex that matches the entire body string.
+    def infer_templates(self, bodies: dict[str, list[str]]) -> list[dict]:
+        #< [Task] infer stable full-match template shapes
+        templates = ... #> For each event family, create a Python regex that matches the entire body string. return a list of dicts with keys: family (str), pattern (str), fields (dict mapping group name to type like 'int' or 'str').
+        #< [Given] patterns should anchor whole bodies
+        #< [When] samples diverge, capture varying spans
+        #< [But] keep field names deterministic enough
+        #< [Verify] types only reflect confident structure
+        return templates
 
-        #> Return a list of dicts with keys: family (str), pattern (str), fields (dict mapping group name to type like 'int' or 'str').
-        return [
-            FamilyTemplate(family=fam, pattern=pattern, fields=fields)
-            for fam, pattern, fields in templates
-        ]
 
-        # return semi(f"""
-        #     For each event family, create a Python regex that matches the entire body string.
-        #     Use named capture groups for variable parts only (keep stable tokens literal).
-        #     Return a list of dicts with keys: family (str), pattern (str),
-        #     fields (dict mapping group name to type like 'int' or 'str').
-            
-        #     Families and example bodies:{families_text}
-        #     """,
-        #     expected_type=list,
-        # )
+    @semiformal
+    def body_contains_literal_alpha(self, body: str) -> bool:
+        #> Return True if body contains "mod_jk" else False
+        out = ...
+        return out
+
+    @semiformal
+    def body_contains_literal_beta(self, body: str) -> bool:
+        #> Return True if body contains "scoreboard" else False
+        out = ...
+        return out
+
+    @semiformal
+    def body_contains_literal_gamma(self, body: str) -> bool:
+        #> Return True if the first non-whitespace character of body is "[" else False
+        out = ...
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -254,7 +266,7 @@ def run_stage_2(family_map: dict[str, str]) -> list[dict]:
     templates = pipeline.infer_templates(grouped)
     print(f"\n[STAGE 2] {len(templates)} templates generated.")
     for t in templates:
-        print(f"  {t.family}: {t.pattern[:60]}...")
+        print(f"  family: {t['family']}, pattern: {t['pattern']}, fields: {t.get('fields', {})}")
     return templates
 
 
@@ -279,17 +291,8 @@ def run_stage_4(*, log_path: Path = DEFAULT_LOG, bootstrap_n: int = 120) -> None
     edges = _default_edge_lines()
     all_lines = load_lines(log_path)
     pipeline = ApacheLogPipeline()
-
-    print("[STAGE 4a] Narrow bootstrap...\n")
-    bodies_boot = extract_bodies(all_lines[:bootstrap_n])
-    fm_narrow: dict[str, str] = {}
-    for body in sorted(set(bodies_boot)):
-        fm_narrow[body] = pipeline.classify_body(body)
-    templates_narrow = pipeline.infer_templates(group_by_family(fm_narrow))
-    narrow_events = CompiledParser.from_templates(templates_narrow).batch_parse(all_lines)
-    print_status_report(narrow_events, label="STAGE 4a narrow")
-
-    print("\n[STAGE 4b] Extended: adding edge cases + full corpus...\n")
+    
+    print("\n[STAGE 4] Extended: adding edge cases + full corpus...\n")
     extended_lines = all_lines + edges
     bodies_ext = extract_bodies(extended_lines)
     fm_ext: dict[str, str] = {}
@@ -297,7 +300,7 @@ def run_stage_4(*, log_path: Path = DEFAULT_LOG, bootstrap_n: int = 120) -> None
         fm_ext[body] = pipeline.classify_body(body)
     grouped_ext = group_by_family(fm_ext)
 
-    print(f"[STAGE 4b] infer_templates with {len(grouped_ext)} families...\n")
+    print(f"[STAGE 4] infer_templates with {len(grouped_ext)} families...\n")
     templates_ext = pipeline.infer_templates(grouped_ext)
 
     ext_parser = CompiledParser.from_templates(templates_ext)
@@ -345,15 +348,56 @@ def run_stage_5(*, log_path: Path = DEFAULT_LOG, bootstrap_n: int = 120) -> None
     )
 
 
+def run_stage_6(*, pattern_gamma: bool = False) -> None:
+    """
+    STAGE 6 -- Pattern learning (sketch library / INSTANTIATE).
+
+    ``body_contains_literal_alpha`` runs first: **GENERATE**, then binding extraction
+    updates ``sketch_library.json`` under the configured ``cache_dir``.
+
+    ``body_contains_literal_beta`` uses the same token pattern as alpha but a
+    different quoted substring. Resolution: **INSTANTIATE** when a sketch matches
+    (see pipeline log: ``instantiate`` / ``Reusing learned pattern...``).
+
+    ``body_contains_literal_gamma`` (optional) uses a different spec shape; the
+    substring sketch from alpha should **not** apply, so expect **GENERATE** or
+    **ADAPT**, not **INSTANTIATE**.
+    """
+    pipeline = ApacheLogPipeline()
+    sample_modjk = "[Wed Dec 07 12:00:00 2005] [error] mod_jk child workerEnv in error state 6"
+    sample_scoreboard = (
+        "[Wed Dec 07 12:00:00 2005] [error] jk2_init() Found child 0023 in scoreboard slot 01"
+    )
+    sample_plain = "not a bracket log line"
+
+    print("[STAGE 6a] body_contains_literal_alpha (expect GENERATE)...\n")
+    r_a = pipeline.body_contains_literal_alpha(sample_modjk)
+    print(f"[STAGE 6a] result: {r_a!r} (body has mod_jk substring)\n")
+
+    print("[STAGE 6b] body_contains_literal_beta (expect INSTANTIATE if sketch matched)...\n")
+    r_b = pipeline.body_contains_literal_beta(sample_scoreboard)
+    print(f"[STAGE 6b] result: {r_b!r} (body has scoreboard substring)\n")
+
+    if pattern_gamma:
+        print("[STAGE 6c] body_contains_literal_gamma (expect GENERATE/ADAPT, not INSTANTIATE)...\n")
+        r_g = pipeline.body_contains_literal_gamma(sample_plain)
+        print(f"[STAGE 6c] result: {r_g!r} (first non-ws char is not '[')\n")
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Apache log semiformal staged demo.")
-    parser.add_argument("--stage", type=int, choices=(1, 2, 3, 4, 5), default=1)
+    parser.add_argument("--stage", type=int, choices=(1, 2, 3, 4, 5, 6), default=1)
     parser.add_argument("--fresh", action="store_true", help="Clear .semiformal before running.")
     parser.add_argument("--log", type=Path, default=DEFAULT_LOG)
+    parser.add_argument(
+        "--pattern-gamma",
+        action="store_true",
+        help="STAGE 6 only: also run body_contains_literal_gamma (control: different spec shape).",
+    )
     args = parser.parse_args()
 
     configure(
@@ -377,6 +421,8 @@ def main() -> None:
         run_stage_4(log_path=args.log)
     elif args.stage == 5:
         run_stage_5(log_path=args.log)
+    elif args.stage == 6:
+        run_stage_6(pattern_gamma=args.pattern_gamma)
 
 
 if __name__ == "__main__":

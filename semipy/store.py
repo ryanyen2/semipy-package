@@ -283,8 +283,9 @@ def write_dispatch_module(
                     sk = cand
                     break
             if sk is not None:
+                tmpl_oneline = sk.spec_template.replace("\n", "")[:160]
                 lines.append(
-                    f"# sketch: {sk.sketch_id[:8]} | binding: {bid[:8]} | template: {sk.spec_template[:160]}"
+                    f"# sketch: {sk.sketch_id[:8]} | binding: {bid[:8]} | template: {tmpl_oneline}"
                 )
         start_line = len(lines) + 1
         source_only = _dispatch_source_only(active.generated_source)

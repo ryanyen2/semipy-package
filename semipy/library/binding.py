@@ -210,6 +210,11 @@ Rules:
 - Every substring of the spec that maps to a distinct code fragment should appear as one phrase.
 - hole_name must be unique among holes; use short snake_case names.
 - code_referent must be the exact Python fragment in the code when possible.
+- When several specs share the same sentence shape and only quoted literals or identifiers
+  change (for example ``Return True if body contains "X" else False`` with different ``X``,
+  or a filter that swaps column or equality value), treat those varying fragments as param
+  holes and align each code_referent with the matching literal or operand in the generated
+  code so another spec with the same shape can reuse the implementation via substitution.
 """
 
 

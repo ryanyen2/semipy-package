@@ -19,6 +19,7 @@ import ast
 import asyncio
 import concurrent.futures
 import os
+import textwrap
 import threading
 import traceback
 from pathlib import Path
@@ -475,6 +476,44 @@ def _atomic_write_text(path: Path, content: str) -> None:
         raise
 
 
+def _reindent_to_match(skeleton_fn: str, file_lines: list[str], func_start_line: int) -> str:
+    """Re-indent ``skeleton_fn`` so it matches the ``def`` line in the on-disk file.
+
+    The model may return the function at column 0, at class-body indent, or with
+    drift from prior surfaces.  **Always** ``textwrap.dedent`` the block first
+    (removes the common leading whitespace of the whole function), then prepend
+    the file's ``def``-line indent to every non-empty line.  This is **idempotent**
+    and prevents repeated surfaces from accumulating extra indentation.
+    """
+    if not skeleton_fn.strip():
+        return skeleton_fn
+    original_line = file_lines[func_start_line - 1] if func_start_line >= 1 else ""
+    original_indent = original_line[: len(original_line) - len(original_line.lstrip())]
+
+    dedented = textwrap.dedent(skeleton_fn)
+    if not dedented.strip():
+        return skeleton_fn
+
+    out: list[str] = []
+    for line in dedented.splitlines(keepends=True):
+        if not line.strip():
+            out.append(line)
+            continue
+        ending = ""
+        core = line
+        if line.endswith("\r\n"):
+            ending = "\r\n"
+            core = line[:-2]
+        elif line.endswith("\n"):
+            ending = "\n"
+            core = line[:-1]
+        elif line.endswith("\r"):
+            ending = "\r"
+            core = line[:-1]
+        out.append(original_indent + core + ending)
+    return "".join(out)
+
+
 def surface_skeleton(
     slot_spec: SlotSpec,
     cache_entry: CacheEntry,
@@ -567,6 +606,7 @@ def _surface_skeleton_impl(slot_spec: SlotSpec, cache_entry: CacheEntry) -> None
             skeleton_fn = sk2
 
         skeleton_fn = _drop_empty_hash_only_lines(_cap_skeleton_line_words(skeleton_fn))
+        skeleton_fn = _reindent_to_match(skeleton_fn, lines, start)
 
         sk_lines = skeleton_fn.splitlines(keepends=True)
         if sk_lines and not sk_lines[-1].endswith("\n"):
