@@ -345,9 +345,30 @@ def _create_agent() -> Agent[SemiAgentDeps]:
                         actual_type=type(val).__name__,
                     )
             else:
+                # For parameterized collection types like list[EventTemplate],
+                # check that the repr does not look like a plain list of dicts.
+                # A proper class instance repr starts with ClassName(...), not {.
+                if expected_type_name.startswith("list[") and s.startswith("["):
+                    try:
+                        # Extract the element class name from "list[ClassName]"
+                        inner = expected_type_name[5:-1].strip().split(".")[-1]
+                        stripped = s.lstrip("[").lstrip()
+                        # Plain dict elements start with { ; class instance reprs start with ClassName(
+                        if stripped.startswith("{"):
+                            return OutputValidationResult(
+                                valid=False,
+                                message=(
+                                    f"Result is a list of plain dicts, but expected list[{inner}]. "
+                                    f"Each element must be a {inner}(...) instance, not a dict."
+                                ),
+                                expected_type=expected_type_name,
+                                actual_type="list[dict]",
+                            )
+                    except Exception:
+                        pass
                 return OutputValidationResult(
                     valid=True,
-                    message=f"Cannot validate type {expected_type_name}; assuming valid.",
+                    message=f"Cannot fully validate type {expected_type_name}; structural check passed.",
                     expected_type=expected_type_name,
                 )
             return OutputValidationResult(
@@ -391,6 +412,7 @@ Slot category instructions (from SlotSpec):
 - STATEMENT_BLOCK: generate def __slot_N__(arg1, arg2, ...) that returns a dict[str, Any] with exactly the keys: output_names. Each key maps to the value that the key name should bind. If a value is a list of structured rows and the scaffold defines a matching @dataclass (same field names), each row must be an instance of that class, not a plain dict, so downstream isinstance checks succeed.
 - FUNCTION_BODY: implement the full function body as today; return expected_type.
 - If expected_type is `callable`, your function must return another callable (a factory). If expected_type is a domain class, construct and return an instance of that class.
+- If expected_type is `list[SomeClass]` (or another collection parameterized with a user-defined class), each element MUST be an instance of that class constructed via its constructor. Import the class from the appropriate module. Returning a list of plain dicts will fail type validation even if the dict keys match the class fields — validation checks isinstance, not just pydantic coercibility.
 - Hard constraints (must preserve): lines provided as formal_constraints MUST appear verbatim in your implementation. Do not remove or modify them.
 
 Tool usage:

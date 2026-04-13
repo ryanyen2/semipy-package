@@ -124,12 +124,14 @@ def _gist_user_types_preamble(spec: GenerationSpec) -> tuple[str, Optional[str]]
         "import os",
         "import pathlib",
         "_semipy_p = (os.environ.get('SEMIPY_GIST_USER_SOURCE') or '').strip()",
+        "_semipy_user_mod = None",
         "if _semipy_p and pathlib.Path(_semipy_p).is_file():",
-        "    _semipy_spec = importlib.util.spec_from_file_location('_semipy_user_slot', _semipy_p)",
-        "    _semipy_user_mod = importlib.util.module_from_spec(_semipy_spec)",
-        "    _semipy_spec.loader.exec_module(_semipy_user_mod)",
-        "else:",
-        "    _semipy_user_mod = None",
+        "    try:",
+        "        _semipy_spec = importlib.util.spec_from_file_location('_semipy_user_slot', _semipy_p)",
+        "        _semipy_user_mod = importlib.util.module_from_spec(_semipy_spec)",
+        "        _semipy_spec.loader.exec_module(_semipy_user_mod)",
+        "    except Exception:",
+        "        _semipy_user_mod = None",
     ]
     for n in names:
         lines.append(f"{n} = getattr(_semipy_user_mod, {repr(n)}, None)")

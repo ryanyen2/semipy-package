@@ -11,7 +11,7 @@ import concurrent.futures
 import json
 import os
 import threading
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, List, Optional, get_args, get_origin
 
 
 _async_loop_lock = threading.Lock()
@@ -333,6 +333,21 @@ class SemiAgent:
                 f"- Expected domain object type is {exp.__module__}.{exp.__name__}. "
                 "Import that exact class in the generated function and return an instance of it."
             )
+
+        # For collection types (list[T], set[T]) where T is a user-defined class,
+        # the validator enforces isinstance on each element.  Plain dicts will fail
+        # even when pydantic can coerce them.
+        _coll_origin = get_origin(spec.expected_type)
+        _coll_args = get_args(spec.expected_type)
+        if _coll_origin in (list, set, frozenset) and _coll_args:
+            _elem_type = _coll_args[0]
+            if isinstance(_elem_type, type) and _elem_type.__module__ not in ("builtins", "typing"):
+                parts.append(
+                    f"- Return type is {_coll_origin.__name__}[{_elem_type.__name__}]. "
+                    f"Each element MUST be a {_elem_type.__module__}.{_elem_type.__name__} instance "
+                    f"constructed via {_elem_type.__name__}(...). "
+                    "Do NOT return plain dicts — they will fail type validation."
+                )
 
         if spec.decision == Decision.ADAPT and spec.parent_sources:
             parts.append("")

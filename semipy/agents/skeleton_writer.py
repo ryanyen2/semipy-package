@@ -19,7 +19,6 @@ import ast
 import asyncio
 import concurrent.futures
 import os
-import textwrap
 import threading
 import traceback
 from pathlib import Path
@@ -476,41 +475,93 @@ def _atomic_write_text(path: Path, content: str) -> None:
         raise
 
 
-def _reindent_to_match(skeleton_fn: str, file_lines: list[str], func_start_line: int) -> str:
-    """Re-indent ``skeleton_fn`` so it matches the ``def`` line in the on-disk file.
+def _split_line_core_ending(line: str) -> tuple[str, str]:
+    """Split a line into text without newline and the newline suffix (``\\n``, ``\\r\\n``, ``\\r``)."""
+    if line.endswith("\r\n"):
+        return line[:-2], "\r\n"
+    if line.endswith("\n"):
+        return line[:-1], "\n"
+    if line.endswith("\r"):
+        return line[:-1], "\r"
+    return line, ""
 
-    The model may return the function at column 0, at class-body indent, or with
-    drift from prior surfaces.  **Always** ``textwrap.dedent`` the block first
-    (removes the common leading whitespace of the whole function), then prepend
-    the file's ``def``-line indent to every non-empty line.  This is **idempotent**
-    and prevents repeated surfaces from accumulating extra indentation.
+
+def _reindent_to_match(skeleton_fn: str, file_lines: list[str], func_start_line: int) -> str:
+    """Canonicalize skeleton indentation, then align with the on-disk ``def`` line.
+
+    1. Move the first ``def`` / ``async def`` to column 0 by subtracting its leading indent
+       from every line (preserves relative structure).
+    2. If the **minimum** indent among non-empty lines after ``def`` is greater than 4 spaces,
+       treat that as an over-indented flat body and subtract ``(min_body - 4)`` from every line
+       whose indent is at least ``min_body`` (fixes LLM body drift when ``def`` was already aligned
+       so a uniform delta alone did nothing).
+    3. Prepend the file's ``def``-line indent to every non-empty line (class / module alignment).
+
+    Steps 1--2 are idempotent for well-formed output (``def`` at 0, body at 4 spaces).
     """
     if not skeleton_fn.strip():
         return skeleton_fn
     original_line = file_lines[func_start_line - 1] if func_start_line >= 1 else ""
-    original_indent = original_line[: len(original_line) - len(original_line.lstrip())]
+    target_cols = len(original_line) - len(original_line.lstrip())
 
-    dedented = textwrap.dedent(skeleton_fn)
-    if not dedented.strip():
+    lines = skeleton_fn.splitlines(keepends=True)
+    def_idx: int | None = None
+    d_def = 0
+    for i, line in enumerate(lines):
+        core, _ = _split_line_core_ending(line)
+        st = core.lstrip()
+        if st.startswith("def ") or st.startswith("async def "):
+            def_idx = i
+            d_def = len(core) - len(core.lstrip())
+            break
+    if def_idx is None:
         return skeleton_fn
 
+    # Step 1: subtract d_def so def sits at column 0
+    worked: list[str] = []
+    for line in lines:
+        core, ending = _split_line_core_ending(line)
+        if not core.strip():
+            worked.append(line)
+            continue
+        cur = len(core) - len(core.lstrip())
+        if cur >= d_def:
+            worked.append(" " * (cur - d_def) + core.lstrip() + ending)
+        else:
+            worked.append(line)
+
+    # Step 2: normalize minimum body indent to 4 (Python logical indent under def at 0)
+    indents: list[int] = []
+    for i in range(def_idx + 1, len(worked)):
+        core, _ = _split_line_core_ending(worked[i])
+        if not core.strip():
+            continue
+        indents.append(len(core) - len(core.lstrip()))
+    if indents:
+        min_body = min(indents)
+        if min_body > 4:
+            reduction = min_body - 4
+            adjusted: list[str] = []
+            for i, line in enumerate(worked):
+                core, ending = _split_line_core_ending(line)
+                if i <= def_idx or not core.strip():
+                    adjusted.append(line)
+                    continue
+                cur = len(core) - len(core.lstrip())
+                if cur >= min_body:
+                    adjusted.append(" " * (cur - reduction) + core.lstrip() + ending)
+                else:
+                    adjusted.append(line)
+            worked = adjusted
+
+    # Step 3: prepend file indent
     out: list[str] = []
-    for line in dedented.splitlines(keepends=True):
-        if not line.strip():
+    for line in worked:
+        core, ending = _split_line_core_ending(line)
+        if not core.strip():
             out.append(line)
             continue
-        ending = ""
-        core = line
-        if line.endswith("\r\n"):
-            ending = "\r\n"
-            core = line[:-2]
-        elif line.endswith("\n"):
-            ending = "\n"
-            core = line[:-1]
-        elif line.endswith("\r"):
-            ending = "\r"
-            core = line[:-1]
-        out.append(original_indent + core + ending)
+        out.append(" " * target_cols + core + ending)
     return "".join(out)
 
 

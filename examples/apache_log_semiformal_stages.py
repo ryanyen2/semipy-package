@@ -1,40 +1,3 @@
-"""
-Apache error-log compiler -- semiformal staged demo.
-
-Demonstrates two styles of semiformal specification side by side:
-
-- ``classify_body`` uses ``@semiformal`` with a ``#>`` block (STATEMENT_BLOCK).
-  The ``#>`` spec is **static** text; runtime variation flows through the ``body``
-  parameter. The generated function receives ``(self, body)`` and returns
-  ``{"family": str}``.
-
-- ``infer_templates`` uses ``@semiformal`` with a ``#>`` STATEMENT_BLOCK (ellipsis
-  assignment). Spec text is static; ``bodies`` carries the grouped families. Same
-  spec + new data -> **REUSE** + verify (or ADAPT on verify failure).
-
-- **STAGE 6** -- Pattern learning (sketch library): two specs share the same
-  sentence shape; only a quoted substring changes (``"mod_jk"`` vs ``"scoreboard"``).
-  The first slot **GENERATE**s and records a sketch in ``sketch_library.json``; the
-  second slot **INSTANTIATE**s (parameter substitution, no full agent pass) when
-  binding extraction marks the substring as a param hole. Optional ``--pattern-gamma``
-  runs a third spec with a different shape (expect **GENERATE** / **ADAPT**, not
-  **INSTANTIATE**).
-
-- **STAGE 7** (manual, documented in ``apache-log-usecase.md``): promote ``#<``
-  reasoning into ``#>`` so the text becomes durable contract; re-run with
-  ``--fresh`` or let ADAPT pick up the new contract.
-
-The formal parts (prefix regex, ``CompiledParser``, batch parsing, error reporting)
-never invoke the agent. They are ordinary Python.
-
-Run stages (``cache_dir`` is ``examples/.semiformal``; cwd-independent)::
-
-    uv run python examples/apache_log_semiformal_stages.py --fresh --stage 1
-
-**VS Code:** set User or Workspace setting ``semipy.sessionSource`` to the absolute ``examples``
-folder (e.g. ``${workspaceFolder}/examples``) so portals and decorations match
-``configure(session_source=...)`` when the repository root is the workspace folder.
-"""
 from __future__ import annotations
 
 import argparse
@@ -47,12 +10,7 @@ from typing import Any
 from dataclasses import dataclass
 from semipy import configure, semi, semiformal
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
 _EXAMPLES_DIR = Path(__file__).resolve().parent
-_REPO_ROOT = _EXAMPLES_DIR.parent
 DEFAULT_LOG = _EXAMPLES_DIR / "data" / "Apache_2k.log"
 
 APACHE_ERROR_PREFIX = re.compile(
@@ -155,59 +113,30 @@ def print_status_report(events: list[dict[str, Any]], *, label: str = "") -> Non
 # ---------------------------------------------------------------------------
 # Semiformal pipeline class
 # ---------------------------------------------------------------------------
-
+@dataclass
+class EventTemplate:
+    family: str
+    pattern: str
+    fields: dict[str, str]  # field name -> type (e.g. 'int', 'str')
 
 class ApacheLogPipeline:
-    """
-    Inferential specs:
-    - classify_body: classify a body into a family name (short snake_case string). This is the main
-    - infer_templates: deduce regex templates for each family, with named capture groups for fields. This is the main
-    - body_contains_literal_*: paired substring checks for pattern-learning (STAGE 6)
-    """
+    """Apache log classifier and template generator."""
     
     @semiformal
     def classify_body(self, body: str) -> str:
-        #< [Task] normalize first, classify conservatively
         text = "" if body is None else str(body).strip()
-        #< [Given] body may be nullish or dirty
         lower = text.lower()
-        #> Classify this Apache error log body into a short snake_case event family name.
-        #> [When] empty or noisy logs need fallback, return 'unknown_apache_event'
-        #< [When] prefer stable phrases over exact format
-        #< [But] broad severity buckets catch leftovers
-        family = ...
-        #< [Verify] output stays compact snake_case label
+
+        family = ... #> Classify this Apache error log body into a short snake_case event family name.
         return family
 
 
     @semiformal
-    def infer_templates(self, bodies: dict[str, list[str]]) -> list[dict]:
-        #< [Task] infer stable full-match template shapes
-        templates = ... #> For each event family, create a Python regex that matches the entire body string. return a list of dicts with keys: family (str), pattern (str), fields (dict mapping group name to type like 'int' or 'str').
-        #< [Given] patterns should anchor whole bodies
-        #< [When] samples diverge, capture varying spans
-        #< [But] keep field names deterministic enough
-        #< [Verify] types only reflect confident structure
+    def infer_templates(self, bodies: dict[str, list[str]]) -> list[EventTemplate]:
+        templates = ... #> For each event family, create a Python regex that matches the entire body string
+        
         return templates
 
-
-    @semiformal
-    def body_contains_literal_alpha(self, body: str) -> bool:
-        #> Return True if body contains "mod_jk" else False
-        out = ...
-        return out
-
-    @semiformal
-    def body_contains_literal_beta(self, body: str) -> bool:
-        #> Return True if body contains "scoreboard" else False
-        out = ...
-        return out
-
-    @semiformal
-    def body_contains_literal_gamma(self, body: str) -> bool:
-        #> Return True if the first non-whitespace character of body is "[" else False
-        out = ...
-        return out
 
 
 # ---------------------------------------------------------------------------
@@ -223,57 +152,33 @@ def _clear_cache() -> None:
         print(f"Cleared {cache}")
 
 
-def _default_edge_lines() -> list[str]:
-    return [
-        "[Wed Dec 07 12:00:00 2005] [error] [client 192.168.1.100] File does not exist: /var/www/html/favicon.ico",
-        "[Wed Dec 07 12:01:00 2005] [crit] (98)Address already in use: make_sock: could not bind to address 0.0.0.0:80",
-        "[Wed Dec 07 12:02:00 2005] [warn] mod_ssl: SSL handshake failed for client 10.0.0.5",
-        "[Wed Dec 07 12:03:00 2005] [error] [client 172.16.0.1] Invalid URI in request GET /../../etc/passwd HTTP/1.0",
-        "[Wed Dec 07 12:04:00 2005] [notice] Apache/2.0.54 configured -- resuming normal operations",
-    ]
-
-
 def run_stage_1(*, log_path: Path = DEFAULT_LOG, bootstrap_n: int = 120) -> dict[str, str]:
-    """
-    STAGE 1 -- Classify bootstrap bodies.
-
-    First body triggers GENERATE. Remaining bodies REUSE + verify.
-    """
     bodies = extract_bodies(load_lines(log_path, limit=bootstrap_n))
     unique = sorted(set(bodies))
     pipeline = ApacheLogPipeline()
     family_map: dict[str, str] = {}
-
-    print(f"[STAGE 1] Classifying {len(unique)} unique bodies (1x generate, rest reuse)...\n")
+    print(f"[STAGE 1]")
     for body in unique:
         family_map[body] = pipeline.classify_body(body)
 
     families = sorted(set(family_map.values()))
-    print(f"\n[STAGE 1] {len(families)} families: {families}")
+    print(f"result: {len(families)} families: {families}")
     return family_map
 
 
 def run_stage_2(family_map: dict[str, str]) -> list[dict]:
-    """
-    STAGE 2 -- Generate regex templates.
-
-    First call to ``infer_templates`` triggers GENERATE.
-    """
     grouped = group_by_family(family_map)
     pipeline = ApacheLogPipeline()
 
-    print(f"[STAGE 2] infer_templates for {len(grouped)} families...\n")
+    print(f"[STAGE 2]")
     templates = pipeline.infer_templates(grouped)
-    print(f"\n[STAGE 2] {len(templates)} templates generated.")
+    print(f"result: {len(templates)} templates")
     for t in templates:
         print(f"  family: {t['family']}, pattern: {t['pattern']}, fields: {t.get('fields', {})}")
     return templates
 
 
 def run_stage_3(templates: list[dict], *, log_path: Path = DEFAULT_LOG) -> list[dict[str, Any]]:
-    """
-    STAGE 3 -- Formal parse with narrow parser (no LLM calls).
-    """
     compiled = CompiledParser.from_templates(templates)
     events = compiled.batch_parse(load_lines(log_path))
     print_status_report(events, label="STAGE 3")
@@ -281,18 +186,17 @@ def run_stage_3(templates: list[dict], *, log_path: Path = DEFAULT_LOG) -> list[
 
 
 def run_stage_4(*, log_path: Path = DEFAULT_LOG, bootstrap_n: int = 120) -> None:
-    """
-    STAGE 4 -- Extension: bootstrap first, then widen with edge cases.
-
-    Same ``classify_body`` and ``infer_templates``. The second ``infer_templates``
-    call has a **different prompt** (more families -> different f-string text ->
-    new ``spec_equivalence_key`` -> GENERATE for a new slot).
-    """
-    edges = _default_edge_lines()
+    edges = [
+        "[Wed Dec 07 12:00:00 2005] [error] [client 192.168.1.100] File does not exist: /var/www/html/favicon.ico",
+        "[Wed Dec 07 12:01:00 2005] [crit] (98)Address already in use: make_sock: could not bind to address 0.0.0.0:80",
+        "[Wed Dec 07 12:02:00 2005] [warn] mod_ssl: SSL handshake failed for client 10.0.0.5",
+        "[Wed Dec 07 12:03:00 2005] [error] [client 172.16.0.1] Invalid URI in request GET /../../etc/passwd HTTP/1.0",
+        "[Wed Dec 07 12:04:00 2005] [notice] Apache/2.0.54 configured -- resuming normal operations",
+    ]
     all_lines = load_lines(log_path)
     pipeline = ApacheLogPipeline()
     
-    print("\n[STAGE 4] Extended: adding edge cases + full corpus...\n")
+    print("\n[STAGE 4]")
     extended_lines = all_lines + edges
     bodies_ext = extract_bodies(extended_lines)
     fm_ext: dict[str, str] = {}
@@ -300,23 +204,14 @@ def run_stage_4(*, log_path: Path = DEFAULT_LOG, bootstrap_n: int = 120) -> None
         fm_ext[body] = pipeline.classify_body(body)
     grouped_ext = group_by_family(fm_ext)
 
-    print(f"[STAGE 4] infer_templates with {len(grouped_ext)} families...\n")
     templates_ext = pipeline.infer_templates(grouped_ext)
-
     ext_parser = CompiledParser.from_templates(templates_ext)
     ext_events = ext_parser.batch_parse(extended_lines)
-    print_status_report(ext_events, label="STAGE 4b extended")
+    
+    print_status_report(ext_events, label="STAGE 4")
 
 
 def run_stage_5(*, log_path: Path = DEFAULT_LOG, bootstrap_n: int = 120) -> None:
-    """
-    STAGE 5 -- Error reporting: user passes malformed lines.
-
-    The classifier does NOT crash -- it returns some family string. The formal
-    parser then reports UNSEEN_TEMPLATE or PREFIX_FAIL. This is the correct
-    semiformal contract: the LLM slot does not validate downstream parsing;
-    the formal layer reports the mismatch to the user.
-    """
     bad_lines = [
         "not a log line at all",
         "random garbage 12345",
@@ -336,74 +231,26 @@ def run_stage_5(*, log_path: Path = DEFAULT_LOG, bootstrap_n: int = 120) -> None
     test_lines = all_lines + bad_lines
     events = compiled.batch_parse(test_lines)
 
-    print("\n[STAGE 5] Error lines through formal parser:")
+    print("\n[STAGE 5]")
     for line in bad_lines:
         ev = compiled.parse_line(line)
         print(f"  {ev['status']:17s} | {line[:70]}")
 
     print_status_report(events, label="STAGE 5 full")
-    print(
-        "\n[STAGE 5] Note: the classifier is NOT re-invoked for error lines."
-        "\nThe formal parser handles them deterministically (PREFIX_FAIL / UNSEEN_TEMPLATE)."
-    )
 
 
-def run_stage_6(*, pattern_gamma: bool = False) -> None:
-    """
-    STAGE 6 -- Pattern learning (sketch library / INSTANTIATE).
-
-    ``body_contains_literal_alpha`` runs first: **GENERATE**, then binding extraction
-    updates ``sketch_library.json`` under the configured ``cache_dir``.
-
-    ``body_contains_literal_beta`` uses the same token pattern as alpha but a
-    different quoted substring. Resolution: **INSTANTIATE** when a sketch matches
-    (see pipeline log: ``instantiate`` / ``Reusing learned pattern...``).
-
-    ``body_contains_literal_gamma`` (optional) uses a different spec shape; the
-    substring sketch from alpha should **not** apply, so expect **GENERATE** or
-    **ADAPT**, not **INSTANTIATE**.
-    """
-    pipeline = ApacheLogPipeline()
-    sample_modjk = "[Wed Dec 07 12:00:00 2005] [error] mod_jk child workerEnv in error state 6"
-    sample_scoreboard = (
-        "[Wed Dec 07 12:00:00 2005] [error] jk2_init() Found child 0023 in scoreboard slot 01"
-    )
-    sample_plain = "not a bracket log line"
-
-    print("[STAGE 6a] body_contains_literal_alpha (expect GENERATE)...\n")
-    r_a = pipeline.body_contains_literal_alpha(sample_modjk)
-    print(f"[STAGE 6a] result: {r_a!r} (body has mod_jk substring)\n")
-
-    print("[STAGE 6b] body_contains_literal_beta (expect INSTANTIATE if sketch matched)...\n")
-    r_b = pipeline.body_contains_literal_beta(sample_scoreboard)
-    print(f"[STAGE 6b] result: {r_b!r} (body has scoreboard substring)\n")
-
-    if pattern_gamma:
-        print("[STAGE 6c] body_contains_literal_gamma (expect GENERATE/ADAPT, not INSTANTIATE)...\n")
-        r_g = pipeline.body_contains_literal_gamma(sample_plain)
-        print(f"[STAGE 6c] result: {r_g!r} (first non-ws char is not '[')\n")
-
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Apache log semiformal staged demo.")
-    parser.add_argument("--stage", type=int, choices=(1, 2, 3, 4, 5, 6), default=1)
+    parser.add_argument("--stage", type=int, choices=(1, 2, 3, 4, 5), default=1)
     parser.add_argument("--fresh", action="store_true", help="Clear .semiformal before running.")
     parser.add_argument("--log", type=Path, default=DEFAULT_LOG)
-    parser.add_argument(
-        "--pattern-gamma",
-        action="store_true",
-        help="STAGE 6 only: also run body_contains_literal_gamma (control: different spec shape).",
-    )
     args = parser.parse_args()
 
     configure(
         cache_dir=str(_EXAMPLES_DIR / ".semiformal"),
         session_source=str(_EXAMPLES_DIR),
-        verbose=True,
+        verbose=False,
     )
     if args.fresh:
         _clear_cache()
@@ -421,8 +268,6 @@ def main() -> None:
         run_stage_4(log_path=args.log)
     elif args.stage == 5:
         run_stage_5(log_path=args.log)
-    elif args.stage == 6:
-        run_stage_6(pattern_gamma=args.pattern_gamma)
 
 
 if __name__ == "__main__":

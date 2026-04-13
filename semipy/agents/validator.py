@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast
 import inspect
 import traceback
-from typing import Any, Optional, get_origin
+from typing import Any, Optional, get_args, get_origin
 
 from semipy.agents.slot_call import invoke_slot
 from semipy.type_adapter import type_adapter_for as _type_adapter_for
@@ -42,6 +42,26 @@ def _validate_value_with_typeadapter(
         ta.validate_python(value)
     except Exception as e:
         return False, f"TypeAdapter validation failed for {expected_type!r}: {e}"
+
+    # Pydantic coerces dicts to dataclasses during validation, which masks functions
+    # that return plain dicts instead of proper class instances.  The committed
+    # function still returns dicts at runtime, causing downstream attribute errors.
+    # For list[T] / set[T] where T is a user-defined class, enforce isinstance on
+    # the first few elements before accepting the result.
+    origin = get_origin(expected_type)
+    type_args = get_args(expected_type)
+    if origin is list and type_args:
+        elem_type = type_args[0]
+        if isinstance(elem_type, type) and elem_type.__module__ not in ("builtins", "typing"):
+            if isinstance(value, list):
+                for i, elem in enumerate(value[:5]):
+                    if not isinstance(elem, elem_type):
+                        return False, (
+                            f"list element {i} is {type(elem).__name__!r}, expected {elem_type.__name__!r}. "
+                            f"The function must return {elem_type.__name__} instances constructed via "
+                            f"{elem_type.__name__}(...), not plain dicts or other surrogate types."
+                        )
+
     return True, ""
 
 
