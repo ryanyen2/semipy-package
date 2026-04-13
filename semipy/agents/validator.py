@@ -374,7 +374,6 @@ def validate(
     expected_type: Any,
     sample_input: Optional[dict[str, Any]] = None,
     enable_execution: bool = True,
-    usage_hint: str = "",
     spec: Optional[GenerationSpec] = None,
 ) -> ValidationResult:
     """
@@ -384,7 +383,6 @@ def validate(
     - enforce STATEMENT_BLOCK return dict keys
     - enforce formal_constraints presence (verbatim substring match)
     """
-    del usage_hint  # usage_hint is legacy; constraints are handled via SlotSpec.
 
     source = _extract_function_source(raw_source)
     if not source.strip():

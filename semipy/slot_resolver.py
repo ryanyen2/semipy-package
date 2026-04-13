@@ -688,7 +688,6 @@ def _call_generated_fn(
             generated_path=generated_path,
             line_range=(0, 0),
             prompt_preview=prompt_preview,
-            usage_hint="",
             cause=e,
         )
         try:
@@ -924,11 +923,10 @@ def execute_slot(
             else:
                 call_site = _call_site_from_slot(slot_spec)
                 current_fp = compute_runtime_input_fingerprint(runtime_values)
-                do_verify = True
                 stored_fp = getattr(commit, "runtime_input_fingerprint", "") or ""
                 skip_verify = bool(stored_fp) and stored_fp == current_fp
 
-                if do_verify and not skip_verify:
+                if not skip_verify:
                     vr_last = None
                     for sample_in in _reuse_verify_sample_inputs(
                         slot_spec, slot, runtime_values
@@ -1076,17 +1074,6 @@ def execute_slot(
                             update_slot_commit(dep_graph, current_slot_ref, commit.commit_id)
                             clear_stale(dep_graph, current_slot_ref)
                             save_dependency_graph(cache_dir, dep_graph)
-                        if resolution.reuse_dispatch_slot_id:
-                            from semipy.resolver import list_equivalence_donors
-
-                            donors = list_equivalence_donors(portal, slot_spec, slot_spec.slot_id)
-                            summaries: list[str] = []
-                            for s, c in donors[:12]:
-                                ci = s.call_site_info or {}
-                                summaries.append(
-                                    f"commit_id={c.commit_id} slot_id={s.slot_id} "
-                                    f"file={ci.get('filename', '')} line={ci.get('lineno', 0)}"
-                                )
                         return result
 
         if force_regenerate:
@@ -1147,7 +1134,7 @@ def execute_slot(
         from semipy.agents.skeleton_writer import surface_skeleton as _surface_skeleton
 
         # Run synchronously so script termination cannot drop the surface write.
-        _surface_skeleton(slot_spec, entry, portal.source_file)
+        _surface_skeleton(slot_spec, entry)
         _schedule_sketch_binding_extraction(
             spec_text=slot_spec.spec_text,
             generated_source=entry.generated_source,

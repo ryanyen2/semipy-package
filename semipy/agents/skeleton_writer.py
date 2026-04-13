@@ -568,7 +568,6 @@ def _reindent_to_match(skeleton_fn: str, file_lines: list[str], func_start_line:
 def surface_skeleton(
     slot_spec: SlotSpec,
     cache_entry: CacheEntry,
-    portal_source_file: str,
 ) -> None:
     """
     Replace the enclosing function in the on-disk file with a version that includes `#<` lines.
@@ -577,11 +576,8 @@ def surface_skeleton(
     target ``slot_spec.source_span[0]`` (the real ``.py`` path). Skips Jupyter ephemeral kernel
     paths and standalone ``semi()`` slots with no enclosing function source.
 
-    ``portal_source_file`` is kept for call-site compatibility; it does not gate writes.
-
     Not invoked on **REUSE**; standalone ``semi()`` slots have no enclosing function source.
     """
-    _ = portal_source_file  # portal anchor may be a directory; write target is source_span[0]
     try:
         _surface_skeleton_impl(slot_spec, cache_entry)
     except Exception:

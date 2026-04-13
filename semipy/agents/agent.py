@@ -598,7 +598,6 @@ class SemiAgent:
             expected_type=spec.expected_type,
             sample_input=spec.sample_input,
             enable_execution=True,
-            usage_hint=getattr(spec, "usage_hint", ""),
             spec=spec,
         )
         if not result.passed:

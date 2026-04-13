@@ -88,14 +88,6 @@ def _best_donor(
     return donors[0]
 
 
-def list_equivalence_donors(
-    portal: Any,
-    slot_spec: SlotSpec,
-    current_slot_id: str,
-) -> list[tuple[Slot, Commit]]:
-    """All slots (newest commit first) that share this spec_equivalence_key, excluding current_slot_id."""
-    return _donor_commits_for_equivalence(portal, slot_spec, current_slot_id)
-
 
 def _try_sketch_instantiation(
     slot_spec: SlotSpec,

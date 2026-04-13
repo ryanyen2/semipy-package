@@ -318,7 +318,6 @@ class SemiCallError(Exception):
         generated_path: str = "",
         line_range: tuple[int, int] = (0, 0),
         prompt_preview: str = "",
-        usage_hint: str = "",
         cause: Optional[BaseException] = None,
     ):
         super().__init__(message)
@@ -326,7 +325,6 @@ class SemiCallError(Exception):
         self.generated_path = generated_path
         self.line_range = line_range
         self.prompt_preview = prompt_preview
-        self.usage_hint = usage_hint
         self.__cause__ = cause
 
     def __str__(self) -> str:
@@ -347,10 +345,6 @@ class SemiCallError(Exception):
                 lines.append(f"  Your code: {source_line}")
             elif self.prompt_preview:
                 lines.append(f"  Prompt:   {self.prompt_preview[:100]}{'...' if len(self.prompt_preview) > 100 else ''}")
-            lines.append("")
-
-        if self.usage_hint:
-            lines.append(f"  Result is used as: {self.usage_hint}")
             lines.append("")
 
         lines.append(f"  What went wrong: {what}")

@@ -161,18 +161,6 @@ def _format_cache_path(cache_dir: Optional[Path], entry: CacheEntry) -> str:
     return ".semiformal/runtime"
 
 
-def _short_display_path(full_path: str) -> str:
-    """Short path for one-line display (e.g. .../runtime/module.semi.py)."""
-    try:
-        p = Path(full_path).resolve()
-        parts = p.parts
-        if "runtime" in parts:
-            i = parts.index("runtime")
-            return ".../" + "/".join(parts[i:]) if i < len(parts) else p.name
-        return p.name if len(p.name) <= 52 else f"...{p.name[-48:]}"
-    except Exception:
-        return full_path if len(full_path) <= 52 else f"...{full_path[-48:]}"
-
 
 def _relative_display_path(
     path: str,
