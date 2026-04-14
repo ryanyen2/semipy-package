@@ -37,6 +37,7 @@ from semipy.reactivity import (
     update_slot_commit,
 )
 from semipy.resolver import resolve
+from semipy.routing import RoutingPolicy
 import inspect as _inspect
 
 from semipy.agents.profiler import _is_collection_like
@@ -776,6 +777,8 @@ def execute_slot(
 
     _verify_failure_msg: str | None = None
     _sketch_context: str | None = None
+    _post_reuse_validation: Any = None
+    _post_reuse_semantic: Any = None
 
     if resolution.decision == Decision.INSTANTIATE and resolution.sketch_id:
         sk = sketch_library.sketches.get(resolution.sketch_id)
@@ -891,9 +894,9 @@ def execute_slot(
                 f"Sketch spec template: {tmpl}\n"
                 f"Instantiated source:\n{src[:8000]}"
             )
-            resolution = resolve(
-                portal,
+            resolution = RoutingPolicy(portal).decide(
                 slot_spec,
+                slot,
                 force_regenerate=True,
                 sketch_library=sketch_library,
             )
@@ -947,6 +950,7 @@ def execute_slot(
                         _verify_failure_msg = (
                             (vr_last.error_message or "").strip() if vr_last else ""
                         )
+                        _post_reuse_validation = vr_last
                         if config.verbose:
                             err = _verify_failure_msg.replace("\n", " ")
                             if len(err) > 160:
@@ -993,6 +997,7 @@ def execute_slot(
                                     _verify_failure_msg += (
                                         f" Problematic inputs: {examples}"
                                     )
+                                _post_reuse_semantic = sem
                                 if config.verbose:
                                     print_pipeline_log(
                                         call_site,
@@ -1077,11 +1082,13 @@ def execute_slot(
                         return result
 
         if force_regenerate:
-            resolution = resolve(
-                portal,
+            resolution = RoutingPolicy(portal).decide(
                 slot_spec,
+                slot,
                 force_regenerate=True,
                 sketch_library=sketch_library,
+                prior_validation=_post_reuse_validation,
+                semantic_result=_post_reuse_semantic,
             )
 
     # ADAPT / GENERATE

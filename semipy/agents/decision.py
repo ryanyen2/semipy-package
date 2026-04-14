@@ -295,40 +295,19 @@ Keep "reasoning" under 3 sentences. List at most 5 problematic_inputs \
 
 def _create_decision_model() -> tuple[Any, Any] | tuple[None, None]:
     config = get_config()
-
-    use_openai = bool(config.openai_api_key) or bool(os.getenv("OPENAI_API_KEY"))
-    if use_openai:
-        try:
-            from pydantic_ai.models.openai import (
-                OpenAIResponsesModel,
-                OpenAIResponsesModelSettings,
-            )
-
-            model = OpenAIResponsesModel("gpt-5-mini")
-            # Reasoning models reject sampling params; omit temperature to avoid pydantic_ai UserWarning.
-            settings = OpenAIResponsesModelSettings()
-            return model, settings
-        except Exception:
-            pass
-
-    api_key = config.openrouter_api_key or os.getenv("OPENROUTER_API_KEY")
+    api_key = config.openai_api_key or os.getenv("OPENAI_API_KEY")
     if not api_key:
         return None, None
-    # try:
-    #     from pydantic_ai.models.openrouter import (
-    #         OpenRouterModel,
-    #         OpenRouterModelSettings,
-    #         OpenRouterProvider,
-    #     )
-
-    #     model = OpenRouterModel(
-    #         config.validator_model,
-    #         provider=OpenRouterProvider(api_key=api_key),
-    #     )
-    #     settings = OpenRouterModelSettings(temperature=0.0)
-    #     return model, settings
-    # except Exception:
-    #     return None, None
+    try:
+        from pydantic_ai.models.openai import (
+            OpenAIResponsesModel,
+            OpenAIResponsesModelSettings,
+        )
+        model = OpenAIResponsesModel(config.openai_model)
+        settings = OpenAIResponsesModelSettings()
+        return model, settings
+    except Exception:
+        return None, None
 
 
 def _build_evidence_prompt(

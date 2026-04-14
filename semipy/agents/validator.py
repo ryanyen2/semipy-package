@@ -491,6 +491,182 @@ def validate(
     )
 
 
+def validate_boundary(
+    source: str,
+    spec: Optional[GenerationSpec] = None,
+    *,
+    expected_type: Any = None,
+) -> ValidationResult:
+    """Stage 1 validation: AST correctness, function presence, signature, shape.
+
+    Returns a ValidationResult with failure_kind set to one of:
+      "syntax_error"       - AST parse failed
+      "no_function"        - no top-level function definition found
+      "signature_mismatch" - function won't accept the slot's free_variables
+      "shape_mismatch"     - STATEMENT_BLOCK: return dict keys don't match output_names
+    """
+    source = _extract_function_source(source)
+    if not source.strip():
+        return ValidationResult(
+            passed=False, ast_valid=False, type_correct=False, execution_ok=False,
+            error_message="No Python code found in response",
+            failure_kind="syntax_error",
+        )
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as e:
+        return ValidationResult(
+            passed=False, ast_valid=False, type_correct=False, execution_ok=False,
+            error_message=f"Syntax error: {e}",
+            failure_kind="syntax_error",
+        )
+    # Find primary function definition
+    primary_name: str | None = None
+    for node in (tree.body if isinstance(tree, ast.Module) else []):
+        if isinstance(node, ast.FunctionDef):
+            primary_name = node.name
+            break
+    if primary_name is None:
+        for n in ast.walk(tree):
+            if isinstance(n, ast.FunctionDef):
+                primary_name = n.name
+                break
+    if primary_name is None:
+        return ValidationResult(
+            passed=False, ast_valid=False, type_correct=False, execution_ok=False,
+            error_message="No function definition found",
+            failure_kind="no_function",
+        )
+    # Signature check (quick structural check before execution)
+    fv = list(spec.slot_spec.free_variables) if spec and spec.slot_spec else []
+    sample_input = spec.sample_input if spec else None
+    if fv and sample_input:
+        args = tuple(sample_input.get("args", ()) or ())
+        if len(fv) != len(args):
+            return ValidationResult(
+                passed=False, ast_valid=True, type_correct=True, execution_ok=False,
+                error_message=f"Slot has {len(fv)} free variables but sample_input has {len(args)} args",
+                failure_kind="signature_mismatch",
+            )
+    # Formal constraint check
+    formal_constraints = (spec.slot_spec.formal_constraints if spec and spec.slot_spec else []) if spec else []
+    constraint_err = _validate_formal_constraints(source, formal_constraints)
+    if constraint_err:
+        return ValidationResult(
+            passed=False, ast_valid=True, type_correct=True, execution_ok=False,
+            error_message=constraint_err,
+            failure_kind="signature_mismatch",
+        )
+    return ValidationResult(
+        passed=True, ast_valid=True, type_correct=True, execution_ok=True,
+        error_message="",
+    )
+
+
+def validate_sandbox(
+    source: str,
+    spec: Optional[GenerationSpec] = None,
+    *,
+    expected_type: Any = None,
+    sample_input: Optional[dict[str, Any]] = None,
+) -> ValidationResult:
+    """Stage 2 validation: compile, execute with sample inputs, type-check result.
+
+    Returns a ValidationResult with failure_kind set to one of:
+      "execution_error"  - exception raised during function execution
+      "type_mismatch"    - return value type doesn't match expected_type
+      "empty_output"     - empty string returned for non-empty string input
+      "identity_return"  - output equals input (str identity passthrough)
+    """
+    source = _extract_function_source(source)
+    if not source.strip():
+        return ValidationResult(
+            passed=False, ast_valid=False, type_correct=False, execution_ok=False,
+            error_message="No Python code found",
+            failure_kind="execution_error",
+        )
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as e:
+        return ValidationResult(
+            passed=False, ast_valid=False, type_correct=False, execution_ok=False,
+            error_message=f"Syntax error: {e}",
+            failure_kind="execution_error",
+        )
+    primary_name = None
+    for n in ast.walk(tree):
+        if isinstance(n, ast.FunctionDef):
+            primary_name = n.name
+            break
+    if primary_name is None:
+        return ValidationResult(
+            passed=False, ast_valid=False, type_correct=False, execution_ok=False,
+            error_message="No function definition found",
+            failure_kind="execution_error",
+        )
+    try:
+        ns: dict[str, Any] = {}
+        if spec and getattr(spec, "execution_namespace", None):
+            ns.update(spec.execution_namespace)
+        exec(compile(source, "<generated>", "exec"), ns)
+        fn = ns.get(primary_name)
+        if fn is None or not callable(fn) or isinstance(fn, type):
+            return ValidationResult(
+                passed=False, ast_valid=True, type_correct=True, execution_ok=False,
+                error_message=f"No callable named {primary_name!r} found after compile",
+                failure_kind="execution_error",
+            )
+    except Exception:
+        return ValidationResult(
+            passed=False, ast_valid=True, type_correct=True, execution_ok=False,
+            error_message=traceback.format_exc(),
+            failure_kind="execution_error",
+        )
+
+    eff_type = (spec.expected_type if spec else None) or expected_type or type(None)
+    eff_sample = (spec.sample_input if spec else None) or sample_input
+    slot_category = spec.slot_spec.expected_category if spec and spec.slot_spec else None
+    output_names = spec.slot_spec.output_names if spec and spec.slot_spec else []
+    usage_hints = spec.slot_spec.usage_hints if spec and spec.slot_spec else []
+    fv = list(spec.slot_spec.free_variables) if spec and spec.slot_spec else None
+    ta_globals = spec.execution_namespace if spec else None
+
+    result = _validate_basic_execution(
+        fn=fn,
+        expected_type=eff_type,
+        sample_input=eff_sample,
+        slot_category=slot_category,
+        output_names=output_names,
+        typeadapter_globals=ta_globals,
+        free_variables=fv,
+        usage_hints=usage_hints,
+    )
+    if result.passed:
+        return result
+    # Map error message patterns to typed failure_kind
+    msg = result.error_message or ""
+    if "Signature mismatch" in msg or "signature" in msg.lower():
+        kind = "execution_error"
+    elif "Empty string result" in msg or "empty" in msg.lower():
+        kind = "empty_output"
+    elif "Result equals non-empty input" in msg or "identity" in msg.lower():
+        kind = "identity_return"
+    elif "STATEMENT_BLOCK" in msg and "keys" in msg:
+        kind = "type_mismatch"
+    elif not result.type_correct:
+        kind = "type_mismatch"
+    else:
+        kind = "execution_error"
+    return ValidationResult(
+        passed=False,
+        ast_valid=result.ast_valid,
+        type_correct=result.type_correct,
+        execution_ok=result.execution_ok,
+        error_message=msg,
+        failure_kind=kind,
+    )
+
+
 def verify_runtime_execution(
     *,
     fn: Any,

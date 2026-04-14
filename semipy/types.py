@@ -135,6 +135,7 @@ class CacheEntry:
     cache_display_path: Optional[str] = None
     reasoning_summary: Optional[str] = None
     tool_calls_made: Optional[list[str]] = None
+    commitment_record: Optional[Any] = None
 
 
 class Decision(Enum):
@@ -215,6 +216,10 @@ class ValidationResult:
     gist_executed: bool = False
     gist_stdout: str = ""
     gist_stderr: str = ""
+    # Typed failure category — used by slot_resolver for deterministic routing decisions.
+    # Stage 1 (boundary): "syntax_error" | "no_function" | "signature_mismatch" | "shape_mismatch"
+    # Stage 2 (sandbox):  "execution_error" | "type_mismatch" | "empty_output" | "identity_return"
+    failure_kind: Optional[str] = None
 
 
 class SemiGenerationError(Exception):

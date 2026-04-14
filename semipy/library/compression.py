@@ -120,7 +120,7 @@ async def _validate_with_gist_async(source: str) -> bool:
         )
         builder = GistBuilder(spec)
         gist = builder.build(source)
-        executor = GistExecutor(use_e2b=config.use_e2b, timeout=min(15, config.gist_timeout), e2b_api_key=config.e2b_api_key)
+        executor = GistExecutor(timeout=min(15, config.gist_timeout), e2b_api_key=config.e2b_api_key)
         result = executor.execute_sync(gist.source, user_source_path=gist.user_source_path)
         return result.success if result else False
     except Exception:

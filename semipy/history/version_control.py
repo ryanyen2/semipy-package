@@ -68,6 +68,8 @@ class Commit:
     runtime_input_fingerprint: str = ""
     # Optional link to SemanticBinding in sketch library (pattern learning).
     binding_id: str = ""
+    # Serialized CommitmentRecord (dict) from the generation run that produced this commit.
+    commitment_record: dict = field(default_factory=dict)
 
 
 @dataclass

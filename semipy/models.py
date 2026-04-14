@@ -91,6 +91,35 @@ class OutputValidationResult(BaseModel):
     actual_type: Optional[str] = None
 
 
+class ObservationBundle(BaseModel):
+    """Structured evidence returned by execute_action_program."""
+
+    data_profile: dict[str, str] = Field(default_factory=dict)
+    upstream_summary: str = ""
+    file_excerpts: list[str] = Field(default_factory=list)
+    document_excerpts: list[str] = Field(default_factory=list)
+    search_results: list[str] = Field(default_factory=list)
+    gist_result: Optional[GistRunResult] = None
+    action_errors: list[str] = Field(default_factory=list)
+
+
+class CommitmentRecord(BaseModel):
+    """Structured artifact the agent commits to for each synthesis attempt.
+
+    Filled by the model as a structured output. Replaces freeform reasoning_summary
+    as the source of truth for #< skeleton lines and durable commit metadata.
+    """
+
+    generated_source: str
+    goal: str = ""
+    givens: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    decision_points: list[str] = Field(default_factory=list)
+    checks_performed: list[str] = Field(default_factory=list)
+    downstream_expectations: list[str] = Field(default_factory=list)
+    rejected_alternatives: list[str] = Field(default_factory=list)
+
+
 class SemiAgentDeps(BaseModel):
     """Dependencies for the pydantic_ai agent (mutable state during run)."""
 

@@ -24,13 +24,9 @@ def effective_stream_display_mode(*, verbose: bool) -> str:
 @dataclass
 class SemiConfig:
     """Global configuration for semi() and the generation agent."""
-    openrouter_api_key: Optional[str] = field(default_factory=lambda: os.getenv("OPENROUTER_API_KEY"))
-    openrouter_model: str = "anthropic/claude-sonnet-4-6"
-    validator_model: str = "anthropic/claude-haiku-4-5-20251001"
     openai_api_key: Optional[str] = field(default_factory=lambda: os.getenv("OPENAI_API_KEY"))
     openai_model: str = "gpt-5.4"
     e2b_api_key: Optional[str] = field(default_factory=lambda: os.getenv("E2B_API_KEY"))
-    use_e2b: bool = True
     gist_timeout: int = 30
     cache_dir: Path = field(default_factory=lambda: Path(".semiformal"))
     max_retries: int = 3

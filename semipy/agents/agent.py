@@ -92,7 +92,7 @@ from semipy.agents.console_io import (
 from semipy.agents.generator import get_semi_agent
 from semipy.agents.gist import GistBuilder
 from semipy.agents.executor import GistExecutor
-from semipy.models import SemiAgentDeps
+from semipy.models import CommitmentRecord, SemiAgentDeps
 from semipy.types import (
     CacheEntry,
     Decision,
@@ -521,7 +521,6 @@ class SemiAgent:
         pipeline_trace = _pipeline_trace_enabled()
         stream_mode = effective_stream_display_mode(verbose=self.verbose)
         executor = GistExecutor(
-            use_e2b=config.use_e2b,
             timeout=config.gist_timeout,
             e2b_api_key=config.e2b_api_key,
         )
@@ -560,7 +559,11 @@ class SemiAgent:
                     pipeline_trace=pipeline_trace,
                 )
                 if hasattr(event, "result") and hasattr(event.result, "output"):
-                    final_output = getattr(event.result.output, "content", None) or str(event.result.output)
+                    output = event.result.output
+                    if isinstance(output, CommitmentRecord):
+                        final_output = output
+                    else:
+                        final_output = getattr(output, "content", None) or str(output)
         finally:
             executor = getattr(deps, "executor", None)
             if executor is not None and hasattr(executor, "close_async"):
@@ -575,20 +578,25 @@ class SemiAgent:
                     "[semipy.pipeline_trace] reasoning (first blocks):\n"
                     + "\n\n".join(reasoning_blocks[:3])
                 )
-            else:
-                print(
-                    "[semipy.pipeline_trace] reasoning: (no thinking/reasoning parts in this stream; "
-                    "depends on provider/model. OpenRouter may expose these as separate message types.)"
-                )
             if deps.tool_calls_log:
                 print("[semipy.pipeline_trace] tool_calls:\n" + "\n".join(deps.tool_calls_log))
 
-        source = getattr(deps, "generated_source", None) or ""
-        if not source.strip() and final_output:
-            source = _extract_function_source(final_output)
-            # print(f"Generated source:\n {source}")
+        # Extract generated source — prefer CommitmentRecord, fall back to deps or text parse
+        commitment_record: Optional[CommitmentRecord] = None
+        if isinstance(final_output, CommitmentRecord):
+            commitment_record = final_output
+            source = (final_output.generated_source or "").strip()
+        else:
+            source = getattr(deps, "generated_source", None) or ""
+            if not source.strip() and isinstance(final_output, str):
+                source = _extract_function_source(final_output)
+
         if not source.strip():
-            raise SemiGenerationError("Agent did not produce a Python function (no code block or build_and_run_gist source).")
+            raise SemiGenerationError(
+                "Agent did not produce a Python function. "
+                "Check that the action program calls build_and_run_gist and the CommitmentRecord "
+                "has generated_source set."
+            )
 
         if stream_sink is not None:
             stream_sink.set_active_phase("Validate")
@@ -608,7 +616,6 @@ class SemiAgent:
             )
 
         fn = _compile_source(source)
-        reasoning_summary = "\n\n".join(reasoning_blocks[:3]) if reasoning_blocks else None
         tool_calls = getattr(deps, "tool_calls_log", None)
         if stream_sink is not None:
             stream_sink.set_active_phase("Done")
@@ -616,8 +623,8 @@ class SemiAgent:
             generated_source=source,
             compiled_fn=fn,
             expected_type=spec.expected_type,
-            reasoning_summary=reasoning_summary,
             tool_calls_made=tool_calls,
+            commitment_record=commitment_record,
         )
 
     def generate(self, spec: GenerationSpec) -> CacheEntry:
