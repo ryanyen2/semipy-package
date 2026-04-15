@@ -44,16 +44,12 @@ configure(
 
 @semiformal
 def filter_alpha(df):
-    #< [Task] Filter active-status rows and return statement output dict
-    #< [Given] Input is DataFrame-like with columns status, region, score
-    #< [Given] Observed status values include 'active' and 'idle'
-    #< [Then] Wrapped all returns as {'out': out} for statement
-    #< [Then] Preserved hard constraint verbatim via unreachable 'out =
-    #< [When] df may be None
-    #< [Verify] Ran build_and_run_gist on pandas DataFrame sample
-    #< [But] Returning the filtered DataFrame directly
+    #< [Task] filter rows where status equals active
     #> filter rows where "status" column equals "active"
     out = ...
+    #< [When] None input returns {'out': None}
+    #< [Then] DataFrame-like inputs filter status column to active rows
+    #< [Verify] gist: sample DataFrame kept 2 active rows
     return out
 
 

@@ -28,6 +28,7 @@ import textwrap
 import threading
 import traceback
 from pathlib import Path
+from typing import Any
 
 from semipy.agents.console_io import print_pipeline_log
 from semipy.lowering import strip_skeleton_lines
@@ -55,56 +56,8 @@ def _lock_for_path(path: Path) -> threading.Lock:
         return _file_write_locks[key]
 
 
-def _truncate_words(text: str, max_words: int = 8) -> str:
-    """Truncate text to at most max_words words."""
-    words = text.strip().split()
-    return " ".join(words[:max_words])
-
-
-def _commitment_record_to_skeleton_lines(
-    record: CommitmentRecord,
-    indent: str,
-) -> list[str]:
-    """Deterministically convert CommitmentRecord fields to #< skeleton lines.
-
-    Each line uses a tag from: [Task], [Given], [Then], [When], [Verify], [But].
-    Text is truncated to 8 words per line.
-    """
-    lines: list[str] = []
-    if record.goal and record.goal.strip():
-        lines.append(f"{indent}#< [Task] {_truncate_words(record.goal)}")
-    for item in record.givens[:2]:
-        if item and item.strip():
-            lines.append(f"{indent}#< [Given] {_truncate_words(item)}")
-    for item in record.decision_points[:2]:
-        if item and item.strip():
-            lines.append(f"{indent}#< [Then] {_truncate_words(item)}")
-    for item in record.assumptions[:1]:
-        if item and item.strip():
-            lines.append(f"{indent}#< [When] {_truncate_words(item)}")
-    for item in record.checks_performed[:1]:
-        if item and item.strip():
-            lines.append(f"{indent}#< [Verify] {_truncate_words(item)}")
-    for item in record.rejected_alternatives[:1]:
-        if item and item.strip():
-            lines.append(f"{indent}#< [But] {_truncate_words(item)}")
-    return lines
-
-
-def _insert_skeleton_into_function(
-    fn_source: str,
-    skeleton_lines: list[str],
-) -> str:
-    """Insert skeleton #< lines at the top of the function body (after def line and any docstring).
-
-    Preserves all existing code, #> spec lines, and indentation exactly.
-    Does not insert if skeleton_lines is empty.
-    """
-    if not skeleton_lines:
-        return fn_source
-
-    lines = fn_source.splitlines(keepends=True)
-    # Find the def line
+def _body_start_index(lines: list[str]) -> int:
+    """Return the index of the first body line (after def + optional docstring)."""
     def_idx: int | None = None
     for i, line in enumerate(lines):
         stripped = line.lstrip()
@@ -112,30 +65,99 @@ def _insert_skeleton_into_function(
             def_idx = i
             break
     if def_idx is None:
-        return fn_source
-
-    # Find insertion point: after def line and optional docstring
-    insert_after = def_idx  # default: right after def line
+        return 0
+    # Skip optional docstring
+    insert_after = def_idx
     if def_idx + 1 < len(lines):
-        next_line = lines[def_idx + 1]
-        stripped_next = next_line.lstrip()
-        if stripped_next.startswith('"""') or stripped_next.startswith("'''"):
-            quote = '"""' if stripped_next.startswith('"""') else "'''"
-            # Skip past the docstring
-            doc_content = stripped_next[3:]
-            if quote in doc_content:
+        next_stripped = lines[def_idx + 1].lstrip()
+        if next_stripped.startswith('"""') or next_stripped.startswith("'''"):
+            quote = '"""' if next_stripped.startswith('"""') else "'''"
+            content_after_open = next_stripped[3:]
+            if quote in content_after_open:
                 insert_after = def_idx + 1
             else:
                 for j in range(def_idx + 2, len(lines)):
                     if quote in lines[j]:
                         insert_after = j
                         break
+    return insert_after + 1  # first body line index
 
-    # Insert skeleton lines after insert_after
-    before = lines[: insert_after + 1]
-    after = lines[insert_after + 1 :]
-    new_lines = before + [sl + "\n" for sl in skeleton_lines] + after
-    return "".join(new_lines)
+
+def _first_return_index(lines: list[str], body_start: int) -> int:
+    """Return index of first 'return' statement line, or last meaningful line."""
+    for i in range(body_start, len(lines)):
+        stripped = lines[i].lstrip()
+        if stripped.startswith("return ") or stripped == "return":
+            return i
+    # Fallback: last non-empty line
+    for i in range(len(lines) - 1, body_start - 1, -1):
+        if lines[i].strip():
+            return i
+    return len(lines) - 1
+
+
+def _insert_annotations_inline(
+    fn_source: str,
+    annotations: list[Any],
+    indent: str,
+) -> str:
+    """Place #< annotation lines inline in fn_source near their anchor code.
+
+    Each annotation has:
+      tag    — e.g. Task, Given, Then, Verify
+      text   — concise annotation text
+      anchor — code substring: insert BEFORE the first body line containing it.
+               Empty string → insert at function body start (grouped before any code).
+               "RETURN"    → insert just before the first return statement.
+
+    Multiple anchors that resolve to the same line are inserted in the order they
+    appear in the annotations list (top-to-bottom before that line).
+    Anchors not found fall back to just before the first return statement.
+    """
+    if not annotations:
+        return fn_source
+
+    lines = fn_source.splitlines(keepends=True)
+    body_start = _body_start_index(lines)
+    return_idx = _first_return_index(lines, body_start)
+
+    def annotation_line(note: Any) -> str:
+        tag = (getattr(note, "tag", "") or "").strip()
+        text = (getattr(note, "text", "") or "").strip()
+        return f"{indent}#< [{tag}] {text}\n"
+
+    # Resolve each annotation to an insertion point (line index to insert BEFORE).
+    # Insertions: list of (resolved_line_idx, original_order, formatted_line)
+    insertions: list[tuple[int, int, str]] = []
+    for order, note in enumerate(annotations):
+        anchor = (getattr(note, "anchor", "") or "").strip()
+        fmt = annotation_line(note)
+        if not anchor:
+            target = body_start
+        elif anchor.upper() == "RETURN":
+            target = return_idx
+        else:
+            target = None
+            for i in range(body_start, len(lines)):
+                stripped = lines[i].lstrip()
+                # Skip existing #< lines so we don't anchor off old annotations
+                if stripped.startswith("#<"):
+                    continue
+                if anchor in lines[i]:
+                    target = i
+                    break
+            if target is None:
+                target = return_idx  # fallback
+        insertions.append((target, order, fmt))
+
+    # Sort by (line_idx ASC, order ASC) then apply in REVERSE so indices stay valid
+    insertions.sort(key=lambda x: (x[0], x[1]))
+
+    result = list(lines)
+    # Apply in reverse to preserve forward indices
+    for target, _order, fmt in reversed(insertions):
+        result.insert(target, fmt)
+    return "".join(result)
 
 
 def _drop_empty_hash_only_lines(source: str) -> str:
@@ -384,14 +406,14 @@ def _surface_skeleton_impl(slot_spec: SlotSpec, cache_entry: CacheEntry) -> None
     # Determine body indent from the function source
     indent = _body_indent(fn_source_clean)
 
-    # Build skeleton lines from CommitmentRecord
-    skeleton_lines = _commitment_record_to_skeleton_lines(record, indent)
-    if not skeleton_lines:
-        _log_surface(slot_spec, "Skeleton skipped: CommitmentRecord had no non-empty fields.")
+    # Build inline annotations from CommitmentRecord
+    annotations = list(getattr(record, "annotations", None) or [])
+    if not annotations:
+        _log_surface(slot_spec, "Skeleton skipped: CommitmentRecord had no annotations.")
         return
 
-    # Insert skeleton lines into the (stripped) function source
-    annotated_fn = _insert_skeleton_into_function(fn_source_clean, skeleton_lines)
+    # Insert annotation #< lines inline near their anchor code
+    annotated_fn = _insert_annotations_inline(fn_source_clean, annotations, indent)
     annotated_fn = _drop_empty_hash_only_lines(annotated_fn)
 
     hint_start = slot_spec.enclosing_function_span[1] or slot_spec.source_span[1]

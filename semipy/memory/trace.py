@@ -55,11 +55,13 @@ class TraceStore:
                     "error": validation_result.error_message[:200] if validation_result.error_message else None,
                 }
             if commitment_record is not None:
+                annotations = getattr(commitment_record, "annotations", None) or []
                 entry["commitment"] = {
                     "goal": commitment_record.goal,
-                    "givens": commitment_record.givens[:3],
-                    "decision_points": commitment_record.decision_points[:3],
-                    "checks_performed": commitment_record.checks_performed[:2],
+                    "annotations": [
+                        {"tag": getattr(a, "tag", ""), "text": getattr(a, "text", "")[:80]}
+                        for a in annotations[:4]
+                    ],
                 }
             self._path.parent.mkdir(parents=True, exist_ok=True)
             with self._path.open("a", encoding="utf-8") as f:

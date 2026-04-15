@@ -128,32 +128,15 @@ class ApacheLogPipeline:
     
     @semiformal
     def classify_body(self, body: str) -> str:
-        #< [Task] Classify Apache error log body into event family
-        #< [Given] body/text are strings or may be None
-        #< [Given] Observed bodies include jk2_init scoreboard, workerEnv.init ok, and
-        #< [Then] Returned a dict with exactly one 'family' key
-        #< [Then] Used ordered substring rules rather than regex for
-        #< [When] Unknown or unmatched bodies should map to a
-        #< [Verify] Called profile_slot() to inspect runtime values
         text = "" if body is None else str(body).strip()
         lower = text.lower()
-
         family = ... #> Classify this Apache error log body into a short snake_case event family name.
         return family
 
 
     @semiformal
     def infer_templates(self, bodies: dict[str, list[str]]) -> list[EventTemplate]:
-        #< [Task] Build anchored regex templates for each event family.
-        #< [Given] bodies is a dict mapping family names to
-        #< [Given] Observed families include scoreboard, worker error, bind address,
-        #< [Then] Kept the existing token-based and prefix/suffix branch structure
-        #< [Then] Fixed output shape to return {'templates': [...]} populated
-        #< [When] EventTemplate is available in the surrounding runtime
-        #< [Verify] Called read_upstream() before adapting the parent implementation
-        #< [But] Returning plain dict templates was rejected by the
         templates = ... #> For each event family, create a Python regex that matches the entire body string
-
         return templates
 
 

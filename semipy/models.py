@@ -103,20 +103,35 @@ class ObservationBundle(BaseModel):
     action_errors: list[str] = Field(default_factory=list)
 
 
+class SkeletonNote(BaseModel):
+    """One inline #< annotation placed relative to a code anchor in the user's source.
+
+    anchor: substring of a code line to insert this note BEFORE.
+           Empty string means the very start of the function body.
+           The special value "RETURN" means just before the first return statement.
+    tag:   one of Task, Given, Then, When, And, But, Verify.
+           Task and Verify are always present; others are used as needed.
+    text:  concise annotation, ideally ≤ 12 words.
+    """
+
+    tag: str
+    text: str
+    anchor: str = ""
+
+
 class CommitmentRecord(BaseModel):
     """Structured artifact the agent commits to for each synthesis attempt.
 
-    Filled by the model as a structured output. Replaces freeform reasoning_summary
-    as the source of truth for #< skeleton lines and durable commit metadata.
+    generated_source: the validated function source (pure Python, no #< lines).
+    goal:             ≤ 15 words describing what this function produces (for trace).
+    annotations:      ordered list of SkeletonNote entries that will be surfaced as
+                      inline #< lines in the user's source file.
+    rejected_alternatives: brief notes on alternatives tried (for trace only).
     """
 
     generated_source: str
     goal: str = ""
-    givens: list[str] = Field(default_factory=list)
-    assumptions: list[str] = Field(default_factory=list)
-    decision_points: list[str] = Field(default_factory=list)
-    checks_performed: list[str] = Field(default_factory=list)
-    downstream_expectations: list[str] = Field(default_factory=list)
+    annotations: list[SkeletonNote] = Field(default_factory=list)
     rejected_alternatives: list[str] = Field(default_factory=list)
 
 
