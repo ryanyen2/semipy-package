@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import json
+import time
 import threading
 import traceback
 from dataclasses import replace
@@ -715,6 +716,7 @@ def execute_slot(
     - call the resulting implementation with runtime_values
     - attach DataFlow to result for downstream inference
     """
+    _t0 = time.monotonic()
     config = get_config()
     runtime_values = materialize_runtime_document_inputs(dict(runtime_values))
 
@@ -772,6 +774,11 @@ def execute_slot(
         force_regenerate=force_regenerate,
         sketch_library=sketch_library,
     )
+
+    # Compute user module globals once here for dispatch module loading and validation.
+    # This ensures user-defined types referenced by generated functions are available
+    # in the dispatch exec namespace on both REUSE and GENERATE paths.
+    _slot_exec_ns: dict[str, Any] | None = _execution_namespace_for_generation(slot_spec.source_span[0]) or None
 
     source_file_imports = _extract_source_file_imports(source_file)
 
@@ -910,16 +917,17 @@ def execute_slot(
         else:
             fn_name = function_name_for_commit(commit_holder, commit)
             dispatch_path = _dispatch_module_path(cache_dir, module_name)
-            fn = load_function_from_dispatch(cache_dir, module_name, fn_name, _dispatch_globals_cache)
+            fn = load_function_from_dispatch(cache_dir, module_name, fn_name, _dispatch_globals_cache, globals_seed=_slot_exec_ns)
             if fn is None:
                 _dispatch_globals_cache.pop(module_name, None)
-                fn = load_function_from_dispatch(cache_dir, module_name, fn_name, _dispatch_globals_cache)
+                fn = load_function_from_dispatch(cache_dir, module_name, fn_name, _dispatch_globals_cache, globals_seed=_slot_exec_ns)
             if fn is None:
                 fn = load_function_from_dispatch_by_slot_id(
                     cache_dir,
                     module_name,
                     dispatch_slot_id,
                     _dispatch_globals_cache,
+                    globals_seed=_slot_exec_ns,
                 )
             if fn is None:
                 force_regenerate = True
@@ -1137,6 +1145,20 @@ def execute_slot(
 
     write_dispatch_module(cache_dir, portal, sketch_library=sketch_library)
     save_portal(cache_dir, portal)
+
+    try:
+        from semipy.memory.trace import TraceStore
+        TraceStore(cache_dir).record_run(
+            slot_id=slot_spec.slot_id,
+            decision=resolution.decision,
+            attempt=1,
+            commitment_record=getattr(entry, "commitment_record", None),
+            elapsed_s=time.monotonic() - _t0,
+            source_file=slot_spec.source_span[0],
+        )
+    except Exception:
+        pass
+
     if resolution.decision in (Decision.GENERATE, Decision.ADAPT):
         from semipy.agents.skeleton_writer import surface_skeleton as _surface_skeleton
 
@@ -1157,9 +1179,9 @@ def execute_slot(
 
     fn_name = function_name_for_commit(slot, commit)
     dispatch_path = _dispatch_module_path(cache_dir, module_name)
-    fn = load_function_from_dispatch(cache_dir, module_name, fn_name, _dispatch_globals_cache)
+    fn = load_function_from_dispatch(cache_dir, module_name, fn_name, _dispatch_globals_cache, globals_seed=_slot_exec_ns)
     if fn is None:
-        fn = load_function_from_dispatch_by_slot_id(cache_dir, module_name, slot.slot_id, _dispatch_globals_cache)
+        fn = load_function_from_dispatch_by_slot_id(cache_dir, module_name, slot.slot_id, _dispatch_globals_cache, globals_seed=_slot_exec_ns)
     if fn is None:
         fn = entry.compiled_fn
     if fn is None:

@@ -58,8 +58,12 @@ class CompiledParser:
     def from_templates(cls, templates: list[any]) -> CompiledParser:
         rules = []
         for t in templates:
-            pat = re.compile(t['pattern'])
-            rules.append((t['family'], pat, t['fields']))
+            if isinstance(t, dict):
+                pat = re.compile(t['pattern'])
+                rules.append((t['family'], pat, t.get('fields', {})))
+            else:
+                pat = re.compile(t.pattern)
+                rules.append((t.family, pat, t.fields))
         return cls(rules)
 
     def parse_line(self, line: str) -> dict[str, Any]:
@@ -124,6 +128,13 @@ class ApacheLogPipeline:
     
     @semiformal
     def classify_body(self, body: str) -> str:
+        #< [Task] Classify Apache error log body into event family
+        #< [Given] body/text are strings or may be None
+        #< [Given] Observed bodies include jk2_init scoreboard, workerEnv.init ok, and
+        #< [Then] Returned a dict with exactly one 'family' key
+        #< [Then] Used ordered substring rules rather than regex for
+        #< [When] Unknown or unmatched bodies should map to a
+        #< [Verify] Called profile_slot() to inspect runtime values
         text = "" if body is None else str(body).strip()
         lower = text.lower()
 
@@ -133,8 +144,16 @@ class ApacheLogPipeline:
 
     @semiformal
     def infer_templates(self, bodies: dict[str, list[str]]) -> list[EventTemplate]:
+        #< [Task] Build anchored regex templates for each event family.
+        #< [Given] bodies is a dict mapping family names to
+        #< [Given] Observed families include scoreboard, worker error, bind address,
+        #< [Then] Kept the existing token-based and prefix/suffix branch structure
+        #< [Then] Fixed output shape to return {'templates': [...]} populated
+        #< [When] EventTemplate is available in the surrounding runtime
+        #< [Verify] Called read_upstream() before adapting the parent implementation
+        #< [But] Returning plain dict templates was rejected by the
         templates = ... #> For each event family, create a Python regex that matches the entire body string
-        
+
         return templates
 
 
@@ -174,7 +193,10 @@ def run_stage_2(family_map: dict[str, str]) -> list[dict]:
     templates = pipeline.infer_templates(grouped)
     print(f"result: {len(templates)} templates")
     for t in templates:
-        print(f"  family: {t['family']}, pattern: {t['pattern']}, fields: {t.get('fields', {})}")
+        if isinstance(t, dict):
+            print(f"  family: {t['family']}, pattern: {t['pattern']}, fields: {t.get('fields', {})}")
+        else:
+            print(f"  family: {t.family}, pattern: {t.pattern}, fields: {t.fields}")
     return templates
 
 

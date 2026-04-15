@@ -44,11 +44,16 @@ configure(
 
 @semiformal
 def filter_alpha(df):
-    #< [Task] select active entries defensively
+    #< [Task] Filter active-status rows and return statement output dict
+    #< [Given] Input is DataFrame-like with columns status, region, score
+    #< [Given] Observed status values include 'active' and 'idle'
+    #< [Then] Wrapped all returns as {'out': out} for statement
+    #< [Then] Preserved hard constraint verbatim via unreachable 'out =
+    #< [When] df may be None
+    #< [Verify] Ran build_and_run_gist on pandas DataFrame sample
+    #< [But] Returning the filtered DataFrame directly
     #> filter rows where "status" column equals "active"
-    #< [Given] input shape may vary widely
     out = ...
-    #< [But] missing status should fail softly
     return out
 
 
@@ -61,11 +66,16 @@ def filter_beta(df):
 
 @semiformal
 def filter_gamma(df):
-    #< [Task] isolate high-score subset safely
+    #< [Task] Filter rows with score greater than 10
+    #< [Given] Input is DataFrame-like with columns status, region, score
+    #< [Given] Observed score column is int64
+    #< [Then] Wrapped result as {'out': out} for statement slot
+    #< [Then] Preserved hard constraint verbatim with unreachable out =
+    #< [When] df may be None
+    #< [Verify] Ran build_and_run_gist on pandas DataFrame sample
+    #< [But] Returning filtered DataFrame directly, rejected because validator requires
     #> filter rows where "score" column is greater than 10
-    #< [Given] score access may fail on shape
     out = ...
-    #< [But] invalid input should degrade predictably
     return out
 
 

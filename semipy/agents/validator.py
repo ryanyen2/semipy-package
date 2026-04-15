@@ -166,6 +166,7 @@ def _validate_basic_execution(
                     type_correct=True,
                     execution_ok=False,
                     error_message=f"Signature mismatch: {e}",
+                    failure_kind="signature_mismatch",
                 )
         else:
             try:
@@ -178,6 +179,7 @@ def _validate_basic_execution(
                     type_correct=True,
                     execution_ok=False,
                     error_message=f"Signature mismatch: {e}",
+                    failure_kind="signature_mismatch",
                 )
             result = fn(*args, **kwargs)
     except Exception:
@@ -187,6 +189,7 @@ def _validate_basic_execution(
             type_correct=True,
             execution_ok=False,
             error_message=traceback.format_exc(),
+            failure_kind="execution_error",
         )
 
     # Category shape checks.
@@ -199,6 +202,7 @@ def _validate_basic_execution(
                     type_correct=False,
                     execution_ok=True,
                     error_message=f"STATEMENT_BLOCK must return dict; got {type(result).__name__}",
+                    failure_kind="type_mismatch",
                 )
             if set(result.keys()) != set(output_names):
                 return ValidationResult(
@@ -207,6 +211,7 @@ def _validate_basic_execution(
                     type_correct=False,
                     execution_ok=True,
                     error_message=f"STATEMENT_BLOCK dict keys mismatch. expected={output_names} got={list(result.keys())}",
+                    failure_kind="shape_mismatch",
                 )
         else:
             if "inline:if_test" in hints:
@@ -218,6 +223,7 @@ def _validate_basic_execution(
                         type_correct=False,
                         execution_ok=True,
                         error_message=f"Inline if-test slot must return bool; got {type(result).__name__}",
+                        failure_kind="type_mismatch",
                     )
             elif "inline:return" in hints:
                 # Replaces `return ... #> ...`; return value is validated below via expected_type.
@@ -233,6 +239,7 @@ def _validate_basic_execution(
                     type_correct=True,
                     execution_ok=True,
                     error_message=f"STATEMENT_BLOCK with no output_names must return None; got {type(result).__name__}",
+                    failure_kind="type_mismatch",
                 )
 
     # Value to type-check: for STATEMENT_BLOCK with one named output, validate the inner value.
@@ -262,6 +269,7 @@ def _validate_basic_execution(
                 "Empty string result for non-empty string input; "
                 "expected a non-empty conversion or a raised error."
             ),
+            failure_kind="empty_output",
         )
 
     if _str_identity_passthrough_failure(
@@ -278,6 +286,7 @@ def _validate_basic_execution(
             error_message=(
                 "Result equals non-empty input string; expected a transformed value or a raised error."
             ),
+            failure_kind="identity_return",
         )
 
     # Return type checks.
@@ -299,6 +308,7 @@ def _validate_basic_execution(
                 type_correct=False,
                 execution_ok=True,
                 error_message=f"Expected a callable result; got {type(value_for_typecheck).__name__}",
+                failure_kind="type_mismatch",
             )
         return ValidationResult(
             passed=True,
@@ -321,6 +331,7 @@ def _validate_basic_execution(
                 type_correct=False,
                 execution_ok=True,
                 error_message=err,
+                failure_kind="type_mismatch",
             )
         return ValidationResult(
             passed=True,
@@ -350,6 +361,7 @@ def _validate_basic_execution(
                 error_message=(
                     f"Returned {type(value_for_typecheck).__name__}, expected {expected_type.__name__}"
                 ),
+                failure_kind="type_mismatch",
             )
         return ValidationResult(
             passed=True,
@@ -692,12 +704,16 @@ def verify_runtime_execution(
             execution_ok=True,
             error_message="",
         )
+    # Use the function's own __globals__ as the TypeAdapter namespace so user-defined
+    # types that were seeded into the dispatch module's exec namespace are resolvable.
+    fn_globals = getattr(fn, "__globals__", None)
     return _validate_basic_execution(
         fn=fn,
         expected_type=expected_type,
         sample_input=sample_input,
         slot_category=slot_category,
         output_names=output_names,
+        typeadapter_globals=fn_globals,
         free_variables=free_variables,
         usage_hints=usage_hints,
     )

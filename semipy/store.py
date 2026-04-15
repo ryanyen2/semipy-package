@@ -341,14 +341,19 @@ def load_function_from_dispatch(
     module_name: str,
     function_name: str,
     module_cache: dict[str, dict[str, Any]],
+    globals_seed: dict[str, Any] | None = None,
 ) -> Optional[Callable[..., Any]]:
-    """Load a generated function by name from the dispatch module; uses module_cache to avoid re-executing the file."""
+    """Load a generated function by name from the dispatch module; uses module_cache to avoid re-executing the file.
+
+    globals_seed: optional dict of names to pre-populate the exec namespace with (e.g. user-defined
+    types from the calling module) so generated functions that reference those types resolve correctly.
+    """
     path = _dispatch_module_path(cache_dir, module_name)
     if not path.exists():
         return None
     key = module_name
     def _load() -> dict[str, Any]:
-        ns: dict[str, Any] = {}
+        ns: dict[str, Any] = dict(globals_seed) if globals_seed else {}
         exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), ns)
         return ns
 
@@ -379,10 +384,13 @@ def load_function_from_dispatch_by_slot_id(
     module_name: str,
     slot_id: str,
     module_cache: dict[str, dict[str, Any]],
+    globals_seed: dict[str, Any] | None = None,
 ) -> Optional[Callable[..., Any]]:
     """
     More robust dispatch lookup: load the module namespace and resolve
     the function name via DISPATCH[slot_id].
+
+    globals_seed: optional dict pre-populated into the exec namespace (e.g. user-defined types).
     """
     path = _dispatch_module_path(cache_dir, module_name)
     if not path.exists():
@@ -391,7 +399,7 @@ def load_function_from_dispatch_by_slot_id(
     key = module_name
 
     def _load() -> dict[str, Any]:
-        ns: dict[str, Any] = {}
+        ns: dict[str, Any] = dict(globals_seed) if globals_seed else {}
         exec(compile(path.read_text(encoding="utf-8"), str(path), "exec"), ns)
         return ns
 

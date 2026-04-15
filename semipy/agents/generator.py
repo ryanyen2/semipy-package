@@ -7,8 +7,10 @@ as structured output (generated_source + semantic metadata for #< skeleton lines
 """
 from __future__ import annotations
 
+import inspect
 import json
 import os
+import textwrap
 from typing import Any, Optional
 
 from pydantic_ai import Agent, RunContext
@@ -33,6 +35,43 @@ def _create_openai_model(config: Any) -> Any:
         openai_send_reasoning_ids=True,
     )
     return model, settings
+
+
+def _collect_user_type_sources(expected_type: Any) -> list[tuple[str, str]]:
+    """Return (class_name, dedented_source) for user-defined types found in expected_type.
+
+    Traverses type args recursively. Skips builtins, typing internals, and stdlib modules.
+    Returns [] when inspect.getsource fails (dynamically defined or builtin types).
+    """
+    seen: set[type] = set()
+    results: list[tuple[str, str]] = []
+
+    def _visit(tp: Any) -> None:
+        if tp is None or tp is type(None):
+            return
+        origin = getattr(tp, "__origin__", None)
+        if origin is not None:
+            for arg in getattr(tp, "__args__", ()) or ():
+                _visit(arg)
+            return
+        if not isinstance(tp, type):
+            return
+        module = getattr(tp, "__module__", "") or ""
+        if module in ("builtins", "typing", "collections", "collections.abc") or module.startswith(
+            ("typing", "_typing", "types")
+        ):
+            return
+        if tp in seen:
+            return
+        seen.add(tp)
+        try:
+            src = inspect.getsource(tp)
+            results.append((tp.__name__, textwrap.dedent(src)))
+        except (OSError, TypeError):
+            pass
+
+    _visit(expected_type)
+    return results
 
 
 def _build_action_preamble(spec: Any) -> str:
@@ -69,6 +108,33 @@ def _build_action_preamble(spec: Any) -> str:
     if isinstance(obs, dict):
         observations = {k: v[:20] if isinstance(v, list) else v for k, v in obs.items()}
 
+    # Collect user-defined type sources so the sandbox can instantiate them
+    expected_type = getattr(spec, "expected_type", None)
+    user_type_sources = _collect_user_type_sources(expected_type) if expected_type else []
+    # Build preamble block: imports needed by dataclasses/enums + class definitions
+    user_types_block = ""
+    user_type_names: list[str] = []
+    if user_type_sources:
+        type_src_lines = ["# User-defined types available in this sandbox:"]
+        needs_dataclass_import = False
+        needs_enum_import = False
+        for _cls_name, _cls_src in user_type_sources:
+            if "@dataclass" in _cls_src:
+                needs_dataclass_import = True
+            if "Enum" in _cls_src or "enum" in _cls_src:
+                needs_enum_import = True
+            user_type_names.append(_cls_name)
+        if needs_dataclass_import:
+            type_src_lines.insert(0, "from dataclasses import dataclass, field")
+        if needs_enum_import:
+            type_src_lines.insert(0, "from enum import Enum")
+        for _cls_name, _cls_src in user_type_sources:
+            type_src_lines.append("")
+            type_src_lines.extend(_cls_src.splitlines())
+        user_types_block = "\n".join(type_src_lines) + "\n"
+
+    user_type_names_repr = repr(user_type_names)
+
     profile_repr = repr(data_profile_summary)
     sources_repr = repr(parent_sources)
     obs_repr = repr(observations)
@@ -76,9 +142,11 @@ def _build_action_preamble(spec: Any) -> str:
     return f"""import json as _json
 import traceback as _tb
 
+{user_types_block}
 _SEMIPY_DATA_PROFILE = {profile_repr}
 _SEMIPY_UPSTREAM = {sources_repr}
 _SEMIPY_OBSERVATIONS = {obs_repr}
+_SEMIPY_USER_TYPE_NAMES = {user_type_names_repr}
 
 
 def profile_slot():
@@ -97,8 +165,12 @@ def build_and_run_gist(source, invocation_code=""):
     source: complete function definition (def fn(...): ...)
     invocation_code: Python expression calling the function, e.g. 'fn_name("test input")'
     Returns dict with: success (bool), result (repr str or None), error (str or None)
+
+    User-defined types from the slot's expected_type are pre-seeded into the execution
+    namespace so the function can instantiate them without redefining them locally.
     \"\"\"
-    _ns = {{}}
+    # Seed exec namespace with user-defined types from this module's globals
+    _ns = {{name: globals()[name] for name in _SEMIPY_USER_TYPE_NAMES if name in globals()}}
     try:
         exec(compile(source, "<gist>", "exec"), _ns)
     except Exception:

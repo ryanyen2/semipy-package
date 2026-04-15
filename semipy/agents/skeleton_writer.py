@@ -24,6 +24,7 @@ Skeleton lines are inserted at the top of the function body using the Commitment
 from __future__ import annotations
 
 import ast
+import textwrap
 import threading
 import traceback
 from pathlib import Path
@@ -171,6 +172,22 @@ def _extract_function_source_for_name(parsed_source: str, simple_name: str) -> s
     return None
 
 
+def _strip_leading_decorators(source: str) -> str:
+    """Remove leading @decorator lines from source so they are not duplicated.
+
+    Used as a post-processing step on the fallback function source (from
+    ``fn_source_clean_all.lstrip()``) when ``_extract_function_source_for_name``
+    fails.  The on-disk decorator is preserved via ``lines[:start-1]`` in the
+    replacement, so including it in ``sk_lines`` would create a double decorator.
+    """
+    lines = source.lstrip().splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        stripped = line.lstrip()
+        if stripped and not stripped.startswith("@"):
+            return "".join(lines[i:])
+    return source.lstrip()
+
+
 def _find_function_span_in_file(
     file_text: str,
     func_qualname: str,
@@ -186,8 +203,13 @@ def _find_function_span_in_file(
     candidates: list[tuple[int, int, int]] = []
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == simple:
+            # Use the def line (not the decorator line) as start. This means
+            # lines[:start-1] retains the on-disk decorator in the prefix, and
+            # sk_lines (produced by ast.get_source_segment which starts at the def
+            # line) does not duplicate it. The fallback path strips decorator lines
+            # from fn_source_clean so they do not appear in sk_lines at all.
             start = node.lineno
-            end = getattr(node, "end_lineno", None) or start
+            end = getattr(node, "end_lineno", None) or node.lineno
             dist = abs(start - hint_start)
             if dist < 30:
                 candidates.append((start, end, dist))
@@ -198,7 +220,7 @@ def _find_function_span_in_file(
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == simple:
             start = node.lineno
-            end = getattr(node, "end_lineno", None) or start
+            end = getattr(node, "end_lineno", None) or node.lineno
             fallback.append((start, end, abs(start - hint_start)))
     if not fallback:
         return (0, 0)
@@ -350,9 +372,14 @@ def _surface_skeleton_impl(slot_spec: SlotSpec, cache_entry: CacheEntry) -> None
     fn_source_clean_all = strip_skeleton_lines(slot_spec.enclosing_function_source)
     simple_qual = slot_spec.enclosing_function_qualname
     simple_name = _function_simple_name(simple_qual)
-    fn_source_clean = _extract_function_source_for_name(fn_source_clean_all, simple_name)
+    # Dedent before parsing so that class methods (which carry file-level indent)
+    # can be parsed by ast.parse at module level without IndentationError.
+    fn_source_clean_dedented = textwrap.dedent(fn_source_clean_all)
+    fn_source_clean = _extract_function_source_for_name(fn_source_clean_dedented, simple_name)
     if fn_source_clean is None:
-        fn_source_clean = fn_source_clean_all.lstrip()
+        # Fallback: strip leading decorator lines so they are not duplicated by
+        # the on-disk prefix (lines[:start-1] already contains the decorator).
+        fn_source_clean = _strip_leading_decorators(fn_source_clean_dedented)
 
     # Determine body indent from the function source
     indent = _body_indent(fn_source_clean)
