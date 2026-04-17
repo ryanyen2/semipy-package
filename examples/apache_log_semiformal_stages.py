@@ -91,7 +91,8 @@ class CompiledParser:
         fam, m = hits[0]
         result["status"] = "OK"
         result["family"] = fam
-        result["captures"] = {k: v for k, v in m.groupdict().items() if v is not None}
+        result["captures"] = {k: v for k,
+                              v in m.groupdict().items() if v is not None}
         return result
 
     def batch_parse(self, lines: list[str]) -> list[dict[str, Any]]:
@@ -109,7 +110,8 @@ def print_status_report(events: list[dict[str, Any]], *, label: str = "") -> Non
     print(f"\n{header}Parse results ({len(events)} lines):")
     for status, count in sorted(counts.items(), key=lambda x: -x[1]):
         print(f"  {status}: {count}")
-    unseen = sorted({ev.get("body", "") for ev in events if ev.get("status") == "UNSEEN_TEMPLATE"})
+    unseen = sorted({ev.get("body", "")
+                    for ev in events if ev.get("status") == "UNSEEN_TEMPLATE"})
     if unseen:
         print(f"  ({len(unseen)} distinct unseen patterns)")
 
@@ -123,22 +125,25 @@ class EventTemplate:
     pattern: str
     fields: dict[str, str]  # field name -> type (e.g. 'int', 'str')
 
+
 class ApacheLogPipeline:
     """Apache log classifier and template generator."""
-    
+
     @semiformal
     def classify_body(self, body: str) -> str:
+        # < [Task] classify Apache error body into snake_case family
+        # < [Given] fallback rebuilds text and lowercase when slot inputs empty
         text = "" if body is None else str(body).strip()
         lower = text.lower()
-        family = ... #> Classify this Apache error log body into a short snake_case event family name.
+        family = ...  # > Classify this Apache error log body into a short snake_case event family name.
+        # < [And] workerEnv init, errors, and Apache faults get families
+        # < [Verify] gist: scoreboard and workerEnv samples validated, slot returned None
         return family
-
 
     @semiformal
     def infer_templates(self, bodies: dict[str, list[str]]) -> list[EventTemplate]:
-        templates = ... #> For each event family, create a Python regex that matches the entire body string
+        templates = ...  # > For each event family, create a Python regex that matches the entire body string
         return templates
-
 
 
 # ---------------------------------------------------------------------------
@@ -177,9 +182,11 @@ def run_stage_2(family_map: dict[str, str]) -> list[dict]:
     print(f"result: {len(templates)} templates")
     for t in templates:
         if isinstance(t, dict):
-            print(f"  family: {t['family']}, pattern: {t['pattern']}, fields: {t.get('fields', {})}")
+            print(
+                f"  family: {t['family']}, pattern: {t['pattern']}, fields: {t.get('fields', {})}")
         else:
-            print(f"  family: {t.family}, pattern: {t.pattern}, fields: {t.fields}")
+            print(
+                f"  family: {t.family}, pattern: {t.pattern}, fields: {t.fields}")
     return templates
 
 
@@ -200,7 +207,7 @@ def run_stage_4(*, log_path: Path = DEFAULT_LOG, bootstrap_n: int = 120) -> None
     ]
     all_lines = load_lines(log_path)
     pipeline = ApacheLogPipeline()
-    
+
     print("\n[STAGE 4]")
     extended_lines = all_lines + edges
     bodies_ext = extract_bodies(extended_lines)
@@ -212,7 +219,7 @@ def run_stage_4(*, log_path: Path = DEFAULT_LOG, bootstrap_n: int = 120) -> None
     templates_ext = pipeline.infer_templates(grouped_ext)
     ext_parser = CompiledParser.from_templates(templates_ext)
     ext_events = ext_parser.batch_parse(extended_lines)
-    
+
     print_status_report(ext_events, label="STAGE 4")
 
 
@@ -244,18 +251,20 @@ def run_stage_5(*, log_path: Path = DEFAULT_LOG, bootstrap_n: int = 120) -> None
     print_status_report(events, label="STAGE 5 full")
 
 
-
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Apache log semiformal staged demo.")
-    parser.add_argument("--stage", type=int, choices=(1, 2, 3, 4, 5), default=1)
-    parser.add_argument("--fresh", action="store_true", help="Clear .semiformal before running.")
+    parser = argparse.ArgumentParser(
+        description="Apache log semiformal staged demo.")
+    parser.add_argument("--stage", type=int,
+                        choices=(1, 2, 3, 4, 5), default=1)
+    parser.add_argument("--fresh", action="store_true",
+                        help="Clear .semiformal before running.")
     parser.add_argument("--log", type=Path, default=DEFAULT_LOG)
     args = parser.parse_args()
 
     configure(
         cache_dir=str(_EXAMPLES_DIR / ".semiformal"),
         session_source=str(_EXAMPLES_DIR),
-        verbose=False,
+        verbose=True,
     )
     if args.fresh:
         _clear_cache()

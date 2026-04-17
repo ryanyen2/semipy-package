@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  # Optional: Local gist executor for testing
+  gist-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.gist
+    image: semipy-gist:latest
+    container_name: semipy-gist-dev
+    # For manual testing:
+    # docker-compose run --rm gist-runner script.py
+    # Or mount a volume:
+    volumes:
+      - ./test_gists:/gists:ro
+    working_dir: /gists
+    # Keep running for interactive use
+    stdin_open: true
+    tty: true
+
+  # Optional: If integrating with Jupyter kernel gateway later
+  # kernel-gateway:
+  #   image: jupyter/kernel-gateway:latest
+  #   ports:
+  #     - "8888:8888"
+  #   environment:
+  #     - KERNEL_GATEWAY_ALLOW_ORIGIN=*
+  #   command: >
+  #     kernel-gateway
+  #     --KernelGatewayApp.allow_origin='*'
+  #     --KernelGatewayApp.port=8888
