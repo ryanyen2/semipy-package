@@ -1,20 +1,22 @@
 """
-Sandbox execution for gist validation via E2B code interpreter.
+Gist execution for validation during code generation.
 
-Captures stdout, stderr, and result via __GIST_RESULT__ marker.
-E2B is the only supported execution substrate. Set E2B_API_KEY in the
-environment or via configure(e2b_api_key=...) before generating any slot.
+Runs generated code either in an E2B sandbox (when e2b-code-interpreter is
+installed and E2B_API_KEY is set) or in a local subprocess (fallback).
 """
 from __future__ import annotations
 
 import asyncio
+import subprocess
+import sys
+import tempfile
 from dataclasses import dataclass
 from typing import Any, Optional
 
 
 @dataclass
 class ExecutionResult:
-    """Result of running a gist in the E2B sandbox."""
+    """Result of running a gist."""
 
     success: bool
     stdout: str = ""
@@ -36,12 +38,20 @@ def _parse_gist_result_stdout(stdout: str) -> tuple[str, Optional[str]]:
     return stdout_clean, line if line else None
 
 
-class GistExecutor:
-    """Execute gist source in the E2B sandbox.
+def _e2b_available() -> bool:
+    try:
+        import importlib
+        importlib.import_module("e2b_code_interpreter")
+        return True
+    except ImportError:
+        return False
 
-    One sandbox is reused for the whole agent run (all tool calls).
-    close_async() must be called when the agent run is done (e.g. from
-    generate_async finally block).
+
+class GistExecutor:
+    """Execute gist source for validation.
+
+    Uses E2B sandbox when `e2b_api_key` is provided and `e2b-code-interpreter`
+    is installed. Falls back to a local subprocess automatically.
     """
 
     def __init__(
@@ -49,19 +59,13 @@ class GistExecutor:
         timeout: int = 30,
         e2b_api_key: Optional[str] = None,
     ) -> None:
-        from semipy.types import SemiGenerationError
-
-        if not e2b_api_key:
-            raise SemiGenerationError(
-                "E2B_API_KEY is required. Set it in your environment or via "
-                "configure(e2b_api_key=...) before generating any slot."
-            )
         self.timeout = timeout
         self._e2b_api_key = e2b_api_key
         self._e2b_sandbox: Any = None
+        self._use_e2b = bool(e2b_api_key) and _e2b_available()
 
     async def close_async(self) -> None:
-        """Kill the E2B sandbox if one was created. Call when the agent run is done."""
+        """Kill the E2B sandbox if one was created."""
         if self._e2b_sandbox is None:
             return
         try:
@@ -76,24 +80,23 @@ class GistExecutor:
         cwd: Optional[str] = None,
         user_source_path: Optional[str] = None,
     ) -> ExecutionResult:
-        """Execute gist asynchronously in E2B."""
-        return await self._execute_e2b(gist_source, user_source_path=user_source_path)
+        if self._use_e2b:
+            return await self._execute_e2b(gist_source, user_source_path=user_source_path)
+        return await self._execute_subprocess(gist_source, cwd=cwd)
 
     async def execute_action_program_async(self, composed_code: str) -> str:
-        """Run a composed action program (preamble + model code) in E2B.
-
-        The program must print a JSON-serializable dict as its last stdout line.
-        Returns a JSON string with keys matching ObservationBundle, or a JSON string
-        with action_errors populated if no valid JSON output was produced.
-        """
+        """Run a composed action program; returns a JSON string with ObservationBundle keys."""
         import json as _json
 
-        result = await self._execute_e2b(composed_code)
+        if self._use_e2b:
+            result = await self._execute_e2b(composed_code)
+        else:
+            result = await self._execute_subprocess(composed_code)
+
         if not result.success and not result.stdout:
-            return _json.dumps({"action_errors": [result.error or "E2B execution failed"]})
+            return _json.dumps({"action_errors": [result.error or "execution failed"]})
 
         raw = (result.stdout or "").strip()
-        # Try parsing the last non-empty line as JSON
         for line in reversed(raw.splitlines()):
             line = line.strip()
             if not line:
@@ -114,7 +117,7 @@ class GistExecutor:
             errors.append(result.error[:1000])
         if result.stderr:
             errors.append(result.stderr[:500])
-        errors.append("Action program produced no JSON output. Ensure the program ends with print(json.dumps(result_dict)).")
+        errors.append("Action program produced no JSON output.")
         return _json.dumps({"action_errors": errors, "stdout_preview": raw[:500]})
 
     def execute_sync(
@@ -123,8 +126,63 @@ class GistExecutor:
         cwd: Optional[str] = None,
         user_source_path: Optional[str] = None,
     ) -> ExecutionResult:
-        """Execute gist synchronously (blocks via asyncio.run)."""
-        return asyncio.run(self._execute_e2b(gist_source, user_source_path=user_source_path))
+        """Execute synchronously (blocks)."""
+        return asyncio.run(self.execute_async(gist_source, cwd=cwd, user_source_path=user_source_path))
+
+    # ── subprocess backend ──────────────────────────────────────────────────
+
+    async def _execute_subprocess(
+        self,
+        source: str,
+        cwd: Optional[str] = None,
+    ) -> ExecutionResult:
+        """Run source in a local subprocess via a temp file."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._execute_subprocess_sync, source, cwd)
+
+    def _execute_subprocess_sync(
+        self,
+        source: str,
+        cwd: Optional[str] = None,
+    ) -> ExecutionResult:
+        with tempfile.NamedTemporaryFile(suffix=".py", mode="w", encoding="utf-8", delete=False) as f:
+            f.write(source)
+            tmp_path = f.name
+        try:
+            proc = subprocess.run(
+                [sys.executable, tmp_path],
+                capture_output=True,
+                text=True,
+                timeout=self.timeout,
+                cwd=cwd,
+            )
+            stdout, result_repr = _parse_gist_result_stdout(proc.stdout or "")
+            if proc.returncode != 0:
+                return ExecutionResult(
+                    success=False,
+                    stdout=stdout,
+                    stderr=proc.stderr or "",
+                    result_repr=result_repr,
+                    error=(proc.stderr or "").strip()[:2000] or f"exit code {proc.returncode}",
+                )
+            return ExecutionResult(
+                success=True,
+                stdout=stdout,
+                stderr=proc.stderr or "",
+                result_repr=result_repr,
+            )
+        except subprocess.TimeoutExpired:
+            return ExecutionResult(success=False, error=f"execution timed out after {self.timeout}s")
+        except Exception as exc:
+            return ExecutionResult(success=False, error=str(exc))
+        finally:
+            import os
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+    # ── E2B backend ─────────────────────────────────────────────────────────
 
     async def _execute_e2b(
         self,
@@ -144,10 +202,8 @@ class GistExecutor:
             stderr_parts = getattr(logs, "stderr", None) if logs else None
             if stdout_parts is None and hasattr(exec_result, "text"):
                 stdout_parts = [getattr(exec_result, "text", "")] or []
-            if stdout_parts is None:
-                stdout_parts = []
-            if stderr_parts is None:
-                stderr_parts = []
+            stdout_parts = stdout_parts or []
+            stderr_parts = stderr_parts or []
             stdout = "\n".join(stdout_parts) if isinstance(stdout_parts, list) else (stdout_parts or "")
             stderr = "\n".join(stderr_parts) if isinstance(stderr_parts, list) else (stderr_parts or "")
             stdout, result_repr = _parse_gist_result_stdout(stdout)
@@ -170,24 +226,10 @@ class GistExecutor:
                     result_repr=result_repr,
                     error=error_msg[:2000],
                 )
-            return ExecutionResult(
-                success=True,
-                stdout=stdout,
-                stderr=stderr,
-                result_repr=result_repr,
-                error=None,
-            )
+            return ExecutionResult(success=True, stdout=stdout, stderr=stderr, result_repr=result_repr)
         except Exception as e:
             err_msg = str(e)
             if not _retrying and "Event loop is closed" in err_msg:
                 self._e2b_sandbox = None
-                return await self._execute_e2b(
-                    gist_source, user_source_path=user_source_path, _retrying=True
-                )
-            return ExecutionResult(
-                success=False,
-                stdout="",
-                stderr="",
-                result_repr=None,
-                error=err_msg,
-            )
+                return await self._execute_e2b(gist_source, user_source_path=user_source_path, _retrying=True)
+            return ExecutionResult(success=False, stdout="", stderr="", error=err_msg)

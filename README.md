@@ -1,82 +1,201 @@
 # semipy
 
-Runtime semiformal system: use the `@semiformal` decorator and `semi()` to express underspecified logic (natural-language conditions, extraction rules, ellipsis regions in methods). The first time a slot runs, an **agentic pipeline** (OpenRouter + pydantic_ai with tools) generates a Python function; it is validated, committed to a versioned portal, and written to a dispatch module. Later calls **reuse** that implementation with optional runtime verification, so routine work is not re-sent to the model.
+Write Python logic in natural language. `semipy` generates, validates, and caches real Python functions from your specs — no boilerplate, no hardcoded rules.
 
-## Setup with uv
+```python
+from semipy import semiformal, semi, configure
 
-[uv](https://docs.astral.sh/uv/) is used for dependency and environment management.
+configure(openai_api_key="sk-...")  # or set OPENAI_API_KEY in environment
 
-**Install uv** (if needed):
+@semiformal
+def parse_log_line(line: str) -> dict:
+    #> extract timestamp, level, and message from an Apache log line
+    result = ...
+    return result
 
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
+# First call: agent generates a Python function and caches it.
+# All later calls: load the cached implementation instantly.
+row = parse_log_line('127.0.0.1 - - [10/Oct/2000:13:55:36] "GET /index.html" 200')
 ```
 
-**Create a virtual environment and install the package** (from the repo root):
+## Install
 
 ```bash
-cd /path/to/semipy-package
-uv sync
-source .venv/bin/activate
+pip install semipy
 ```
 
-**Run examples**:
+For Jupyter notebook display:
 
 ```bash
-# Set OPENAI_API_KEY in .env or environment
-uv run python examples/use_sponsorship_canonicalizer.py
-uv run python examples/use_contract_intelligence.py
-uv run python examples/apache_log_semiformal_stages.py --stage 1
+pip install "semipy[jupyter]"
 ```
 
-To run without activating the venv:
+For PDF input materialization:
 
 ```bash
-uv run python examples/apache_log_semiformal_stages.py --stage 1
+pip install "semipy[pdf]"
+```
+
+## API key
+
+semipy uses the OpenAI API for code generation. Set your key in one of three ways:
+
+**Environment variable** (recommended for scripts):
+
+```bash
+export OPENAI_API_KEY=sk-...
+```
+
+**`.env` file** at the project root (loaded automatically):
+
+```
+OPENAI_API_KEY=sk-...
+```
+
+**In code** (overrides env):
+
+```python
+from semipy import configure
+configure(openai_api_key="sk-...")
 ```
 
 ## Configuration
 
-- **OPENROUTER_API_KEY** in the environment or in a `.env` file at the project root (required for generation).
-- Optional: **E2B_API_KEY** for sandboxed gist execution; without it, a subprocess fallback is used.
-- Optional: **SEMIPY_PIPELINE_TRACE** (`1` / `true` / `yes`) for full prompt, reasoning, and tool-call dumps after each generation (environment only).
-- Optional: **SEMIPY_SESSION_SOURCE** to pin portal identity for notebooks (see `CLAUDE.md`).
-- Optional: **SEMIPY_DOCUMENT_PDF_BACKEND**, **SEMIPY_DOCUMENT_LAYOUT_HEAVY** when passing PDF paths into slots (see `CLAUDE.md`).
-- `semipy.configure(...)` for `openai_api_key`, `openai_model`, `validator_model`, `cache_dir`, `max_retries`, `use_e2b`, `gist_timeout`, `verbose`, `session_source`, and other `SemiConfig` fields. Unknown keys are ignored.
+```python
+from semipy import configure
 
-## Usage
+configure(
+    openai_api_key="sk-...",       # defaults to OPENAI_API_KEY env var
+    openai_model="gpt-4o",         # generation model (default: gpt-5.4)
+    verbose=True,                  # rich terminal output during generation (default: True)
+    cache_dir=".semiformal",       # where portal JSON and dispatch modules are stored
+    max_retries=3,                 # agent retry limit on validation failure
+    session_source=None,           # pin portal identity (useful for Jupyter; see below)
+)
+```
+
+All fields are optional — call `configure()` with only what you want to override.
+
+## Terminal output
+
+When `verbose=True` (the default), semipy prints a live Rich panel showing the agent's reasoning, tool calls, and generated code as they stream in. This works in both terminal and Jupyter.
+
+```
+ Implementing code...
+ ─────────────────────────────────────────────────
+  Reasoning  The function needs to parse a standard Apache
+             Combined Log Format line...
+ ─────────────────────────────────────────────────
+  Tool  build_and_run_gist  passed
+ ─────────────────────────────────────────────────
+  Reusing cached implementation; runtime verify passed.
+  parse_log_line  GENERATE  a1b2c3d4  examples/logs.py:12
+```
+
+To silence all output: `configure(verbose=False)`.
+
+To see full prompt, decision, and tool-call dumps, set the environment variable:
+
+```bash
+export SEMIPY_PIPELINE_TRACE=1
+```
+
+## Usage patterns
+
+### `@semiformal` with `#>` spec blocks
+
+```python
+from semipy import semiformal
+
+@semiformal
+def extract_fields(record: str) -> dict:
+    #> extract date, sender, and subject from an email header
+    result = ...
+    return result
+```
+
+The `#>` block is the spec. The `result = ...` is the slot anchor — the agent fills it in.
+
+### Inline `semi()` for expressions
 
 ```python
 from semipy import semiformal, semi
 
 @semiformal
-def filter_errors(rows):
-    return [r for r in rows if semi(f"is {repr(r['level'])} an error or warning?")]
-
-# First run: agent generates, validates, and caches a predicate (streaming output in the terminal by default).
-# Later runs: load cached implementation from the dispatch module; verify when inputs change.
+def classify_rows(rows):
+    return [r for r in rows if semi(f"is {repr(r['status'])} a client error?")]
 ```
 
-In `@semiformal` methods you can use `#>` comment blocks and inline `#>` on `...` placeholders for STATEMENT_BLOCK slots, optional `#<` reasoning lines (see `CLAUDE.md`), and `semi(...)` for EXPRESSION slots.
+### Standalone `semi()` in any function
 
-See `examples/use_sponsorship_canonicalizer.py`, `examples/use_contract_intelligence.py`, and `examples/apache-log-usecase.md` (with `examples/apache_log_semiformal_stages.py`) for fuller patterns.
+```python
+from semipy import semi
 
-## Artifacts and cache
+def process(text):
+    label = semi(f"classify '{text}' as positive, negative, or neutral")
+    return label
+```
 
-- **Portal**: `.semiformal/{session_id}.portal.json` stores the DAG (slots, commits, branches, refs).
-- **Dispatch module**: `.semiformal/runtime/{module_name}.semi.py` holds generated function source for import.
-- Deleting `.semiformal/` forces regeneration (use the library’s cache-clear helpers where provided in examples).
+### Multiple slots in one function
 
-## Architecture (summary)
+```python
+from semipy import semiformal
 
-- **Lowering** (`semipy/lowering.py`): Finds `#>` blocks, inline specs, and `semi()` calls; builds `SlotSpec` (including `spec_equivalence_key` for durable meaning). `#<` lines are stripped for identity so annotations do not churn slot ids.
-- **Resolution** (`semipy/resolver.py`, `semipy/slot_resolver.py`): REUSE cached implementation when equivalence and verification allow; ADAPT from a parent commit when verify fails; GENERATE when needed. Cross-call-site **donor** REUSE matches the same equivalence key. Runtime PDF paths can be materialized to text at the slot boundary (`semipy/documents.py`).
-- **Generation** (`semipy/agents/`): `SemiAgent.generate` runs a pydantic_ai agent with tools (`profile_data_and_flow`, `read_upstream_context`, `read_file_context`, `read_document_context`, `build_and_run_gist`, `validate_output`, etc.). Output is validated (`agents/validator.py`) and committed (`semipy/history/version_control.py`).
-- **Reactivity** (`semipy/reactivity/`): Optional `DependencyGraph`, `DataFlow`, and `attach_producer_flow` for downstream tracking.
-- **Library** (`semipy/library/`): Optional abstraction primitives (`load_library`, `AbstractionLibrary`, …).
+@semiformal
+def analyze(entry: str) -> dict:
+    #> extract the IP address from the log entry
+    ip = ...
 
-For slot identity, verify gates, Jupyter anchoring, STATEMENT_BLOCK typing, and `#<` / `#>` behavior, see **`CLAUDE.md`**.
+    #> determine if the HTTP status code in the entry indicates an error
+    is_error = ...
 
-## Code conventions
+    return {"ip": ip, "error": is_error}
+```
 
-Use `from __future__ import annotations`, type hints, and `pathlib.Path` for I/O. Follow project rules in `.cursor/rules/` and `CLAUDE.md` (data-agnostic logic, no placeholder code, no emoji in code or docs).
+## Caching and reuse
+
+Generated functions are stored in `.semiformal/` relative to your working directory:
+
+- `.semiformal/<session>.portal.json` — versioned DAG of all commits, branches, and decisions.
+- `.semiformal/runtime/<module>.semi.py` — compiled Python implementations for import.
+
+On subsequent runs, semipy loads the cached implementation without calling the LLM. It re-verifies when it detects new input shapes, and runs ADAPT (re-generation from the prior commit) when verification fails.
+
+To force regeneration, delete `.semiformal/` or the relevant portal file.
+
+## Jupyter
+
+In Jupyter notebooks, semipy detects the `ipykernel` environment automatically. The portal is keyed to `os.getcwd()` so one portal persists across kernel restarts.
+
+Install the optional display extras for inline Rich output:
+
+```bash
+pip install "semipy[jupyter]"
+```
+
+If multiple notebooks share a working directory and need separate caches:
+
+```python
+configure(session_source="/path/to/my_notebook.ipynb")
+```
+
+## VS Code extension
+
+The [Semipy VS Code extension](https://marketplace.visualstudio.com/items?itemName=semipy.semipy-vscode) adds:
+
+- Syntax highlighting for `#>` spec lines (teal) and `#<` reasoning lines (green)
+- Slot history tree in the Explorer panel
+- Split-view to inspect generated `.semi.py` alongside your source
+- Inlay hints and CodeLens showing commit id and decision
+
+## Examples
+
+See the `examples/` directory:
+
+- `examples/apache_log_semiformal_stages.py` — staged walkthrough from simple extraction to INSTANTIATE
+- `examples/use_contract_intelligence.py` — contract field extraction from PDF
+- `examples/use_sponsorship_canonicalizer.py` — entity canonicalization pipeline
+
+## License
+
+MIT
