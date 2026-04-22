@@ -52,7 +52,7 @@ def _extract_imports_and_function(source_code: str) -> tuple[list[str], str]:
         fn_src = "\n".join(function_defs)
     else:
         # Fallback: just use everything after imports
-        fn_src = "\n".join(source_code.split("\n")[len(imports) :]).strip()
+        fn_src = "\n".join(source_code.split("\n")[len(imports):]).strip()
 
     return imports, fn_src
 
@@ -103,7 +103,8 @@ def _build_test_invocation(
             args_str = ", ".join(parts)
         else:
             # Positional
-            args_str = ", ".join(_expr_for_gist_invocation(arg) for arg in args)
+            args_str = ", ".join(_expr_for_gist_invocation(arg)
+                                 for arg in args)
     else:
         # Mix of args and kwargs
         args_str = ", ".join(_expr_for_gist_invocation(arg) for arg in args)

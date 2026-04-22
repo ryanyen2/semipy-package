@@ -3,25 +3,29 @@
 Quick start script to test semipy_testbed.
 
 Usage:
-    export OPENROUTER_API_KEY='sk-...'
+    export OPENAI_API_KEY='sk-...'
     python run_quick_test.py
 """
+from semipy_testbed import infer_semiformal, configure
 import os
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 # Add parent to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from semipy_testbed import infer_semiformal, configure
+load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
+load_dotenv(override=False)
 
 
 def main():
     """Run a quick test."""
-    api_key = os.environ.get("OPENROUTER_API_KEY")
+    api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        print("ERROR: OPENROUTER_API_KEY not set")
-        print("Set it with: export OPENROUTER_API_KEY='your-key'")
+        print("ERROR: OPENAI_API_KEY not set")
+        print("Set it with: export OPENAI_API_KEY='your-key'")
         return 1
 
     configure(verbose=True)

@@ -23,8 +23,8 @@ It's designed for teams who want to:
 ### Prerequisites
 
 - Python 3.10+
-- `pip install openrouter pydantic-ai` (for LLM generation)
-- OpenRouter API key (set `OPENROUTER_API_KEY` env var)
+- `pip install openai python-dotenv` (for LLM generation and `.env` loading)
+- OpenAI API key (set `OPENAI_API_KEY` env var or put it in `semipy_testbed/.env`)
 - Optional: Docker (for containerized gist execution)
 
 ### Installation
@@ -38,6 +38,12 @@ pip install -e .
 
 # Or just add to PYTHONPATH
 export PYTHONPATH="$PWD:$PYTHONPATH"
+```
+
+If you are running from the repository root, the quickest smoke test is:
+
+```bash
+uv run python semipy_testbed/run_quick_test.py
 ```
 
 ### Your First Inference
@@ -78,7 +84,7 @@ else:
              │
              ▼
 ┌─────────────────────────────────────────────────────────┐
-│ Call OpenRouter LLM                                    │
+│ Call OpenAI LLM                                         │
 │ Prompt includes: user spec, data samples, context code │
 └────────────┬────────────────────────────────────────────┘
              │
@@ -112,8 +118,8 @@ Minimal configuration (in-memory state).
 from semipy_testbed import configure, get_config
 
 configure(
-    openrouter_api_key="sk-...",
-    model="anthropic/claude-sonnet-4-6",
+    openai_api_key="sk-...",
+    model="gpt-5.4-mini",
     timeout=30,
     use_docker=False,
 )
@@ -343,13 +349,16 @@ Run the provided examples:
 
 ```bash
 # Make sure API key is set
-export OPENROUTER_API_KEY='sk-...'
+export OPENAI_API_KEY='sk-...'
+
+# Quick smoke test
+uv run python semipy_testbed/run_quick_test.py
 
 # Basic example (email domain extraction, text classification)
-python semipy_testbed/examples/basic_semi.py
+uv run python semipy_testbed/examples/basic_semi.py
 
 # Data-driven example (Apache log classification)
-python semipy_testbed/examples/apache_log_simple.py
+uv run python semipy_testbed/examples/apache_log_simple.py
 ```
 
 ## Working with Docker
@@ -399,9 +408,9 @@ result = infer_semiformal(
 ```python
 from semipy_testbed import configure
 
-# Use a different OpenRouter model
+# Use a different OpenAI model
 configure(
-    model="openai/gpt-4-turbo",  # or any OpenRouter model ID
+    model="gpt-5.4-mini",       # or any OpenAI model ID
     temperature=0.5,             # Lower = more deterministic
     max_tokens=8192,
 )
@@ -449,7 +458,7 @@ configure(timeout=60)
 ```
 
 ### LLM Calls
-Every `infer_semiformal()` call makes one OpenRouter API call (no caching). This is by design for the testbed to keep it simple.
+Every `infer_semiformal()` call makes one OpenAI API call (no caching). This is by design for the testbed to keep it simple.
 
 ### Docker Overhead
 First call: ~1-2s (image pull if not cached). Subsequent calls: ~500-800ms per gist execution.
@@ -458,9 +467,9 @@ Use subprocess (default) for development, Docker for production/sandboxing.
 
 ## Common Issues
 
-### "OPENROUTER_API_KEY not set"
+### "OPENAI_API_KEY not set"
 ```bash
-export OPENROUTER_API_KEY='your-key-here'
+export OPENAI_API_KEY='your-key-here'
 ```
 
 ### Docker "Cannot connect to daemon"

@@ -6,7 +6,7 @@ Welcome! This guide explains what the testbed is for and how to use it for your 
 
 You now have a **simplified code generation engine** that:
 1. Takes a natural language spec (or template)
-2. Calls an LLM (OpenRouter) to generate Python code
+2. Calls an LLM (OpenAI) to generate Python code
 3. Validates the code by running it in isolation (subprocess or docker)
 4. Returns a compiled function you can use immediately
 
@@ -28,13 +28,16 @@ This testbed does exactly that.
 ```bash
 # Set up
 cd /path/to/semipy-package
-export OPENROUTER_API_KEY='sk-...'
+export OPENAI_API_KEY='sk-...'
+
+# Quick smoke test
+uv run python semipy_testbed/run_quick_test.py
 
 # Run basic example
-python semipy_testbed/examples/basic_semi.py
+uv run python semipy_testbed/examples/basic_semi.py
 
 # Run data-driven example
-python semipy_testbed/examples/apache_log_simple.py
+uv run python semipy_testbed/examples/apache_log_simple.py
 
 # Read the README
 cat semipy_testbed/README.md
@@ -308,14 +311,14 @@ Three stages:
 
 ```bash
 # Check it's set
-echo $OPENROUTER_API_KEY
+echo $OPENAI_API_KEY
 
 # Set it
-export OPENROUTER_API_KEY='sk-...'
+export OPENAI_API_KEY='sk-...'
 
 # Or in Python
 import os
-os.environ['OPENROUTER_API_KEY'] = 'sk-...'
+os.environ['OPENAI_API_KEY'] = 'sk-...'
 ```
 
 ### Docker Not Running

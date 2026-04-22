@@ -3,15 +3,13 @@ Main inference pipeline: parse spec → generate → validate → return functio
 """
 from __future__ import annotations
 
-import os
-import tempfile
-from typing import Any, Optional, Callable
+import inspect
+from typing import Any, Optional
 from dataclasses import dataclass
 
 from semipy_testbed.config import get_config
-from semipy_testbed.types import SimpleInferenceResult, ValidationReport
+from semipy_testbed.types import SimpleInferenceResult
 from semipy_testbed.gist_builder import SimpleGistBuilder
-from semipy_testbed.gist_executor import SimpleGistExecutor
 from semipy_testbed.validator import validate_all, validate_syntax
 
 
@@ -34,7 +32,8 @@ def _build_generation_prompt(request: InferenceRequest) -> str:
     prompt_parts.append("You are an expert Python code generator.")
     prompt_parts.append("")
     prompt_parts.append("## Task")
-    prompt_parts.append(f"Generate a Python function based on this specification:")
+    prompt_parts.append(
+        f"Generate a Python function based on this specification:")
     prompt_parts.append("")
     prompt_parts.append(f"```")
     prompt_parts.append(request.user_spec)
@@ -44,18 +43,21 @@ def _build_generation_prompt(request: InferenceRequest) -> str:
     if request.free_variables:
         prompt_parts.append("## Input Variables")
         for name, value in request.free_variables.items():
-            prompt_parts.append(f"- {name}: {type(value).__name__} = {repr(value)[:100]}")
+            prompt_parts.append(
+                f"- {name}: {type(value).__name__} = {repr(value)[:100]}")
         prompt_parts.append("")
 
     if request.expected_type:
-        type_name = getattr(request.expected_type, "__name__", str(request.expected_type))
+        type_name = getattr(request.expected_type,
+                            "__name__", str(request.expected_type))
         prompt_parts.append(f"## Expected Return Type")
         prompt_parts.append(f"Return type: {type_name}")
         prompt_parts.append("")
 
     if request.user_source_code:
         prompt_parts.append("## User Source Context")
-        prompt_parts.append("(Use this to infer expected data structures and patterns)")
+        prompt_parts.append(
+            "(Use this to infer expected data structures and patterns)")
         prompt_parts.append("```python")
         # Limit context length
         lines = request.user_source_code.split("\n")[:50]
@@ -64,40 +66,45 @@ def _build_generation_prompt(request: InferenceRequest) -> str:
         prompt_parts.append("")
 
     prompt_parts.append("## Requirements")
-    prompt_parts.append("1. Return ONLY valid Python code (no markdown, no explanation)")
+    prompt_parts.append(
+        "1. Return ONLY valid Python code (no markdown, no explanation)")
     prompt_parts.append("2. Include all necessary imports at the top")
     prompt_parts.append("3. Function should handle edge cases gracefully")
-    prompt_parts.append("4. The function will be executed in isolation (subprocess/docker)")
+    prompt_parts.append(
+        "4. The function will be executed in isolation (subprocess/docker)")
     prompt_parts.append("")
     prompt_parts.append("Generate the function now:")
 
     return "\n".join(prompt_parts)
 
 
-def _call_openrouter(prompt: str, config: Any) -> tuple[bool, str, Optional[str]]:
+def _call_openai(prompt: str, config: Any) -> tuple[bool, str, Optional[str]]:
     """
-    Call OpenRouter API for code generation.
+    Call OpenAI API for code generation.
     Returns (success, generated_code, error).
     """
     try:
-        from openrouter import OpenRouter
+        from openai import OpenAI
     except ImportError:
-        return False, "", "openrouter library not installed (pip install openrouter)"
+        return False, "", "openai library not installed (pip install openai)"
 
-    if not config.openrouter_api_key:
-        return False, "", "OPENROUTER_API_KEY not set"
+    if not config.openai_api_key:
+        return False, "", "OPENAI_API_KEY not set"
 
     try:
-        client = OpenRouter(api_key=config.openrouter_api_key)
+        client_kwargs: dict[str, Any] = {"api_key": config.openai_api_key}
+        if config.base_url:
+            client_kwargs["base_url"] = config.base_url
+        client = OpenAI(**client_kwargs)
 
-        response = client.chat.completions.create(
+        response = client.responses.create(
             model=config.model,
-            messages=[{"role": "user", "content": prompt}],
+            input=prompt,
             temperature=config.temperature,
-            max_tokens=config.max_tokens,
+            max_output_tokens=config.max_tokens,
         )
 
-        generated_code = response.choices[0].message.content
+        generated_code = getattr(response, "output_text", None) or ""
         if not generated_code:
             return False, "", "Empty response from model"
 
@@ -115,7 +122,7 @@ def _call_openrouter(prompt: str, config: Any) -> tuple[bool, str, Optional[str]
         return True, generated_code, None
 
     except Exception as e:
-        return False, "", f"OpenRouter API error: {e}"
+        return False, "", f"OpenAI API error: {e}"
 
 
 def infer_semiformal(
@@ -168,7 +175,7 @@ def infer_semiformal(
         print(f"[TESTBED] Building generation prompt...")
 
     prompt = _build_generation_prompt(request)
-    success, generated_code, error = _call_openrouter(prompt, config)
+    success, generated_code, error = _call_openai(prompt, config)
 
     if not success:
         return SimpleInferenceResult(
@@ -228,7 +235,8 @@ def infer_semiformal(
 
     if not validation_report.passed:
         if verbose:
-            print(f"[TESTBED] Validation failed: {validation_report.error_message}")
+            print(
+                f"[TESTBED] Validation failed: {validation_report.error_message}")
 
         return SimpleInferenceResult(
             success=False,
@@ -247,7 +255,7 @@ def infer_semiformal(
 
         compiled_fn = None
         for v in ns.values():
-            if callable(v) and not isinstance(v, type):
+            if inspect.isfunction(v):
                 compiled_fn = v
                 break
 
@@ -260,7 +268,8 @@ def infer_semiformal(
             )
 
         if verbose:
-            print(f"[TESTBED] Inference complete! Function compiled: {compiled_fn.__name__}")
+            print(
+                f"[TESTBED] Inference complete! Function compiled: {compiled_fn.__name__}")
 
         return SimpleInferenceResult(
             success=True,

@@ -4,6 +4,7 @@ Simplified validation: syntax, execution, type.
 from __future__ import annotations
 
 import ast
+import inspect
 from typing import Any, Optional
 
 from semipy_testbed.types import ValidationReport, GistExecutorResult
@@ -93,7 +94,8 @@ def validate_all(
         return report
 
     # 2. Execution
-    ok, err, _ = validate_execution(gist_source, timeout=timeout, use_docker=use_docker)
+    ok, err, _ = validate_execution(
+        gist_source, timeout=timeout, use_docker=use_docker)
     report.execution_ok = ok
     report.execution_error = err
 
@@ -103,10 +105,10 @@ def validate_all(
         try:
             ns: dict[str, Any] = {}
             exec(compile(source_code, "<validation>", "exec"), ns)
-            # Find the first function
+            # Find the first real Python function, ignoring typing objects such as Optional.
             fn = None
             for v in ns.values():
-                if callable(v) and not isinstance(v, type):
+                if inspect.isfunction(v):
                     fn = v
                     break
             if fn:

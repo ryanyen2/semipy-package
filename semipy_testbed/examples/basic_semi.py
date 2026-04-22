@@ -6,14 +6,18 @@ that processes email addresses.
 
 Run with: python examples/basic_semi.py
 """
+from semipy_testbed import infer_semiformal, SimpleInferenceResult
 import os
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 # Add parent to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from semipy_testbed import infer_semiformal, SimpleInferenceResult
+load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
+load_dotenv(override=False)
 
 
 def extract_domain_example():
@@ -42,7 +46,8 @@ def extract_domain_example():
     print("\n--- Result ---")
     print(f"Success: {result.success}")
     if result.success:
-        print(f"Function signature: {result.compiled_function.__code__.co_varnames}")
+        print(
+            f"Function signature: {result.compiled_function.__code__.co_varnames}")
         test_emails = [
             "alice@example.com",
             "bob.jones@company.org",
@@ -148,9 +153,9 @@ def parse_json_example():
 
 if __name__ == "__main__":
     # Make sure API key is set
-    if not os.environ.get("OPENROUTER_API_KEY"):
-        print("ERROR: OPENROUTER_API_KEY not set in environment")
-        print("Set it with: export OPENROUTER_API_KEY='your-key-here'")
+    if not os.environ.get("OPENAI_API_KEY"):
+        print("ERROR: OPENAI_API_KEY not set in environment")
+        print("Set it with: export OPENAI_API_KEY='your-key-here'")
         sys.exit(1)
 
     print("=" * 60)

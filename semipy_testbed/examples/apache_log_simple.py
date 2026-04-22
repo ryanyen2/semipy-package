@@ -9,6 +9,7 @@ This example shows how to:
 
 Run with: python examples/apache_log_simple.py
 """
+from semipy_testbed import infer_semiformal
 import os
 import re
 import sys
@@ -16,10 +17,13 @@ from pathlib import Path
 from dataclasses import dataclass
 from typing import List
 
+from dotenv import load_dotenv
+
 # Add parent to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from semipy_testbed import infer_semiformal
+load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
+load_dotenv(override=False)
 
 
 @dataclass
@@ -199,9 +203,9 @@ def generate_patterns_example():
 
 if __name__ == "__main__":
     # Make sure API key is set
-    if not os.environ.get("OPENROUTER_API_KEY"):
-        print("ERROR: OPENROUTER_API_KEY not set in environment")
-        print("Set it with: export OPENROUTER_API_KEY='your-key-here'")
+    if not os.environ.get("OPENAI_API_KEY"):
+        print("ERROR: OPENAI_API_KEY not set in environment")
+        print("Set it with: export OPENAI_API_KEY='your-key-here'")
         sys.exit(1)
 
     print("=" * 70)

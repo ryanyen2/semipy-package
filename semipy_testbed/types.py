@@ -11,7 +11,7 @@ from typing import Any, Callable, Optional
 class SimpleInferenceResult:
     """
     Result of one-shot semiformal inference (parse → generate → validate).
-    
+
     Attributes:
         success: Whether inference and validation succeeded.
         compiled_function: The executable function (when success=True).

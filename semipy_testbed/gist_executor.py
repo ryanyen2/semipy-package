@@ -23,7 +23,7 @@ def _parse_gist_result_stdout(stdout: str) -> tuple[str, Optional[str]]:
         return stdout, None
     idx = stdout.find(marker)
     before = stdout[:idx].rstrip()
-    after = stdout[idx + len(marker) :].strip()
+    after = stdout[idx + len(marker):].strip()
     # Extract repr string from after marker
     if after.startswith("'") or after.startswith('"'):
         # Simple case: quoted string follows marker
@@ -89,7 +89,8 @@ class SimpleGistExecutor:
                     env=exec_env,
                 )
 
-                stdout_before, result_repr = _parse_gist_result_stdout(result.stdout)
+                stdout_before, result_repr = _parse_gist_result_stdout(
+                    result.stdout)
 
                 return GistExecutorResult(
                     success=result.returncode == 0,
@@ -145,14 +146,17 @@ class SimpleGistExecutor:
                     config.docker_image,
                     command=["python", "-c", gist_source],
                     environment=environment,
-                    volumes={cwd or os.getcwd(): {"bind": "/data", "mode": "ro"}},
+                    volumes={cwd or os.getcwd(): {"bind": "/data",
+                                                  "mode": "ro"}},
                     working_dir="/data",
                     timeout=self.timeout,
                     remove=True,
                 )
 
-                result_str = result.decode("utf-8") if isinstance(result, bytes) else result
-                stdout_before, result_repr = _parse_gist_result_stdout(result_str)
+                result_str = result.decode(
+                    "utf-8") if isinstance(result, bytes) else result
+                stdout_before, result_repr = _parse_gist_result_stdout(
+                    result_str)
 
                 return GistExecutorResult(
                     success=True,
@@ -161,9 +165,12 @@ class SimpleGistExecutor:
                 )
 
             except docker.errors.ContainerError as e:
-                stdout_str = e.stdout.decode("utf-8") if isinstance(e.stdout, bytes) else str(e.stdout)
-                stderr_str = e.stderr.decode("utf-8") if isinstance(e.stderr, bytes) else str(e.stderr)
-                stdout_before, result_repr = _parse_gist_result_stdout(stdout_str)
+                stdout_str = e.stdout.decode(
+                    "utf-8") if isinstance(e.stdout, bytes) else str(e.stdout)
+                stderr_str = e.stderr.decode(
+                    "utf-8") if isinstance(e.stderr, bytes) else str(e.stderr)
+                stdout_before, result_repr = _parse_gist_result_stdout(
+                    stdout_str)
                 return GistExecutorResult(
                     success=False,
                     stdout=stdout_before,

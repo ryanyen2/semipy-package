@@ -11,7 +11,7 @@ What is the testbed?
 - Perfect for testing generation ideas and working on infrastructure (docker, kernel gateway, etc.)
 
 Quick Start:
-    export OPENROUTER_API_KEY='sk-...'
+    export OPENAI_API_KEY='sk-...'
     python semipy_testbed/examples/basic_semi.py
 
 Full docs: semipy_testbed/README.md
@@ -23,8 +23,8 @@ if __name__ == "__main__":
     import sys
     from pathlib import Path
     sys.path.insert(0, str(Path(__file__).parent))
-    
-    if not os.environ.get("OPENROUTER_API_KEY"):
+
+    if not os.environ.get("OPENAI_API_KEY"):
         print(__doc__)
         print("\n" + "=" * 60)
         print("SETUP CHECK")
@@ -34,19 +34,19 @@ if __name__ == "__main__":
         print("  - Examples: basic_semi.py, apache_log_simple.py")
         print("  - Data: sample_logs.txt, sample.csv")
         print("  - Docker: Dockerfile.gist")
-        print("\n✗ MISSING: OPENROUTER_API_KEY environment variable")
+        print("\n✗ MISSING: OPENAI_API_KEY environment variable")
         print("\nNext steps:")
-        print("  1. Set API key: export OPENROUTER_API_KEY='sk-...'")
+        print("  1. Set API key: export OPENAI_API_KEY='sk-...'")
         print("  2. Try example: python semipy_testbed/examples/basic_semi.py")
         print("  3. Read docs: cat semipy_testbed/README.md")
         sys.exit(1)
-    
+
     # Run quick demo
     from semipy_testbed import infer_semiformal, configure
-    
+
     configure(verbose=False)
     print("\nRunning quick demo (no verbose output)...")
-    
+
     result = infer_semiformal(
         user_spec="Extract the domain from an email address (part after @)",
         free_variables={"email": "demo@example.com"},
@@ -54,7 +54,7 @@ if __name__ == "__main__":
         expected_type=str,
         free_variable_names=["email"],
     )
-    
+
     if result.success:
         print("✓ SUCCESS: Generated and validated function!")
         print(f"  Function name: {result.compiled_function.__name__}")
