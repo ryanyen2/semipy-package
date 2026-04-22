@@ -344,7 +344,7 @@ function refreshOpacityDecorations(editor, reasoningDim) {
   editor.setDecorations(reasoningDim, reasoning);
 }
 
-// node_modules/.pnpm/diff@5.2.2/node_modules/diff/lib/index.mjs
+// node_modules/diff/lib/index.mjs
 function Diff() {
 }
 Diff.prototype = {

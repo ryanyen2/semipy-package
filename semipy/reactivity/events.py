@@ -1,13 +1,12 @@
 """Event types and payloads for the reactive system."""
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from semipy.reactivity.reactive import SlotRef
+    pass
 
 
 class EventType(Enum):

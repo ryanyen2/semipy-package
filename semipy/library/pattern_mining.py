@@ -4,8 +4,7 @@ from __future__ import annotations
 import ast
 import hashlib
 from collections import defaultdict
-from dataclasses import dataclass, field
-from typing import Any, Optional
+from dataclasses import dataclass
 
 from semipy.library.abstractions import ASTPattern
 

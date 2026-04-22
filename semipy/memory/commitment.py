@@ -53,7 +53,7 @@ class CommitmentRegistry:
 
     def record_commit(self, slot_id: str, commit: Commit, branch_name: str = "main") -> None:
         """Add a commit to the slot's DAG and update the branch head."""
-        from semipy.history.version_control import add_commit_to_slot, Branch
+        from semipy.history.version_control import add_commit_to_slot
         slot = self._portal.slots.get(slot_id)
         if slot is None:
             return

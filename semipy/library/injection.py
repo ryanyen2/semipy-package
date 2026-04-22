@@ -1,7 +1,6 @@
 """Library context injection: select relevant primitives for a spec, build prompt block."""
 from __future__ import annotations
 
-from typing import Any, Optional
 
 from semipy.library.abstractions import AbstractionLibrary, LibraryPrimitive
 from semipy.types import GenerationSpec

@@ -23,9 +23,7 @@ source .venv/bin/activate
 **Run examples**:
 
 ```bash
-# Set OPENROUTER_API_KEY in .env or environment
-uv run python examples/use_csv_kit.py
-uv run python examples/use_weather_kit.py
+# Set OPENAI_API_KEY in .env or environment
 uv run python examples/use_sponsorship_canonicalizer.py
 uv run python examples/use_contract_intelligence.py
 uv run python examples/apache_log_semiformal_stages.py --stage 1
@@ -34,7 +32,7 @@ uv run python examples/apache_log_semiformal_stages.py --stage 1
 To run without activating the venv:
 
 ```bash
-uv run python examples/use_csv_kit.py
+uv run python examples/apache_log_semiformal_stages.py --stage 1
 ```
 
 ## Configuration
@@ -44,7 +42,7 @@ uv run python examples/use_csv_kit.py
 - Optional: **SEMIPY_PIPELINE_TRACE** (`1` / `true` / `yes`) for full prompt, reasoning, and tool-call dumps after each generation (environment only).
 - Optional: **SEMIPY_SESSION_SOURCE** to pin portal identity for notebooks (see `CLAUDE.md`).
 - Optional: **SEMIPY_DOCUMENT_PDF_BACKEND**, **SEMIPY_DOCUMENT_LAYOUT_HEAVY** when passing PDF paths into slots (see `CLAUDE.md`).
-- `semipy.configure(...)` for `openrouter_model`, `validator_model`, `cache_dir`, `max_retries`, `use_e2b`, `gist_timeout`, `verbose`, `session_source`, and other `SemiConfig` fields. Unknown keys are ignored.
+- `semipy.configure(...)` for `openai_api_key`, `openai_model`, `validator_model`, `cache_dir`, `max_retries`, `use_e2b`, `gist_timeout`, `verbose`, `session_source`, and other `SemiConfig` fields. Unknown keys are ignored.
 
 ## Usage
 
@@ -61,7 +59,7 @@ def filter_errors(rows):
 
 In `@semiformal` methods you can use `#>` comment blocks and inline `#>` on `...` placeholders for STATEMENT_BLOCK slots, optional `#<` reasoning lines (see `CLAUDE.md`), and `semi(...)` for EXPRESSION slots.
 
-See `examples/use_csv_kit.py`, `examples/csv_kit/table.py`, `examples/use_weather_kit.py`, `examples/weather_kit/ops.py`, `examples/use_sponsorship_canonicalizer.py`, `examples/use_contract_intelligence.py`, and `examples/apache-log-usecase.md` (with `examples/apache_log_semiformal_stages.py`) for fuller patterns.
+See `examples/use_sponsorship_canonicalizer.py`, `examples/use_contract_intelligence.py`, and `examples/apache-log-usecase.md` (with `examples/apache_log_semiformal_stages.py`) for fuller patterns.
 
 ## Artifacts and cache
 

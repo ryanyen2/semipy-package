@@ -32,7 +32,6 @@ class ProfileDataResult(BaseModel):
     data_profile: dict[str, Any] = Field(default_factory=dict)
     data_flow: list[DataFlowStep] = Field(default_factory=list)
     summary: str = ""
-    insights_placeholder: Optional[str] = None
 
 
 class FileContextResult(BaseModel):

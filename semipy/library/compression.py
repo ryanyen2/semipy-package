@@ -4,8 +4,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import hashlib
-from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 from semipy.agents.config import get_config
 from semipy.agents.llm_utils import classify_with_llm

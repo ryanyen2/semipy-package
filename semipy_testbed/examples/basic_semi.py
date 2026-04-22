@@ -57,7 +57,7 @@ def extract_domain_example():
         print("\nTesting with various inputs:")
         for email_test in test_emails:
             try:
-                domain = result.compiled_function(email_test)
+                domain = result.compiled_function(email_test) # type: ignore
                 print(f"  {email_test:30} -> {domain}")
             except Exception as e:
                 print(f"  {email_test:30} -> ERROR: {e}")
@@ -100,7 +100,7 @@ def classify_string_example():
         print("\nClassifying sample texts:")
         for text in text_samples:
             try:
-                category = result.compiled_function(text)
+                category = result.compiled_function(text) # type: ignore
                 print(f"  '{text:35}' -> {category}")
             except Exception as e:
                 print(f"  '{text:35}' -> ERROR: {e}")

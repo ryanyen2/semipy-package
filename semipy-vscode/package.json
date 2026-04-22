@@ -4,6 +4,17 @@
   "description": "Editor support for semipy semiformal specs (#> / #<), portal history, and dispatch navigation.",
   "version": "0.1.0",
   "publisher": "semipy",
+  "author": "Ryan Yen",
+  "keywords": ["python", "semiformal", "ai", "code-generation", "semipy"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ryanyen2/semipy-package"
+  },
+  "bugs": {
+    "url": "https://github.com/ryanyen2/semipy-package/issues"
+  },
+  "homepage": "https://github.com/ryanyen2/semipy-package",
+  "icon": "images/icon.png",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -151,7 +162,9 @@
     "vscode:prepublish": "npm run compile",
     "compile": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --sourcemap",
     "watch": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --sourcemap --watch",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "package": "vsce package",
+    "publish": "vsce publish"
   },
   "dependencies": {
     "diff": "^5.2.0"
@@ -160,6 +173,7 @@
     "@types/diff": "^5.2.0",
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.0.0",
     "esbuild": "^0.20.0",
     "typescript": "^5.3.0"
   }

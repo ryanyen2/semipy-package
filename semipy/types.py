@@ -7,6 +7,10 @@ from enum import Enum
 from typing import Any, Callable, Optional
 
 
+def _sha16(s: str) -> str:
+    return hashlib.sha256(s.encode()).hexdigest()[:16]
+
+
 def session_id_from_filename(filename: str) -> str:
     """Derive a stable session id from source file path (one session = one source file)."""
     if not filename or filename == "<unknown>":

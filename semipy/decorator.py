@@ -129,9 +129,10 @@ def _wrap_function(fn: Callable[..., Any], description: Optional[str] = None, fi
             for i, spec in enumerate(slot_specs)
         }
         scaffold_fn = _compile_scaffold(scaffold_src, fn.__globals__, proxy_ns)
-    except Exception:
+    except Exception as _scaffold_exc:
+        from semipy.agents.console_io import get_console
+        get_console().print(f"[dim][semipy] warning: scaffolding failed for {func_qualname!r}, falling back to whole-function slot: {_scaffold_exc}[/]")
         # Structural error in scaffolding: fall back to executing the whole function as one slot.
-        # This is the only structural fallback allowed by the plan.
         sig = inspect.signature(fn)
         param_names = list(sig.parameters.keys())
         expected_type = _type_hints_for_lowering(fn).get("return", type(None))

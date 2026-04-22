@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import ast
-import hashlib
 import inspect
 import linecache
 from pathlib import Path
@@ -14,12 +13,9 @@ from semipy.types import (
     SlotCategory,
     SlotSpec,
     SemiCallSite,
+    _sha16,
     compute_spec_equivalence_key,
 )
-
-
-def _sha16(s: str) -> str:
-    return hashlib.sha256(s.encode()).hexdigest()[:16]
 
 
 def _normalize_filename(path: str) -> str:

@@ -7,11 +7,10 @@ runs agent with streaming, validates (AST, type, execution), retries with feedba
 from __future__ import annotations
 
 import asyncio
-import concurrent.futures
 import json
 import os
 import threading
-from typing import Any, Callable, List, Optional, get_args, get_origin
+from typing import Any, List, Optional, get_args, get_origin
 
 
 _async_loop_lock = threading.Lock()
@@ -84,10 +83,8 @@ from semipy.agents.console_io import (
     print_tool_intent_line,
     print_tool_outcome_line,
     print_friendly_exception,
-    source_preview,
     pipeline_generate_status,
     pipeline_resolution_message,
-    validation_error_panel,
 )
 from semipy.agents.generator import get_semi_agent
 from semipy.agents.gist import GistBuilder

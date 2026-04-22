@@ -5,28 +5,48 @@ Decorated functions call semi(f\"...\") or semi.name(...); the first run generat
 and caches a Python function via an agentic pipeline (OpenRouter + pydantic_ai);
 later runs reuse the cached implementation.
 """
+from __future__ import annotations
+
+import importlib
+from typing import Any
+
 from semipy.decorator import semiformal
 from semipy.semi_fn import semi
 from semipy.agents.config import SemiConfig, configure, get_config
 from semipy.types import Decision, SemiCallError, SemiGenerationError, compute_spec_equivalence_key
 from semipy.agents.tools import register_tool, parse_tool_refs
-from semipy.reactivity import DependencyGraph, SlotRef, DataFlow, attach_producer_flow
-from semipy.library import (
-    load_library,
-    run_sleep_phase,
-    AbstractionLibrary,
-    LibraryPrimitive,
-    ASTPattern,
-)
-from semipy.agents.gist import GistBuilder, Gist
-from semipy.agents.executor import GistExecutor, ExecutionResult
-from semipy.models import (
-    SemiAgentDeps,
-    DocumentContextResult,
-    ProfileDataResult,
-    GistRunResult,
-    OutputValidationResult,
-)
+
+_LAZY: dict[str, tuple[str, str]] = {
+    "DependencyGraph": ("semipy.reactivity", "DependencyGraph"),
+    "SlotRef": ("semipy.reactivity", "SlotRef"),
+    "DataFlow": ("semipy.reactivity", "DataFlow"),
+    "attach_producer_flow": ("semipy.reactivity", "attach_producer_flow"),
+    "load_library": ("semipy.library", "load_library"),
+    "run_sleep_phase": ("semipy.library", "run_sleep_phase"),
+    "AbstractionLibrary": ("semipy.library", "AbstractionLibrary"),
+    "LibraryPrimitive": ("semipy.library", "LibraryPrimitive"),
+    "ASTPattern": ("semipy.library", "ASTPattern"),
+    "GistBuilder": ("semipy.agents.gist", "GistBuilder"),
+    "Gist": ("semipy.agents.gist", "Gist"),
+    "GistExecutor": ("semipy.agents.executor", "GistExecutor"),
+    "ExecutionResult": ("semipy.agents.executor", "ExecutionResult"),
+    "SemiAgentDeps": ("semipy.models", "SemiAgentDeps"),
+    "DocumentContextResult": ("semipy.models", "DocumentContextResult"),
+    "ProfileDataResult": ("semipy.models", "ProfileDataResult"),
+    "GistRunResult": ("semipy.models", "GistRunResult"),
+    "OutputValidationResult": ("semipy.models", "OutputValidationResult"),
+}
+
+
+def __getattr__(name: str) -> Any:
+    if name in _LAZY:
+        module_path, attr = _LAZY[name]
+        mod = importlib.import_module(module_path)
+        obj = getattr(mod, attr)
+        globals()[name] = obj
+        return obj
+    raise AttributeError(f"module 'semipy' has no attribute {name!r}")
+
 
 __all__ = [
     "semiformal",

@@ -31,6 +31,9 @@ from semipy.types import SlotSpec
 
 
 def _run_async(coro: Any) -> Any:
+    # Uses a fresh event loop per call rather than the persistent loop in agent.py.
+    # Semantic checks run infrequently and in isolation, so a one-shot asyncio.run
+    # is simpler and correct here — no streaming teardown races to avoid.
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
         return pool.submit(asyncio.run, coro).result()
 

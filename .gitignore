@@ -40,7 +40,7 @@ rich/
 .semiformal*/*
 tests/pdf/*
 eng.traineddata
-
-
+.agents/
+.omc/
 
 node_modules/
