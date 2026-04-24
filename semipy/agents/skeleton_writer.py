@@ -45,7 +45,7 @@ _MAX_VALUE_WORDS = 14
 
 _KEY_LINE_RE = re.compile(r"^\s*#<\s*([A-Za-z_]+)\s*:\s*(.*?)\s*$")
 _PROMOTED_KEY_RE = re.compile(
-    r"^\s*#>\s*(intent|given|by|unless|yields|alt|verified|goal|commits|because)\s*:",
+    r"^\s*#\s*>\s*(intent|given|by|unless|yields|alt|verified|goal|commits|because)\s*:",
     re.IGNORECASE,
 )
 
@@ -91,7 +91,8 @@ def _is_hash_arrow_line(line: str) -> bool:
 
 
 def _is_skeleton_lt_line(line: str) -> bool:
-    return line.lstrip().startswith("#<")
+    stripped = line.lstrip()
+    return stripped.startswith("#<") or stripped.startswith("# <")
 
 
 def _leading_indent(line: str) -> str:
@@ -105,9 +106,10 @@ def _is_pure_comment_arrow(line: str) -> bool:
 
 def _line_has_inline_code_with_arrow(line: str) -> bool:
     """``name = ... #> spec`` style — code before the ``#>`` marker."""
-    if "#>" not in line:
+    m = re.search(r"#\s*>", line)
+    if m is None:
         return False
-    code_part = line.split("#>", 1)[0]
+    code_part = line[: m.start()]
     return bool(code_part.strip())
 
 
@@ -556,16 +558,18 @@ def _detect_promoted_keys_from_file(
     # Inline `#>` on the anchor line.
     if 0 <= anchor_idx < len(file_lines):
         anchor_line = file_lines[anchor_idx]
-        # Inline: split on `#>` and match `key:` on the right side.
+        # Inline: split on `#>`/`# >` and match `key:` on the right side.
         if _line_has_inline_code_with_arrow(anchor_line):
-            right = anchor_line.split("#>", 1)[1].strip()
-            m = re.match(
-                r"^(goal|given|yields|commits|because|alt|verified)\s*:\s*(.*)$",
-                right,
-                re.IGNORECASE,
-            )
-            if m:
-                promoted.setdefault(m.group(1).lower(), m.group(2).strip())
+            arrow = re.search(r"#\s*>", anchor_line)
+            if arrow is not None:
+                right = anchor_line[arrow.end() :].strip()
+                m = re.match(
+                    r"^(goal|given|yields|commits|because|alt|verified)\s*:\s*(.*)$",
+                    right,
+                    re.IGNORECASE,
+                )
+                if m:
+                    promoted.setdefault(m.group(1).lower(), m.group(2).strip())
 
     # Standalone `#>` block — walk backward then forward from the anchor index.
     for i in range(anchor_idx, -1, -1):

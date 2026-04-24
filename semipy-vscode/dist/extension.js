@@ -2256,7 +2256,7 @@ function activate(context) {
   const specSyntaxTypes = createSpecCommentSyntaxTypes();
   const debounceMs = () => cfg().get("debounceMs") ?? 200;
   const signFlip = new SignFlipCoordinator(
-    () => cfg().get("signFlipOnSkeletonEdit") ?? true,
+    () => cfg().get("signFlipOnSkeletonEdit") ?? false,
     () => cfg().get("signFlipSkipApiEdits") ?? true
   );
   const codeLensProvider = new SemipyCodeLensProvider(

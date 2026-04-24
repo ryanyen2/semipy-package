@@ -48,7 +48,7 @@ ruff check semipy/
 
 ```toml
 [project]
-version = "0.2.0"
+version = "0.2.1"
 ```
 
 **2. Build:**
@@ -98,7 +98,7 @@ The extension lives in `semipy-vscode/`. It is built and published with `@vscode
 **1. Bump version** in `semipy-vscode/package.json`:
 
 ```json
-"version": "0.2.0"
+"version": "0.2.1"
 ```
 
 **2. Install deps:**

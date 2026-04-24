@@ -36,7 +36,7 @@ Editor support for [semipy](https://github.com/ryanyen2/semipy-package) — a ru
 | `semipy.enableSpecLineSyntax` | `true` | Paint `#>` / `#<` marker and body colors via editor decorations. |
 | `semipy.debounceMs` | `200` | Debounce interval for reloading portal artifacts after file changes. |
 | `semipy.linkedHighlightFadeMs` | `1500` | Duration before split-view linked highlights fade. |
-| `semipy.signFlipOnSkeletonEdit` | `true` | Auto-promote `#<` to `#>` when you edit the line. |
+| `semipy.signFlipOnSkeletonEdit` | `false` | Auto-promote `#<` to `#>` when you edit the line. |
 | `semipy.tracePhraseDecorations` | `false` | Log phrase/binding decoration details to the Semipy Output channel for debugging. |
 
 ## Commands

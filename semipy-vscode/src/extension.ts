@@ -151,7 +151,7 @@ export function activate(context: ExtensionContext): void {
   const debounceMs = () => cfg().get<number>("debounceMs") ?? 200;
 
   const signFlip = new SignFlipCoordinator(
-    () => cfg().get<boolean>("signFlipOnSkeletonEdit") ?? true,
+    () => cfg().get<boolean>("signFlipOnSkeletonEdit") ?? false,
     () => cfg().get<boolean>("signFlipSkipApiEdits") ?? true,
   );
 
@@ -250,7 +250,7 @@ export function activate(context: ExtensionContext): void {
       ),
     ),
     registerCommitTextProvider(),
-    commands.registerCommand("semipy.noop", () => {}),
+    commands.registerCommand("semipy.noop", () => { }),
     commands.registerCommand("semipy.showOutput", () => {
       getSemipyOutputChannel().show(true);
     }),
@@ -493,4 +493,4 @@ function subscribeOpacityWrapper(
   };
 }
 
-export function deactivate(): void {}
+export function deactivate(): void { }

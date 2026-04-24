@@ -2,10 +2,16 @@
   "name": "semipy-vscode",
   "displayName": "Semipy",
   "description": "Editor support for semipy semiformal specs (#> / #<), portal history, and dispatch navigation.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "semipy",
   "author": "Ryan Yen",
-  "keywords": ["python", "semiformal", "ai", "code-generation", "semipy"],
+  "keywords": [
+    "python",
+    "semiformal",
+    "ai",
+    "code-generation",
+    "semipy"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/ryanyen2/semipy-package"
@@ -94,7 +100,7 @@
         },
         "semipy.signFlipOnSkeletonEdit": {
           "type": "boolean",
-          "default": true,
+          "default": false,
           "description": "When you edit text on a #< line, rewrite the prefix to #> (user-owned spec)."
         },
         "semipy.signFlipSkipApiEdits": {
