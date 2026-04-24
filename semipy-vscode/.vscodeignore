@@ -4,6 +4,9 @@ src/**
 tsconfig.json
 **/*.map
 node_modules/**
-!node_modules/**
 package-lock.json
 .gitignore
+.test-emit/**
+test/**
+.omc/**
+*.vsix

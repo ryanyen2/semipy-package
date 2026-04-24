@@ -100,11 +100,15 @@ from semipy.types import (
     ValidationResult,
 )
 from semipy.agents.profiler import profile_runtime_context, profile_value
+from semipy.agents.program_analysis import build_program_analysis_context
 from semipy.agents.validator import (
     _extract_function_source,
     _should_use_typeadapter_for_expected_type,
     validate,
 )
+
+
+_USER_SOURCE_BUDGET_WITH_ANALYSIS = 4000
 
 
 def _tool_args_dict(part: Any) -> dict[str, Any]:
@@ -447,7 +451,30 @@ class SemiAgent:
                 for k, v in reqs.items():
                     parts.append(f"  - {k}: {v}")
 
+        analysis_block = ""
+        if spec.slot_spec is not None and getattr(spec, "user_source_code", None):
+            try:
+                analysis_block = build_program_analysis_context(
+                    spec.slot_spec,
+                    spec.user_source_code,
+                )
+            except Exception:
+                analysis_block = ""
+        if analysis_block:
+            parts.append("")
+            parts.append(analysis_block)
+            parts.append("")
+            parts.append(
+                "Treat the constraints above as hard guardrails: the generated "
+                "function must produce values that satisfy every listed required "
+                "key/attribute, match declared parameter types at the call site, "
+                "and be compatible with the downstream logic-flow targets."
+            )
+
         if getattr(spec, "user_source_code", None):
+            source_code = spec.user_source_code or ""
+            if analysis_block and len(source_code) > _USER_SOURCE_BUDGET_WITH_ANALYSIS:
+                source_code = source_code[:_USER_SOURCE_BUDGET_WITH_ANALYSIS] + "\n# ... (truncated; formal constraints are summarized above)"
             parts.append("")
             parts.append(
                 "User source file (reference for understanding how the function "
@@ -455,7 +482,7 @@ class SemiAgent:
                 "output structure from key accesses, attribute usage, and downstream "
                 "function signatures):"
             )
-            parts.append(f"```python\n{spec.user_source_code}\n```")
+            parts.append(f"```python\n{source_code}\n```")
 
         if getattr(spec, "upstream_lineage", None):
             lineage = spec.upstream_lineage

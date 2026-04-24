@@ -2,7 +2,7 @@
   "name": "semipy-vscode",
   "displayName": "Semipy",
   "description": "Editor support for semipy semiformal specs (#> / #<), portal history, and dispatch navigation.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "semipy",
   "author": "Ryan Yen",
   "keywords": ["python", "semiformal", "ai", "code-generation", "semipy"],
@@ -57,6 +57,18 @@
       {
         "command": "semipy.showOutput",
         "title": "Semipy: Show output log"
+      },
+      {
+        "command": "semipy.pickSlotVersion",
+        "title": "Semipy: Switch slot version (rewind spec + implementation)"
+      },
+      {
+        "command": "semipy.lockSlotVersion",
+        "title": "Semipy: Lock slot to a specific commit"
+      },
+      {
+        "command": "semipy.unlockSlotVersion",
+        "title": "Semipy: Unlock slot"
       }
     ],
     "views": {
@@ -163,6 +175,7 @@
     "compile": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --sourcemap",
     "watch": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --sourcemap --watch",
     "check": "tsc --noEmit",
+    "test:slot-anchor": "tsc --module commonjs --target ES2022 --esModuleInterop --skipLibCheck --moduleResolution node --outDir .test-emit --rootDir src --strict false --declaration false src/features/slotAnnotations/slotLineResolve.ts src/data/portalLoader.ts src/features/splitEditor/correspondenceMap.ts && node test/slotLineResolve.test.js",
     "package": "vsce package",
     "publish": "vsce publish"
   },

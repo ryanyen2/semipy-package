@@ -65,10 +65,15 @@ def _make_slot_id(filename: str, func_qualname: str, slot_ordinal: int, spec_tex
     """
     Stable slot identity for a region inside one enclosing function.
 
-    Uses **ordinal** (0..n-1 in source order) instead of absolute line numbers so inserting
-    `#<` / blank `#` comments above a region does not mint a new slot id and break REUSE.
+    Keyed on ``(filename, func_qualname, spec_text)`` so inserting, removing, or
+    reordering *other* slots in the same function does not remint this slot's id.
+    The ordinal argument is retained in the signature for backward compatibility
+    but is intentionally not mixed into the key — ordinal drift was the source
+    of phantom 0-commit duplicates when a new ``#>`` block was added above an
+    existing one.
     """
-    key = f"{filename}:{func_qualname}:{slot_ordinal}:{spec_text}"
+    del slot_ordinal
+    key = f"{filename}:{func_qualname}:{spec_text}"
     return _stable_slot_hash(key)
 
 

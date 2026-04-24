@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.0] - 2026-04-24
+
+### Fixed
+
+- CodeLens and inlay hints on files containing multiple `@semiformal` functions: each slot now anchors on its own enclosing `@semiformal`, not the topmost one in the file. The anchor resolver prefers `slot_spec.enclosing_function_span[1] - 1` and, when falling back to a backward scan, breaks on the first (nearest) `@semiformal` instead of overwriting with older matches.
+- Phantom slot entries (0 commits) no longer stack extra CodeLens actions, inlay hints, or tree-view rows on top of live slots.
+
+### Added
+
+- Spec + surface rewind on version switch: `pickSlotVersion`, `lockSlotVersion`, and `unlockSlotVersion` now run the new `semipy rewind-spec` CLI after the branch/lock change, rewriting the slot's `#>` spec block and `#<` surface in the source file so the editor reflects the chosen commit. Legacy commits without a source snapshot keep the prior behavior.
+- `test/slotLineResolve.test.js` + `npm run test:slot-anchor` node harness verifying two `@semiformal` methods in one file resolve to distinct CodeLens anchors.
+
 ## [0.1.0] - 2026-04-22
 
 ### Added

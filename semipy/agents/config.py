@@ -42,6 +42,10 @@ class SemiConfig:
     #: If False, persist sketches before ``execute_slot`` returns (needed for INSTANTIATE in the same process).
     #: If True, run extraction in a background thread (lower latency; same-run INSTANTIATE may not see new sketches).
     sketch_library_learning_async: bool = False
+    #: Minimum model-reported confidence for a sketch binding to be added to the library.
+    #: When the spec/code alignment is unclear, the binding is skipped rather than memorized
+    #: as a pattern. Raise to be stricter; lower to be more permissive.
+    sketch_library_min_confidence: float = 0.6
 
 
 _config: Optional[SemiConfig] = None

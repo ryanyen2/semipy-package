@@ -16,6 +16,10 @@ configure(
 
 @semiformal
 def infer_datetime_formatter(date_str: str) -> str:
+    #< intent: Infer strptime pattern from date string
+    #< by: trying strptime candidates in order; because observed formats are finite and specific
+    #< unless: empty input, returns default month/day/year pattern
+    #< unless: no candidate parses, returns default month/day/year pattern
     input_pattern = ... #> infer the input date regex/strptime pattern from the observed string format in this session.
     output_pattern = "%b %Y"
     return datetime.strptime(str(date_str), input_pattern).strftime(output_pattern)

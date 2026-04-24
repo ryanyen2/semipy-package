@@ -64,6 +64,9 @@ def _commit_to_dict(c: Commit) -> dict[str, Any]:
     cr = getattr(c, "commitment_record", None) or {}
     if not isinstance(cr, dict):
         cr = {}
+    ss = getattr(c, "source_snapshot", None) or {}
+    if not isinstance(ss, dict):
+        ss = {}
     return {
         "commit_id": c.commit_id,
         "parent_ids": list(c.parent_ids),
@@ -80,6 +83,7 @@ def _commit_to_dict(c: Commit) -> dict[str, Any]:
         "runtime_input_fingerprint": getattr(c, "runtime_input_fingerprint", "") or "",
         "binding_id": getattr(c, "binding_id", "") or "",
         "commitment_record": dict(cr),
+        "source_snapshot": dict(ss),
     }
 
 
@@ -87,6 +91,9 @@ def _commit_from_dict(d: dict[str, Any]) -> Commit:
     cr = d.get("commitment_record") or {}
     if not isinstance(cr, dict):
         cr = {}
+    ss = d.get("source_snapshot") or {}
+    if not isinstance(ss, dict):
+        ss = {}
     return Commit(
         commit_id=d["commit_id"],
         parent_ids=tuple(d.get("parent_ids", [])),
@@ -103,6 +110,7 @@ def _commit_from_dict(d: dict[str, Any]) -> Commit:
         runtime_input_fingerprint=str(d.get("runtime_input_fingerprint", "") or ""),
         binding_id=str(d.get("binding_id", "") or ""),
         commitment_record=dict(cr),
+        source_snapshot=dict(ss),
     )
 
 

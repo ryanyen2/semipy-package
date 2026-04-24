@@ -40,14 +40,18 @@ function codeLensLineIndexStale(doc: TextDocument, spec: SlotSpecJson | null | u
     return undefined;
   }
   const firstSpecLine = Math.max(0, start1 - 1);
+  // Walk UP and stop at the FIRST (nearest) @semiformal / def — never
+  // continue overwriting, otherwise slots always collapse onto the topmost
+  // @semiformal in the file.
   let semiformalLine: number | undefined;
   let defLine: number | undefined;
   for (let i = firstSpecLine; i >= 0 && i >= firstSpecLine - 120; i--) {
     const t = doc.lineAt(i).text.trim();
-    if (t.startsWith("@semiformal")) {
+    if (semiformalLine === undefined && t.startsWith("@semiformal")) {
       semiformalLine = i;
+      break;
     }
-    if (t.startsWith("def ") || t.startsWith("async def")) {
+    if (defLine === undefined && (t.startsWith("def ") || t.startsWith("async def"))) {
       defLine = i;
     }
   }
@@ -78,6 +82,11 @@ export class SemipyCodeLensProvider implements CodeLensProvider {
     const fsPath = document.uri.fsPath;
     const out: VsCodeLens[] = [];
     for (const slot of Object.values(portal.slots)) {
+      // Skip phantom slots (no commits) so stale ordinal-drifted entries don't
+      // stack extra "Switch version" / "Lock" buttons on top of live slots.
+      if (!slot.commits || Object.keys(slot.commits).length === 0) {
+        continue;
+      }
       const spec = slot.slot_spec;
       const ui = resolveSlotUiLines(document, slot);
       const lineIdx = ui?.codeLensLine0 ?? codeLensLineIndexStale(document, spec);
@@ -145,6 +154,9 @@ export class SemipyInlayHintsProvider implements InlayHintsProvider {
     const fsPath = document.uri.fsPath;
     const hints: VsInlayHint[] = [];
     for (const slot of Object.values(portal.slots)) {
+      if (!slot.commits || Object.keys(slot.commits).length === 0) {
+        continue;
+      }
       const spec = slot.slot_spec;
       const src = spec?.source_span;
       if (!Array.isArray(src) || src.length < 3) {

@@ -37,11 +37,12 @@ from semipy.reactivity import (
     save_dependency_graph,
     update_slot_commit,
 )
+from semipy._slot_region import expand_zone
 from semipy.resolver import resolve
 from semipy.routing import RoutingPolicy
 
 from semipy.documents import materialize_runtime_document_inputs
-from semipy.library.binding import extract_binding_async
+from semipy.library.binding import evaluate_binding_clarity, extract_binding_async
 from semipy.library.sketch import (
     build_code_sketch_from_commit,
     instantiate_sketch_code,
@@ -143,6 +144,34 @@ def _read_user_source_for_context(filename: str, *, max_chars: int = 12000) -> s
         return source
     except Exception:
         return None
+
+
+def _capture_slot_source_snapshot(slot_spec: SlotSpec) -> dict[str, Any]:
+    """Snapshot the user source region around the slot so the commit can
+    restore the #> spec and #< surface if the user rewinds to it.
+    """
+    source_span = getattr(slot_spec, "source_span", None)
+    if not source_span or len(source_span) < 3:
+        return {}
+    filename, start1, end1 = source_span[0], int(source_span[1]), int(source_span[2])
+    if not filename or start1 < 1 or end1 < start1:
+        return {}
+    try:
+        path = Path(filename)
+        if not path.exists() or not path.is_file():
+            return {}
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception:
+        return {}
+    if not lines:
+        return {}
+    region_start, region_end = expand_zone(lines, start1 - 1, end1 - 1)
+    return {
+        "slot_region_text": "\n".join(lines[region_start : region_end + 1]),
+        "slot_region_start_line": region_start + 1,
+        "slot_region_end_line": region_end + 1,
+        "source_file": filename,
+    }
 
 
 _semantic_reuse_counters: dict[str, int] = {}
@@ -463,6 +492,20 @@ def _run_sketch_binding_extraction(
                     file=sys.stderr,
                 )
             return
+        cfg = get_config()
+        min_conf = float(getattr(cfg, "sketch_library_min_confidence", 0.6))
+        is_clear, reject_reason = evaluate_binding_clarity(
+            binding, min_confidence=min_conf
+        )
+        if not is_clear:
+            if cfg.verbose:
+                reason = reject_reason or (binding.clarity_reason or "unclear alignment")
+                print(
+                    f"[semipy] Sketch library: skipping pattern "
+                    f"(spec<->code relationship unclear: {reason}).",
+                    file=sys.stderr,
+                )
+            return
         lib = load_sketch_library(cache_dir)
         sketch = build_code_sketch_from_commit(
             binding,
@@ -708,6 +751,7 @@ def execute_slot(
                     usage_id=slot_spec.slot_id,
                     runtime_input_fingerprint=compute_runtime_input_fingerprint(runtime_values),
                     binding_id=sk.binding_id or "",
+                    source_snapshot=_capture_slot_source_snapshot(slot_spec),
                 )
                 add_commit_to_slot(slot, commit, branch_name, usage_id=slot_spec.slot_id)
                 slot.spec_hash = slot_spec.spec_hash
@@ -984,6 +1028,7 @@ def execute_slot(
         decision_str,
         usage_id=slot_spec.slot_id,
         runtime_input_fingerprint=compute_runtime_input_fingerprint(runtime_values),
+        source_snapshot=_capture_slot_source_snapshot(slot_spec),
     )
     add_commit_to_slot(slot, commit, branch_name, usage_id=slot_spec.slot_id)
 
@@ -1048,6 +1093,19 @@ def execute_slot(
 
         # Run synchronously so script termination cannot drop the surface write.
         surface_overrides = _surface_skeleton(slot_spec, entry) or {}
+        # Re-snapshot the slot region NOW so the commit captures the freshly
+        # written #< surface lines in addition to the user's #> spec.
+        try:
+            post_surface_snapshot = _capture_slot_source_snapshot(slot_spec)
+        except Exception:
+            post_surface_snapshot = {}
+        if post_surface_snapshot:
+            slot.commits[commit.commit_id] = replace(
+                slot.commits[commit.commit_id],
+                source_snapshot=post_surface_snapshot,
+            )
+            commit = slot.commits[commit.commit_id]
+            save_portal(cache_dir, portal)
         # Merge promoted-from-spec keys with surface-reported overrides; promoted
         # `#>` lines take precedence since those are hard contracts.
         combined_overrides: dict[str, str] = {}

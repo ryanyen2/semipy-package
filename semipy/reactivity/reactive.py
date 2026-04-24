@@ -174,9 +174,31 @@ def get_downstream_requirements(graph: DependencyGraph, slot_ref: SlotRef) -> di
     return dict(st.downstream_requirements)
 
 
-def update_slot_commit(graph: DependencyGraph, slot_ref: SlotRef, commit_id: str) -> None:
+def update_slot_commit(
+    graph: DependencyGraph,
+    slot_ref: SlotRef,
+    commit_id: str,
+    *,
+    stale_reason_template: str = "upstream commit changed",
+) -> str:
+    """Record ``commit_id`` for ``slot_ref``; when it differs from the prior value,
+    mark all transitive downstream slots stale and return the previous commit id.
+
+    Returns the prior ``current_commit_id`` value (empty string when unseen).
+    The propagation happens here so every call site that creates or resolves a
+    commit automatically triggers reactive invalidation without duplicating
+    logic across GENERATE/ADAPT/INSTANTIATE/REUSE paths.
+    """
     st = _ensure_status(graph, slot_ref)
+    prior = st.current_commit_id or ""
     st.current_commit_id = commit_id
+    if prior and commit_id and prior != commit_id:
+        mark_downstream_stale(
+            graph,
+            slot_ref,
+            f"{stale_reason_template} ({prior[:8]}->{commit_id[:8]})",
+        )
+    return prior
 
 
 DEPENDENCY_GRAPH_FILENAME = "dependency_graph.json"

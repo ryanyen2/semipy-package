@@ -1614,7 +1614,7 @@ var SlotHistoryProvider = class {
       return [{ kind: "portal", portal }];
     }
     if (element.kind === "portal") {
-      return Object.values(element.portal.slots).map((slot) => ({
+      return Object.values(element.portal.slots).filter((slot) => slot.commits && Object.keys(slot.commits).length > 0).map((slot) => ({
         kind: "slot",
         portal: element.portal,
         slot
@@ -1903,18 +1903,30 @@ function resolveSlotUiLines(document, slot) {
     }
   }
   const start0 = startLine1 - 1;
-  let semiformalLine;
-  let defLine;
-  for (let i = start0; i >= 0 && i >= start0 - 200; i--) {
-    const t = document.lineAt(i).text.trim();
-    if (t.startsWith("@semiformal")) {
-      semiformalLine = i;
-    }
-    if (t.startsWith("def ") || t.startsWith("async def")) {
-      defLine = i;
+  const enc = spec.enclosing_function_span;
+  let preferredAnchor;
+  if (Array.isArray(enc) && enc.length >= 2) {
+    const encPath = enc[0];
+    const encStart1 = Number(enc[1]);
+    if (typeof encPath === "string" && pathsEqualRobust(encPath, fsPath) && Number.isFinite(encStart1) && encStart1 >= 1 && encStart1 - 1 < document.lineCount) {
+      preferredAnchor = encStart1 - 1;
     }
   }
-  const codeLensLine0 = semiformalLine ?? defLine ?? Math.max(0, start1 - 1);
+  let semiformalLine;
+  let defLine;
+  if (preferredAnchor === void 0) {
+    for (let i = start0; i >= 0 && i >= start0 - 200; i--) {
+      const t = document.lineAt(i).text.trim();
+      if (semiformalLine === void 0 && t.startsWith("@semiformal")) {
+        semiformalLine = i;
+        break;
+      }
+      if (defLine === void 0 && (t.startsWith("def ") || t.startsWith("async def"))) {
+        defLine = i;
+      }
+    }
+  }
+  const codeLensLine0 = preferredAnchor ?? semiformalLine ?? defLine ?? Math.max(0, start1 - 1);
   return { codeLensLine0, inlayLine0: inlayLine1 - 1 };
 }
 
@@ -1944,10 +1956,11 @@ function codeLensLineIndexStale(doc, spec) {
   let defLine;
   for (let i = firstSpecLine; i >= 0 && i >= firstSpecLine - 120; i--) {
     const t = doc.lineAt(i).text.trim();
-    if (t.startsWith("@semiformal")) {
+    if (semiformalLine === void 0 && t.startsWith("@semiformal")) {
       semiformalLine = i;
+      break;
     }
-    if (t.startsWith("def ") || t.startsWith("async def")) {
+    if (defLine === void 0 && (t.startsWith("def ") || t.startsWith("async def"))) {
       defLine = i;
     }
   }
@@ -1974,6 +1987,9 @@ var SemipyCodeLensProvider = class {
     const fsPath = document.uri.fsPath;
     const out = [];
     for (const slot of Object.values(portal.slots)) {
+      if (!slot.commits || Object.keys(slot.commits).length === 0) {
+        continue;
+      }
       const spec = slot.slot_spec;
       const ui = resolveSlotUiLines(document, slot);
       const lineIdx = ui?.codeLensLine0 ?? codeLensLineIndexStale(document, spec);
@@ -2028,6 +2044,9 @@ var SemipyInlayHintsProvider = class {
     const fsPath = document.uri.fsPath;
     const hints = [];
     for (const slot of Object.values(portal.slots)) {
+      if (!slot.commits || Object.keys(slot.commits).length === 0) {
+        continue;
+      }
       const spec = slot.slot_spec;
       const src = spec?.source_span;
       if (!Array.isArray(src) || src.length < 3) {
@@ -2165,6 +2184,31 @@ function semipyCliFailureMessage(stderr, stdout, fallback) {
     detail += " Use Python: Select Interpreter for an environment that includes semipy, or set semipy.pythonPath.";
   }
   return detail;
+}
+function pickActiveHead(slot) {
+  const defaultHead = slot.branches?.[slot.default_branch]?.head;
+  if (defaultHead) {
+    return defaultHead;
+  }
+  const heads = Object.values(slot.branches || {}).map((b) => slot.commits[b.head]).filter((c) => !!c);
+  heads.sort((a, b) => b.timestamp - a.timestamp);
+  return heads[0]?.commit_id;
+}
+async function rewindSpecIfSnapshot(editor, slot, slotId, commitId, portalRel, workspaceRoot) {
+  if (!editor) {
+    return;
+  }
+  const snap = slot?.commits?.[commitId]?.source_snapshot;
+  if (!snap?.slot_region_text) {
+    return;
+  }
+  if (editor.document.isDirty) {
+    await editor.document.save();
+  }
+  await runSemipyCli(
+    ["rewind-spec", "--portal", portalRel, "--slot-id", slotId, "--commit-id", commitId],
+    workspaceRoot
+  );
 }
 function sessionSourceOpts() {
   let raw = import_vscode16.workspace.getConfiguration("semipy").get("sessionSource")?.trim();
@@ -2366,7 +2410,14 @@ function activate(context) {
         );
         return;
       }
-      void import_vscode16.window.showInformationMessage("Semipy: rollback complete. Re-run code to rebuild dispatch if needed.");
+      const chosen = slot.commits[picked.cid];
+      if (chosen?.source_snapshot?.slot_region_text) {
+        await rewindSpecIfSnapshot(ed, slot, slotId, picked.cid, rel, root);
+      } else {
+        void import_vscode16.window.showInformationMessage(
+          "Semipy: rollback complete (legacy commit has no spec snapshot; source file unchanged)."
+        );
+      }
       refreshAllDecorations(ed);
     }),
     import_vscode16.commands.registerCommand("semipy.lockSlotVersion", async (slotId, commitId) => {
@@ -2389,6 +2440,8 @@ function activate(context) {
         void import_vscode16.window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "lock failed")}`);
         return;
       }
+      const lockedSlot = portalState.portal?.slots[slotId];
+      await rewindSpecIfSnapshot(ed, lockedSlot, slotId, commitId, rel, root);
       void import_vscode16.window.showInformationMessage((r.stderr || r.stdout || "Lock saved.").trim().slice(0, 400));
       refreshAllDecorations(import_vscode16.window.activeTextEditor);
     }),
@@ -2408,6 +2461,12 @@ function activate(context) {
       if (r.code !== 0 && r.code !== null) {
         void import_vscode16.window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "unlock failed")}`);
         return;
+      }
+      refreshPortalForUri(ed?.document.uri.fsPath ?? "", portalState);
+      const unlockedSlot = portalState.portal?.slots[slotId];
+      const activeHead = unlockedSlot ? pickActiveHead(unlockedSlot) : void 0;
+      if (activeHead) {
+        await rewindSpecIfSnapshot(ed, unlockedSlot, slotId, activeHead, rel, root);
       }
       void import_vscode16.window.showInformationMessage((r.stderr || r.stdout || "Unlocked.").trim().slice(0, 400));
       refreshAllDecorations(import_vscode16.window.activeTextEditor);

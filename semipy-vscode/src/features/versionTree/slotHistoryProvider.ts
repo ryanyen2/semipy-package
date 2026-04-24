@@ -75,11 +75,13 @@ export class SlotHistoryProvider implements TreeDataProvider<SlotHistoryTreeItem
       return [{ kind: "portal", portal }];
     }
     if (element.kind === "portal") {
-      return Object.values(element.portal.slots).map((slot) => ({
-        kind: "slot" as const,
-        portal: element.portal,
-        slot,
-      }));
+      return Object.values(element.portal.slots)
+        .filter((slot) => slot.commits && Object.keys(slot.commits).length > 0)
+        .map((slot) => ({
+          kind: "slot" as const,
+          portal: element.portal,
+          slot,
+        }));
     }
     if (element.kind === "slot") {
       return Object.values(element.slot.branches).map((branch) => ({

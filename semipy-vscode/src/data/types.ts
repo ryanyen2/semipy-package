@@ -1,3 +1,10 @@
+export interface CommitSourceSnapshotJson {
+  slot_region_text?: string;
+  slot_region_start_line?: number;
+  slot_region_end_line?: number;
+  source_file?: string;
+}
+
 export interface CommitJson {
   commit_id: string;
   parent_ids: string[];
@@ -6,6 +13,7 @@ export interface CommitJson {
   message: string;
   decision: string;
   binding_id?: string;
+  source_snapshot?: CommitSourceSnapshotJson;
 }
 
 export interface BranchJson {

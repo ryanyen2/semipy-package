@@ -10,7 +10,7 @@ import {
   workspace,
 } from "vscode";
 import { findPortalJsonPathForEditor, loadPortalJson } from "./data/portalLoader";
-import type { PortalJson } from "./data/types";
+import type { PortalJson, SlotJson } from "./data/types";
 import {
   createOpacityDecorationTypes,
   refreshOpacityDecorations,
@@ -58,6 +58,46 @@ function semipyCliFailureMessage(stderr: string, stdout: string, fallback: strin
       " Use Python: Select Interpreter for an environment that includes semipy, or set semipy.pythonPath.";
   }
   return detail;
+}
+
+/** Return the slot's currently-active branch head (default_branch first,
+ * else the most-recent branch head by timestamp). */
+function pickActiveHead(slot: SlotJson): string | undefined {
+  const defaultHead = slot.branches?.[slot.default_branch]?.head;
+  if (defaultHead) {
+    return defaultHead;
+  }
+  const heads = Object.values(slot.branches || {})
+    .map((b) => slot.commits[b.head])
+    .filter((c): c is NonNullable<typeof c> => !!c);
+  heads.sort((a, b) => b.timestamp - a.timestamp);
+  return heads[0]?.commit_id;
+}
+
+/** Run `semipy rewind-spec` iff the commit carries a source_snapshot. Saves
+ * the editor first so VS Code will auto-reload the external file edit. */
+async function rewindSpecIfSnapshot(
+  editor: TextEditor | undefined,
+  slot: SlotJson | undefined,
+  slotId: string,
+  commitId: string,
+  portalRel: string,
+  workspaceRoot: string,
+): Promise<void> {
+  if (!editor) {
+    return;
+  }
+  const snap = slot?.commits?.[commitId]?.source_snapshot;
+  if (!snap?.slot_region_text) {
+    return;
+  }
+  if (editor.document.isDirty) {
+    await editor.document.save();
+  }
+  await runSemipyCli(
+    ["rewind-spec", "--portal", portalRel, "--slot-id", slotId, "--commit-id", commitId],
+    workspaceRoot,
+  );
 }
 
 function sessionSourceOpts(): { sessionSourceFromSettings?: string } {
@@ -272,7 +312,14 @@ export function activate(context: ExtensionContext): void {
         );
         return;
       }
-      void window.showInformationMessage("Semipy: rollback complete. Re-run code to rebuild dispatch if needed.");
+      const chosen = slot.commits[picked.cid];
+      if (chosen?.source_snapshot?.slot_region_text) {
+        await rewindSpecIfSnapshot(ed, slot, slotId, picked.cid, rel, root);
+      } else {
+        void window.showInformationMessage(
+          "Semipy: rollback complete (legacy commit has no spec snapshot; source file unchanged).",
+        );
+      }
       refreshAllDecorations(ed);
     }),
     commands.registerCommand("semipy.lockSlotVersion", async (slotId: string, commitId: string) => {
@@ -295,6 +342,8 @@ export function activate(context: ExtensionContext): void {
         void window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "lock failed")}`);
         return;
       }
+      const lockedSlot = portalState.portal?.slots[slotId];
+      await rewindSpecIfSnapshot(ed, lockedSlot, slotId, commitId, rel, root);
       void window.showInformationMessage((r.stderr || r.stdout || "Lock saved.").trim().slice(0, 400));
       refreshAllDecorations(window.activeTextEditor);
     }),
@@ -314,6 +363,15 @@ export function activate(context: ExtensionContext): void {
       if (r.code !== 0 && r.code !== null) {
         void window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "unlock failed")}`);
         return;
+      }
+      // After unlock, the active head changes; rewind the source to whatever
+      // is now active (most-recent branch head with a snapshot) so the editor
+      // matches the dispatch module.
+      refreshPortalForUri(ed?.document.uri.fsPath ?? "", portalState);
+      const unlockedSlot = portalState.portal?.slots[slotId];
+      const activeHead = unlockedSlot ? pickActiveHead(unlockedSlot) : undefined;
+      if (activeHead) {
+        await rewindSpecIfSnapshot(ed, unlockedSlot, slotId, activeHead, rel, root);
       }
       void window.showInformationMessage((r.stderr || r.stdout || "Unlocked.").trim().slice(0, 400));
       refreshAllDecorations(window.activeTextEditor);

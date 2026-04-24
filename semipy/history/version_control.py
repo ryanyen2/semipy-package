@@ -70,6 +70,13 @@ class Commit:
     binding_id: str = ""
     # Serialized CommitmentRecord (dict) from the generation run that produced this commit.
     commitment_record: dict = field(default_factory=dict)
+    # Snapshot of the user source region for this slot at commit creation time.
+    # Keys include: "slot_region_text" (the literal text of the slot's #> block +
+    # the immediate #< surface zones above/below), "slot_region_start_line" (1-based,
+    # first line of the snapshot in the source file at snapshot time),
+    # "slot_region_end_line" (1-based, last line of the snapshot). Empty for legacy
+    # commits that predate the snapshot field.
+    source_snapshot: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -117,6 +124,7 @@ def create_commit(
     *,
     runtime_input_fingerprint: str = "",
     binding_id: str = "",
+    source_snapshot: dict | None = None,
 ) -> Commit:
     """Build a new Commit and compute its id, source_hash, and operation_signature."""
     source_hash = compute_source_hash(generated_source)
@@ -138,6 +146,7 @@ def create_commit(
         usage_id=usage_id,
         runtime_input_fingerprint=runtime_input_fingerprint or "",
         binding_id=(binding_id or ""),
+        source_snapshot=dict(source_snapshot or {}),
     )
 
 

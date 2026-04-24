@@ -56,6 +56,8 @@ class SemanticBinding:
     hole_names: tuple[str, ...]
     hole_values: dict[str, str]
     hole_code_referents: dict[str, str]
+    confidence: float = 0.0
+    clarity_reason: str = ""
 
 
 def _extract_json_object(text: str) -> str | None:
@@ -166,7 +168,13 @@ def _hole_code_referents(phrases: tuple[SpecPhrase, ...]) -> dict[str, str]:
     return cr
 
 
-def build_semantic_binding(spec_text: str, phrases: tuple[SpecPhrase, ...]) -> SemanticBinding:
+def build_semantic_binding(
+    spec_text: str,
+    phrases: tuple[SpecPhrase, ...],
+    *,
+    confidence: float = 0.0,
+    clarity_reason: str = "",
+) -> SemanticBinding:
     hv = _hole_values_from_phrases(phrases)
     names = tuple(sorted(hv.keys()))
     sig = compute_structural_signature(phrases)
@@ -179,7 +187,46 @@ def build_semantic_binding(spec_text: str, phrases: tuple[SpecPhrase, ...]) -> S
         hole_names=names,
         hole_values=hv,
         hole_code_referents=_hole_code_referents(phrases),
+        confidence=float(confidence),
+        clarity_reason=str(clarity_reason or ""),
     )
+
+
+def evaluate_binding_clarity(
+    binding: SemanticBinding,
+    *,
+    min_confidence: float = 0.6,
+) -> tuple[bool, str]:
+    """Decide whether a binding is clear enough for pattern-library inclusion.
+
+    A sketch is only reusable when the spec-to-code alignment is unambiguous
+    AND there is at least one parametric hole to swap. Structure-only bindings
+    (all phrases fixed) would merely memorize a one-off implementation and add
+    noise to the library without enabling INSTANTIATE on future specs.
+
+    Returns (is_clear, reason_when_rejected).
+    """
+    if not binding.phrases:
+        return False, "no phrases extracted"
+    if not binding.hole_names:
+        return False, "no parametric holes; pattern would be a fixed copy"
+    structural_phrases = [p for p in binding.phrases if p.hole_name is None]
+    if not structural_phrases:
+        return False, "no structural anchors; holes would match any spec"
+    missing_referents = [
+        p for p in binding.phrases
+        if p.hole_name is not None and not p.code_referent.strip()
+    ]
+    if missing_referents:
+        return False, (
+            f"hole(s) without code_referent: "
+            f"{', '.join(p.hole_name or '?' for p in missing_referents)}"
+        )
+    if binding.confidence and binding.confidence < min_confidence:
+        return False, (
+            f"confidence {binding.confidence:.2f} below {min_confidence:.2f}"
+        )
+    return True, ""
 
 
 def _extraction_prompt(spec_text: str, generated_source: str) -> str:
@@ -197,8 +244,16 @@ Identify which spec phrases are structural (define the operation pattern) versus
 
 For each operator-role hole, list safe_swap_set: other NL wordings that would map to the same Python operator or pattern (same control flow). If a different wording would require different code structure, do NOT include it.
 
+Only mark a substring as parametric (``is_hole: true``) when another reasonable spec with the
+same sentence shape but a different literal/identifier at that position would map to the SAME
+control flow and only differ by substitution. If the relationship between the NL spec and the
+code is unclear, produces no directly swappable fragments, or the code is essentially one-off
+open-ended logic, return an empty ``phrases`` list and set a low ``confidence``.
+
 Respond with JSON only (no markdown), shape:
 {{
+  "confidence": 0.85,
+  "clarity_reason": "clear parametric alignment: column and comparator are the only varying tokens",
   "phrases": [
     {{"text": "...", "role": "operation|param|operator|connective", "code_referent": "...", "is_hole": false, "hole_name": null, "safe_swap_set": null}},
     {{"text": "...", "role": "param", "code_referent": "df[\\\"col\\\"]", "is_hole": true, "hole_name": "col", "safe_swap_set": null}},
@@ -207,6 +262,8 @@ Respond with JSON only (no markdown), shape:
 }}
 
 Rules:
+- ``confidence`` is a float in [0, 1] reflecting how confidently the spec-to-code alignment is parametric and reusable.
+- When confidence is low, set ``phrases`` to an empty list and describe in ``clarity_reason`` why the relationship is not cleanly reusable (e.g. "open-ended canonicalization", "implementation hardcodes semantics beyond spec wording", "no token swap yields a different code path").
 - Every substring of the spec that maps to a distinct code fragment should appear as one phrase.
 - hole_name must be unique among holes; use short snake_case names.
 - code_referent must be the exact Python fragment in the code when possible.
@@ -219,7 +276,14 @@ Rules:
 
 
 async def extract_binding_async(spec_text: str, generated_source: str) -> SemanticBinding | None:
-    """LLM extraction of phrase roles; returns None on failure."""
+    """LLM extraction of phrase roles; returns None on failure.
+
+    When the model reports low confidence or no phrases, we still return a
+    :class:`SemanticBinding` whose ``confidence`` / ``clarity_reason`` carry the
+    rejection signal so callers can decide whether to skip sketch-library
+    merge. This keeps the extraction path observable (verbose logging) rather
+    than silently dropping results.
+    """
     prompt = _extraction_prompt(spec_text, generated_source)
     data = await classify_with_llm(
         prompt,
@@ -230,11 +294,23 @@ async def extract_binding_async(spec_text: str, generated_source: str) -> Semant
     )
     if not isinstance(data, dict):
         return None
+    try:
+        confidence_raw = data.get("confidence", 0.0)
+        confidence = float(confidence_raw) if confidence_raw is not None else 0.0
+    except (TypeError, ValueError):
+        confidence = 0.0
+    clarity_reason = str(data.get("clarity_reason", "") or "")
+
     phrases = _phrases_from_payload(data)
     if phrases is None:
-        return None
+        phrases = tuple()
     try:
-        return build_semantic_binding(spec_text, phrases)
+        return build_semantic_binding(
+            spec_text,
+            phrases,
+            confidence=confidence,
+            clarity_reason=clarity_reason,
+        )
     except Exception:
         return None
 
