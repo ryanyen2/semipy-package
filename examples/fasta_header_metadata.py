@@ -305,28 +305,18 @@ class FluPipeCompiler:
         self.bootstrap_headers = bootstrap_headers
 
     def role_map(self) -> dict[str, int]:
-        #< [Task] Infer token-role index mapping from structured header tokens.
-        #< [Given] tokens are pipe-delimited strings with observed length 14
-        #< [Given] sample order shows strain, subtype, accession, dates, geography,
-        #< [Then] used lightweight string heuristics instead of regex imports
-        #< [Then] fell back to splitting header when tokens is
-        #< [When] statement slot should return {'role_to_index': ...}
-        #< [Verify] ran build_and_run_gist successfully
-        #< [But] initial geography heuristic misclassified 'cell' as city and
         for header in self.bootstrap_headers:
             tokens = header.lstrip(">").split("|")
+            #< alt: fixed-order mapping | sample-driven inference | regex-only roles
+            #< given: header may be pipe-delimited string
+            #< given: tokens may be list, tuple, or absent
             role_to_index = ... #> map the sequence of tokens based on their category
+            #< commits: normalizes tokens; strips '>'; first claim wins
+            #< yields: {'role_to_index': inferred role-index pairs}
         
         return role_to_index
 
     def date_policy(self) -> str:
-        #< [Task] Choose date interpretation policy for this header family.
-        #< [Given] Only slot input is self of type FluPipeCompiler.
-        #< [Given] Caller expects one output field named policy.
-        #< [Then] Inspected bootstrap_headers dynamically instead of hardcoding one family
-        #< [Then] Preferred partial immediately when YYYY-MM-XX or YYYY-XX-XX is
-        #< [When] self may or may not have bootstrap_headers.
-        #< [Verify] Ran build_and_run_gist on the exact function source.
         #> One line: preferred date interpretation for this family (ISO vs partial vs flag ambiguous).
         #> Invariant tag: inv=2025-03-21-a.
         return policy  # type: ignore[name-defined]
@@ -340,27 +330,11 @@ class CompactPipeCompiler:
         self.bootstrap_headers = bootstrap_headers
 
     def role_map(self) -> dict[str, int]:
-        #< [Task] Return compact pipe role-to-index mapping
-        #< [Given] Only positional input is self
-        #< [Given] Caller expects statement output key 'role_to_index'
-        #< [Then] Wrapped result in {'role_to_index': ...} to satisfy statement
-        #< [Then] Used fixed indices from the explicit four-token specification
-        #< [When] Compact pipe token order is strain_name, accession, collection_date,
-        #< [Verify] Ran build_and_run_gist with dummy CompactPipe-like object
-        #< [But] Returning the raw role map directly, which failed
         #> Four-token pipe: map strain_name, accession, collection_date, location indices.
         #> Invariant tag: inv=2025-03-21-a.
         return role_to_index  # type: ignore[name-defined]
 
     def date_policy(self) -> str:
-        #< [Task] Choose compact-pipe date interpretation policy
-        #< [Given] Input is only self, observed as CompactPipeCompiler instance
-        #< [Given] Statement block must return dict with exactly key
-        #< [Then] Returned {'policy': ...} instead of raw string due
-        #< [Then] Defaulted policy to 'partial' for compact pipe
-        #< [When] Compact pipe family should prefer partial-date handling by
-        #< [Verify] Called profile_slot() to inspect runtime context
-        #< [But] Returning raw 'partial' string directly, which would violate
         #> Date handling for compact pipe (partial dates like 2013-12-XX).
         #> Invariant tag: inv=2025-03-21-a.
         return policy  # type: ignore[name-defined]
@@ -521,10 +495,13 @@ def main() -> None:
     host_labels = sorted(
         {str(x) for x in df_all["host"].tolist() if str(x).strip() and str(x) not in ("?",)}
     )
+    #< alt: exact-lowercase-match | synonym-table | unknown pass-through
     host_map = semi(
         f"Canonicalize host labels to short tokens. Labels: {host_labels[:16]!r}.",
         expected_type=dict[str, str],
     )
+    #< commits: cell unchanged; undetermined->undet; unpassaged->unpass
+    #< yields: fixed mapping for cell, undetermined, unpassaged labels
     print("\nStandalone semi() host map (parsed host column):")
     print(host_map)
 

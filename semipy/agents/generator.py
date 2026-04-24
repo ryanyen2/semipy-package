@@ -253,8 +253,9 @@ SYSTEM_PROMPT = """You generate a Python function that implements a user's seman
 3. Return a CommitmentRecord with:
    - generated_source: the exact function source that passed build_and_run_gist
    - goal: ≤ 12 words saying what the function produces (used for trace)
-   - annotations: list of SkeletonNote objects placed inline in the user's source file
    - rejected_alternatives: brief notes on alternatives tried (optional)
+   - annotations: leave this as an empty list. It is a deprecated field retained
+     for backward compatibility; the steering surface is synthesised separately.
 
 ## Function requirements
 
@@ -266,91 +267,6 @@ SYSTEM_PROMPT = """You generate a Python function that implements a user's seman
 - list[SomeClass] return types: each element must be a class instance, not a plain dict.
 - Hard constraints (formal_constraints lines) must appear verbatim in the implementation.
 - ADAPT: call read_upstream() first. Preserve working logic; change only what failed.
-
-## Annotations (SkeletonNote)
-
-After the function passes, write concise inline annotations that will appear as `#<` lines
-in the user's source file — placed NEAR the code they describe, not all at the top.
-
-Each annotation:
-  tag:    one of Task, Given, Then, When, And, But, Verify
-  text:   ≤ 12 words; concrete and specific (mention actual values, not generalities)
-  anchor: substring of a code line to insert this note BEFORE.
-          "" (empty) → very start of function body
-          "RETURN"   → just before the first return statement
-          Any other string → before the first body line containing that substring
-
-Rules:
-- [Task] always first, anchor="". One sentence naming what the function produces.
-- [Verify] always last, anchor="RETURN". Name the specific sample and result seen.
-- Use [Given], [Then], [When], [And], [But] as needed to describe program logic
-  near the code they reference — not everything needs a note.
-- Prefer 2–5 total annotations; never more than 6. Omit tags that add nothing.
-- Annotations describe the LOGIC OF THE CODE in the user's source (which has `...`
-  placeholders), not the internals of generated_source.
-
-## Few-shot examples
-
-### Example A — simple expression slot (inline assignment `... #>`)
-
-User source has:
-    input_pattern = ... #> infer the input date regex/strptime pattern from the observed string format
-
-CommitmentRecord.annotations:
-  [{"tag": "Task", "text": "infer strptime format string from observed date string", "anchor": ""},
-   {"tag": "Verify", "text": "gist: '03/14/2025' → '%m/%d/%Y', no false match", "anchor": "RETURN"}]
-
-Result in user file:
-    #< [Task] infer strptime format string from observed date string
-    input_pattern = ... #> infer the input date regex/strptime pattern from the observed string format
-    output_pattern = "%b %Y"
-    #< [Verify] gist: '03/14/2025' → '%m/%d/%Y', no false match
-    return datetime.strptime(str(date_str), input_pattern).strftime(output_pattern)
-
-### Example B — body with formal guard code
-
-User source has:
-    text = "" if body is None else str(body).strip()
-    lower = text.lower()
-    family = ... #> Classify this Apache log body into a snake_case event family name.
-    return family
-
-CommitmentRecord.annotations:
-  [{"tag": "Task",  "text": "classify Apache log body to snake_case event family", "anchor": ""},
-   {"tag": "Given", "text": "None body coerced to empty string before matching", "anchor": "text = "},
-   {"tag": "Verify","text": "gist: 'jk2_init() Found child' → 'jk_child_scoreboard'", "anchor": "RETURN"}]
-
-Result in user file:
-    #< [Task] classify Apache log body to snake_case event family
-    #< [Given] None body coerced to empty string before matching
-    text = "" if body is None else str(body).strip()
-    lower = text.lower()
-    family = ... #> Classify this Apache log body into a snake_case event family name.
-    #< [Verify] gist: 'jk2_init() Found child' → 'jk_child_scoreboard'
-    return family
-
-### Example C — STATEMENT_BLOCK with multiple outputs
-
-User source has:
-    assert 1.0 <= risk_score <= 5.0
-    return RiskRow(clause_id=clause.clause_id, category=category,
-                   risk_score=risk_score, summary=summary, jurisdiction_note=jurisdiction_note)
-
-CommitmentRecord.annotations:
-  [{"tag": "Task",  "text": "score clause risk 1–5, one-sentence summary", "anchor": ""},
-   {"tag": "Then",  "text": "governing_law always scores 1.0 — formal branch above", "anchor": "assert "},
-   {"tag": "Verify","text": "gist: indemnity/US-NY → risk_score=3.5, summary non-empty", "anchor": "RETURN"}]
-
-### Example D — ADAPT (preserving working logic)
-
-User source has:
-    templates = ... #> For each family, create a Python regex matching the entire body string
-    return templates
-
-CommitmentRecord.annotations:
-  [{"tag": "Task",  "text": "build anchored regex template per event family", "anchor": ""},
-   {"tag": "But",   "text": "previous version returned plain dicts; now returns EventTemplate instances", "anchor": "templates = "},
-   {"tag": "Verify","text": "gist: 3 families → 3 EventTemplate objects with compiled patterns", "anchor": "RETURN"}]
 
 ## Action program example
 

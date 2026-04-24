@@ -140,6 +140,8 @@ class CacheEntry:
     reasoning_summary: Optional[str] = None
     tool_calls_made: Optional[list[str]] = None
     commitment_record: Optional[Any] = None
+    # Post-validation SteeringBlock; Any to avoid circular import from semipy.models.
+    steering: Optional[Any] = None
 
 
 class Decision(Enum):
@@ -206,6 +208,10 @@ class GenerationSpec:
     verify_failure_context: str | None = None
     # Optional: prior sketch / pattern context when ADAPT follows a failed INSTANTIATE or operator mismatch.
     sketch_context: str | None = None
+
+    # Keys that the user has edited on-disk mapped to the user-edited string values.
+    # Forwarded to the generator prompt so the next implementation aligns with the user's steering.
+    steering_overrides: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

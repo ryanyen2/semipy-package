@@ -131,18 +131,24 @@ class ApacheLogPipeline:
 
     @semiformal
     def classify_body(self, body: str) -> str:
-        # < [Task] classify Apache error body into snake_case family
-        # < [Given] fallback rebuilds text and lowercase when slot inputs empty
+        #< intent: Classify Apache log body into event family
         text = "" if body is None else str(body).strip()
         lower = text.lower()
+        #< by: reusing nonempty lowercase override, else lowercasing stripped text once
+        #> given: optional prelowered text may override recomputed lowercase
         family = ...  # > Classify this Apache error log body into a short snake_case event family name.
-        # < [And] workerEnv init, errors, and Apache faults get families
-        # < [Verify] gist: scoreboard and workerEnv samples validated, slot returned None
+        #> unless: if no rules match, return "other"
+        
         return family
 
     @semiformal
     def infer_templates(self, bodies: dict[str, list[str]]) -> list[EventTemplate]:
+        #< intent: Build anchored EventTemplate regexes per family
+        #< given: bodies is a dict of family names to sample lists
+        #< given: sample entries are coerced to stripped nonempty strings
+        #< by: grouping samples by family, tokenizing digit and nondigit runs, synthesizing anchored regex templates
         templates = ...  # > For each event family, create a Python regex that matches the entire body string
+        #< yields: dict containing templates keyed by event family
         return templates
 
 

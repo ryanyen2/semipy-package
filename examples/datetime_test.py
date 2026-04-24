@@ -16,17 +16,8 @@ configure(
 
 @semiformal
 def infer_datetime_formatter(date_str: str) -> str:
-    #< [Task] Validate exact datetime parsing and skip invalid cases
-    #< [Given] Slot category is statement with no output_names
-    #< [Given] Observed date formats include slashes, dashes, times, and
-    #< [Then] Used regex fullmatch derived from strptime pattern
-    #< [Then] Allowed 1-2 digits for numeric date/time directives
-    #< [When] Statement block contract requires returning None
-    #< [Verify] Ran build_and_run_gist on sample 03/14/2025
-    #< [But] Returning formatted string on success
     input_pattern = ... #> infer the input date regex/strptime pattern from the observed string format in this session.
     output_pattern = "%b %Y"
-    #> [But] parse must match separators exactly, skip invalid cases
     return datetime.strptime(str(date_str), input_pattern).strftime(output_pattern)
 
 

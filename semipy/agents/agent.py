@@ -463,6 +463,20 @@ class SemiAgent:
                 parts.append("")
                 parts.append("Upstream dependency context: this step consumes output from prior steps in the pipeline.")
 
+        steering_overrides = getattr(spec, "steering_overrides", None) or {}
+        if steering_overrides:
+            parts.append("")
+            parts.append("## User steering overrides (treat as hard constraints)")
+            parts.append(
+                "The user has promoted the following facts by editing `#<` lines to `#>` "
+                "or by editing the value on disk. Honor each one verbatim in the generated "
+                "implementation:"
+            )
+            for k, v in steering_overrides.items():
+                if not v:
+                    continue
+                parts.append(f"- {k}: {v}")
+
         return "\n".join(parts)
 
     def _build_named_user_prompt(self, spec: GenerationSpec) -> str:

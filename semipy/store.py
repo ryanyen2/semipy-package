@@ -61,6 +61,9 @@ def _dispatch_module_path(cache_dir: Path, module_name: str) -> Path:
 
 
 def _commit_to_dict(c: Commit) -> dict[str, Any]:
+    cr = getattr(c, "commitment_record", None) or {}
+    if not isinstance(cr, dict):
+        cr = {}
     return {
         "commit_id": c.commit_id,
         "parent_ids": list(c.parent_ids),
@@ -76,10 +79,14 @@ def _commit_to_dict(c: Commit) -> dict[str, Any]:
         "usage_id": c.usage_id or "",
         "runtime_input_fingerprint": getattr(c, "runtime_input_fingerprint", "") or "",
         "binding_id": getattr(c, "binding_id", "") or "",
+        "commitment_record": dict(cr),
     }
 
 
 def _commit_from_dict(d: dict[str, Any]) -> Commit:
+    cr = d.get("commitment_record") or {}
+    if not isinstance(cr, dict):
+        cr = {}
     return Commit(
         commit_id=d["commit_id"],
         parent_ids=tuple(d.get("parent_ids", [])),
@@ -95,6 +102,7 @@ def _commit_from_dict(d: dict[str, Any]) -> Commit:
         usage_id=d.get("usage_id", "") or "",
         runtime_input_fingerprint=str(d.get("runtime_input_fingerprint", "") or ""),
         binding_id=str(d.get("binding_id", "") or ""),
+        commitment_record=dict(cr),
     )
 
 
@@ -275,6 +283,28 @@ def write_dispatch_module(
         lines.append(
             f"# slot: {slot.slot_id} | category: {slot_cat or 'unknown'} | commit: {active.commit_id[:8]} | {active.decision} | spec: {spec_preview}"
         )
+        cr = getattr(active, "commitment_record", None) or {}
+        raw_steering = cr.get("steering") if isinstance(cr, dict) else None
+        if raw_steering:
+            try:
+                from semipy.models import SteeringBlock
+
+                sb = SteeringBlock.model_validate(raw_steering)
+                if sb.goal.value:
+                    lines.append(f"# goal: {sb.goal.value}")
+                for g in sb.given:
+                    if g.value:
+                        lines.append(f"# given: {g.value}")
+                if sb.yields.value:
+                    lines.append(f"# yields: {sb.yields.value}")
+                if sb.commits.value:
+                    lines.append(f"# commits: {sb.commits.value}")
+                if sb.because.value:
+                    lines.append(f"# because: {sb.because.value}")
+                if sb.alt.value:
+                    lines.append(f"# alt: {sb.alt.value}")
+            except Exception:
+                pass
         bid = getattr(active, "binding_id", "") or ""
         if sketch_library is not None and bid:
             sk = None

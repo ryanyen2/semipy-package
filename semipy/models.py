@@ -123,15 +123,45 @@ class CommitmentRecord(BaseModel):
 
     generated_source: the validated function source (pure Python, no #< lines).
     goal:             ≤ 15 words describing what this function produces (for trace).
-    annotations:      ordered list of SkeletonNote entries that will be surfaced as
-                      inline #< lines in the user's source file.
+    annotations:      deprecated — kept for backward compatibility with existing portals; leave empty.
     rejected_alternatives: brief notes on alternatives tried (for trace only).
+    steering:         optional SteeringBlock synthesized post-validation; persists the keyword surface.
     """
 
     generated_source: str
     goal: str = ""
     annotations: list[SkeletonNote] = Field(default_factory=list)
     rejected_alternatives: list[str] = Field(default_factory=list)
+    steering: Optional["SteeringBlock"] = None
+
+
+class SteeringEntry(BaseModel):
+    """One keyword entry in a SteeringBlock, with a stability signature."""
+
+    value: str = ""
+    input_sig: str = ""  # SHA256 hex of the causal inputs; "" means user-frozen
+    user_frozen: bool = False  # True when the user edited the value on-disk
+
+
+class SteeringBlock(BaseModel):
+    """Structured keyword-value surface written as `#< key: value` around each slot anchor.
+
+    Zone P (above anchor): intent, given, by, unless, alt.
+    Zone E (below anchor): yields, verified.
+
+    The input_sig on each entry drives stability: unchanged signatures carry
+    values forward verbatim across re-generation.
+    """
+
+    intent: SteeringEntry = Field(default_factory=SteeringEntry)
+    given: list[SteeringEntry] = Field(default_factory=list)   # 0-3 entries
+    by: SteeringEntry = Field(default_factory=SteeringEntry)
+    unless: list[SteeringEntry] = Field(default_factory=list)  # 0-2 entries
+    yields: SteeringEntry = Field(default_factory=SteeringEntry)
+    verified: SteeringEntry = Field(default_factory=SteeringEntry)
+
+
+CommitmentRecord.model_rebuild()
 
 
 class SemiAgentDeps(BaseModel):

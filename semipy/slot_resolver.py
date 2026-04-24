@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import inspect as _inspect
 import time
 import threading
 import traceback
@@ -220,6 +221,7 @@ def _update_semantic_state(
     *,
     portal: Any,
     cache_dir: Any,
+    reasoning: str = "",
 ) -> None:
     """Persist semantic check result in slot advisor_state and reset counters."""
     adv = getattr(slot, "advisor_state", None) or {}
@@ -229,6 +231,9 @@ def _update_semantic_state(
     fp = _obs_content_fingerprint(slot)
     adv["semantic_obs_fingerprint"] = fp
     adv["semantic_decision"] = decision
+    # Persist the semantic reasoning so the steering synthesizer's `because`
+    # key can ground its phrase in the actual judgment reason.
+    adv["last_semantic_reasoning"] = reasoning or ""
     slot.advisor_state = adv
     save_portal(cache_dir, portal)
 
@@ -240,6 +245,41 @@ def _update_semantic_state(
 def _call_site_from_slot(slot_spec: SlotSpec) -> SemiCallSite:
     filename, lineno, _end = slot_spec.source_span
     return SemiCallSite(filename=filename, lineno=lineno, func_qualname=slot_spec.enclosing_function_qualname)
+
+
+def _head_commit(slot: Any) -> Any:
+    """Return the newest commit across all branches of the slot, or ``None``."""
+    try:
+        from semipy.history import most_recent_branch_head
+    except Exception:
+        return None
+    try:
+        return most_recent_branch_head(slot)
+    except Exception:
+        return None
+
+
+def _get_prior_steering(slot: Any, slot_spec: SlotSpec) -> Any:
+    """Load the :class:`SteeringBlock` from the most recent commit on this slot.
+
+    Returns ``None`` when no prior commit exists or when the stored payload
+    cannot be coerced back into a :class:`SteeringBlock`.
+    """
+    del slot_spec  # retained for future per-slot context expansion
+    head = _head_commit(slot)
+    if head is None:
+        return None
+    cr = getattr(head, "commitment_record", None) or {}
+    if not isinstance(cr, dict):
+        return None
+    raw = cr.get("steering")
+    if raw is None:
+        return None
+    try:
+        from semipy.models import SteeringBlock
+        return SteeringBlock.model_validate(raw)
+    except Exception:
+        return None
 
 
 def _function_name_base(slot_spec: SlotSpec) -> str:
@@ -361,6 +401,16 @@ def build_generation_spec(
 
     user_source_code = _read_user_source_for_context(slot_spec.source_span[0])
 
+    steering_overrides: dict[str, str] = {}
+    if slot_obj is not None:
+        adv = getattr(slot_obj, "advisor_state", None) or {}
+        if isinstance(adv, dict):
+            raw_overrides = adv.get("steering_overrides") or {}
+            if isinstance(raw_overrides, dict):
+                steering_overrides = {
+                    str(k): str(v) for k, v in raw_overrides.items() if v
+                }
+
     return GenerationSpec(
         prompt=slot_spec.spec_text,
         call_site=call_site,
@@ -383,6 +433,7 @@ def build_generation_spec(
         runtime_profile_scalar_only=_runtime_profile_is_scalar_only(runtime_values),
         verify_failure_context=verify_failure_context,
         sketch_context=sketch_context,
+        steering_overrides=steering_overrides,
     )
 
 
@@ -794,6 +845,7 @@ def execute_slot(
                             _update_semantic_state(
                                 slot, commit.commit_id, sem.decision,
                                 portal=portal, cache_dir=cache_dir,
+                                reasoning=getattr(sem, "reasoning", "") or "",
                             )
                             if sem.decision == "adapt":
                                 _verify_failure_msg = (
@@ -961,10 +1013,60 @@ def execute_slot(
         pass
 
     if resolution.decision in (Decision.GENERATE, Decision.ADAPT):
-        from semipy.agents.skeleton_writer import surface_skeleton as _surface_skeleton
+        from semipy.agents.skeleton_writer import (
+            surface_skeleton as _surface_skeleton,
+            detect_promoted_keys as _detect_promoted_keys,
+        )
+        from semipy.agents.steering import synthesize_steering as _synthesize_steering
+
+        prior_steering = _get_prior_steering(slot, slot_spec)
+        promoted_keys = _detect_promoted_keys(slot_spec)
+        try:
+            entry.steering = _synthesize_steering(
+                generation_spec,
+                entry,
+                slot,
+                prior_steering,
+                promoted_keys=promoted_keys,
+            )
+        except Exception:
+            entry.steering = None
+
+        # Persist the SteeringBlock onto the commit's commitment_record so prior
+        # values are available on the next run for signature-based carry-forward.
+        if entry.steering is not None:
+            cr_existing = commit.commitment_record or {}
+            cr_new = dict(cr_existing)
+            try:
+                cr_new["steering"] = entry.steering.model_dump()
+            except Exception:
+                cr_new["steering"] = None
+            slot.commits[commit.commit_id] = replace(commit, commitment_record=cr_new)
+            commit = slot.commits[commit.commit_id]
+            save_portal(cache_dir, portal)
+            write_dispatch_module(cache_dir, portal, sketch_library=sketch_library)
 
         # Run synchronously so script termination cannot drop the surface write.
-        _surface_skeleton(slot_spec, entry)
+        surface_overrides = _surface_skeleton(slot_spec, entry) or {}
+        # Merge promoted-from-spec keys with surface-reported overrides; promoted
+        # `#>` lines take precedence since those are hard contracts.
+        combined_overrides: dict[str, str] = {}
+        combined_overrides.update(surface_overrides)
+        combined_overrides.update(promoted_keys)
+        if combined_overrides:
+            adv = getattr(slot, "advisor_state", None) or {}
+            if not isinstance(adv, dict):
+                adv = {}
+            existing = adv.get("steering_overrides") or {}
+            if not isinstance(existing, dict):
+                existing = {}
+            existing_dict = {str(k): str(v) for k, v in existing.items() if v}
+            existing_dict.update({
+                str(k): str(v) for k, v in combined_overrides.items() if v
+            })
+            adv["steering_overrides"] = existing_dict
+            slot.advisor_state = adv
+            save_portal(cache_dir, portal)
         _schedule_sketch_binding_extraction(
             spec_text=slot_spec.spec_text,
             generated_source=entry.generated_source,

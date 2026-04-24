@@ -152,6 +152,58 @@ def analyze(entry: str) -> dict:
     return {"ip": ip, "error": is_error}
 ```
 
+## Reasoning surface (`#<` lines)
+
+After each generation, semipy writes a small set of `#<` comment lines around each slot anchor. These are not part of your spec — they are system-managed traces that describe what the generated implementation decided and why, so you can read and steer it without digging into the cache.
+
+```python
+@semiformal
+def infer_datetime_formatter(date_str: str) -> str:
+    #< intent: infer strptime pattern from observed date text
+    #< by: probing a regex-gated candidate table; because the table covers all observed formats
+    #< unless: empty or unmatched input raises ValueError
+    #> verified: 'Mar 2025' -> {'input_pattern':'%b %Y'}, return error if no match
+    input_pattern = ... #> infer the input date regex/strptime pattern from the observed string format in this session.
+    output_pattern = "%b %Y"
+    return datetime.strptime(str(date_str), input_pattern).strftime(output_pattern)
+```
+
+### Placement
+
+`#<` lines appear in two zones around the slot anchor:
+
+- **Zone P (provenance, above the anchor):** `intent`, `given`, `by`, `unless` — why this implementation exists, what it assumes, and how it handles failure.
+- **Zone E (effect, below the anchor):** `yields`, `verified` — what the generated code produces and what was observed at runtime.
+
+### Keywords
+
+| Key | Zone | Meaning |
+|---|---|---|
+| `intent` | above | One-phrase task summary (emitted only when the spec is long or ambiguous). |
+| `given` | above | Input-shape assumptions beyond the signature (multi-param slots only). |
+| `by` | above | Strategy/mechanism this implementation uses. Embed the reason inline when the choice is non-obvious: `<strategy>; because <reason>`. Always present. |
+| `unless` | above | Fallback or exceptional path (emitted only when the generated code has a raise/except). May repeat for distinct failure modes. |
+| `yields` | below | Output shape beyond the return annotation (skipped for simple builtins like `str`, `int`). |
+| `verified` | below | Sample input → observed output, derived from the validation run (never LLM-generated). |
+
+### Steering
+
+To change what the next generation produces, edit the `#< by:` line (strategy) or the `#< unless:` line (exceptional path). On the next run where the implementation needs to change, semipy reads the override and adapts accordingly.
+
+### Promoting a constraint
+
+To lock an inference note into the contract permanently, flip `#<` to `#>` on the same line. This extends the spec text, causing a new ADAPT on the next run, and suppresses the duplicate `#<` line from being re-emitted.
+
+```python
+# Before: system-managed trace
+#< by: probing a regex-gated candidate table; because the table covers all observed formats
+
+# After: promoted to user contract — fixes the strategy for future runs
+#> by: regex-gated candidate table
+```
+
+`#<` lines are stable across runs: semipy only rewrites them when the generated implementation changes. A no-op re-run produces a byte-identical file.
+
 ## Caching and reuse
 
 Generated functions are stored in `.semiformal/` relative to your working directory:
@@ -192,7 +244,9 @@ The [Semipy VS Code extension](https://marketplace.visualstudio.com/items?itemNa
 
 See the `examples/` directory:
 
-- `examples/apache_log_semiformal_stages.py` — staged walkthrough from simple extraction to INSTANTIATE
+- `examples/apache_log_semiformal_stages.py` — staged walkthrough from simple extraction to INSTANTIATE and promotion workflow
+- `examples/datetime_test.py` — datetime format inference with observed samples and steered `#<` surface
+- `examples/fasta_header_metadata.py` — FASTA header parsing with multiple slots, nested anchors, and standalone `semi()` calls
 - `examples/use_contract_intelligence.py` — contract field extraction from PDF
 - `examples/use_sponsorship_canonicalizer.py` — entity canonicalization pipeline
 
