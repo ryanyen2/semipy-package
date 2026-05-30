@@ -1,7 +1,9 @@
-from semipy import semiformal, semi, configure
-import pandas as pd
 from datetime import datetime
 from pathlib import Path
+
+import pandas as pd
+
+from semipy import configure, semi, semiformal
 
 # Portal session id matches this directory basename (same as VS Code workspace folder when you open `examples/`).
 _EXAMPLES_ROOT = Path(__file__).resolve().parent
@@ -14,15 +16,12 @@ configure(
     verbose=True,
 )
 
+
 @semiformal
 def infer_datetime_formatter(date_str: str) -> str:
-    #< intent: Infer strptime pattern from date string
-    #< by: trying strptime candidates in order; because observed formats are finite and specific
-    #< unless: empty input, returns default month/day/year pattern
-    #< unless: no candidate parses, returns default month/day/year pattern
-    input_pattern = ... #> infer the input date regex/strptime pattern from the observed string format in this session.
+    input_pattern = ...  # > infer the input date regex/strptime pattern from the observed string format in this session.
     output_pattern = "%b %Y"
-    return datetime.strptime(str(date_str), input_pattern).strftime(output_pattern)
+    return datetime.strptime(str(date_str), input_pattern).strftime(output_pattern)  # type: ignore[return-value]
 
 
 data = pd.DataFrame(
@@ -49,7 +48,6 @@ data["formatted_signup_date"] = data["signup_date"].apply(infer_datetime_formatt
 print(data["formatted_signup_date"].value_counts())
 
 
-
 # new_data = pd.DataFrame(
 #     {
 #         "signup_date": [
@@ -64,12 +62,10 @@ print(data["formatted_signup_date"].value_counts())
 #             "Sep 2025",
 #             "01.21.2025 11:30:00",
 #             "02.21.2025 09:12:00",
-            
+
 #         ]
 #     }
 # )
 
 # new_data["formatted_signup_date"] = new_data["signup_date"].apply(infer_datetime_formatter)
 # print(new_data["formatted_signup_date"].value_counts())
-
-

@@ -67,9 +67,14 @@ from semipy.slot_observations import (
     _slot_session_observations,
     _has_diverse_observations,
     _obs_content_fingerprint,
+    _record_call_outcome,
+    _get_recent_call_outcomes,
+    _check_intent_judge_pre_filters,
+    _get_batch_summary_from_outcomes,
 )
 from semipy.runtime_fingerprint import compute_runtime_input_fingerprint
 from semipy.types import (
+    CallOutcome,
     Decision,
     GenerationSpec,
     SemiCallError,
@@ -870,22 +875,51 @@ def execute_slot(
                         # crossed to catch implementations that are type-correct
                         # but semantically inadequate for new input patterns.
                         _increment_semantic_reuse_counter(slot, commit.commit_id)
-                        if _should_semantic_check(slot, commit.commit_id, config):
+                        _adaptive = getattr(config, "adaptive_mode", False)
+                        _pre_filter_triggered, _pre_filter_signals = (
+                            _check_intent_judge_pre_filters(slot, commit.commit_id)
+                            if _adaptive else (False, [])
+                        )
+                        _run_check = _should_semantic_check(slot, commit.commit_id, config) or (
+                            _adaptive and _pre_filter_triggered
+                        )
+                        if _run_check:
                             from semipy.agents.decision import evaluate_reuse_semantics
 
                             session_obs = _slot_session_observations(slot)
                             impl_source = getattr(commit, "generated_source", "") or ""
+
+                            _real_outcomes: list[dict] | None = None
+                            _batch_summary: dict | None = None
+                            if _adaptive:
+                                _real_outcomes = _get_recent_call_outcomes(slot, n=20) or None
+                                _batch_summary = _get_batch_summary_from_outcomes(slot)
+
                             if config.verbose:
+                                _ctx_parts = []
+                                if _pre_filter_signals:
+                                    _ctx_parts.extend(_pre_filter_signals)
+                                if not _ctx_parts:
+                                    _ctx_parts.append("new input patterns")
+                                _ctx_str = ", ".join(_ctx_parts)
                                 print_pipeline_log(
                                     call_site,
-                                    "semantic_check",
-                                    "New input patterns detected; running batch test and evaluating...",
+                                    "context_change",
+                                    f"Context shift detected ({_ctx_str}); evaluating intent-fit...",
                                 )
                             sem = evaluate_reuse_semantics(
                                 slot_spec=slot_spec,
                                 implementation_source=impl_source,
                                 session_observations=session_obs,
+                                call_outcomes=_real_outcomes,
+                                batch_summary=_batch_summary,
                             )
+                            # Mark where we left off so pre-filter doesn't retrigger immediately.
+                            if _adaptive:
+                                _adv = getattr(slot, "advisor_state", None) or {}
+                                _ring = _adv.get("call_outcomes", [])
+                                _adv["intent_judge_last_outcome_count"] = len(_ring)
+                                slot.advisor_state = _adv
                             _update_semantic_state(
                                 slot, commit.commit_id, sem.decision,
                                 portal=portal, cache_dir=cache_dir,
@@ -893,7 +927,7 @@ def execute_slot(
                             )
                             if sem.decision == "adapt":
                                 _verify_failure_msg = (
-                                    f"Semantic check: {sem.reasoning}"
+                                    f"Intent check: {sem.reasoning}"
                                 )
                                 if sem.problematic_inputs:
                                     examples = "; ".join(
@@ -902,20 +936,42 @@ def execute_slot(
                                     _verify_failure_msg += (
                                         f" Problematic inputs: {examples}"
                                     )
+                                if _adaptive and getattr(sem, "ambiguous_inputs", None):
+                                    ambi_strs = [
+                                        f"{a.get('input', '?')} (picked: {a.get('picked_output', '?')}, why: {a.get('why', '')})"
+                                        for a in sem.ambiguous_inputs[:3]
+                                    ]
+                                    _verify_failure_msg += (
+                                        f" Ambiguous inputs: {'; '.join(ambi_strs)}"
+                                    )
+                                if _batch_summary:
+                                    _verify_failure_msg += (
+                                        f" Batch: {_batch_summary.get('n_in',0)} calls, "
+                                        f"{_batch_summary.get('n_raised',0)} raised, "
+                                        f"{_batch_summary.get('n_unique_outputs',0)} unique outputs."
+                                    )
                                 _post_reuse_semantic = sem
                                 if config.verbose:
                                     print_pipeline_log(
                                         call_site,
                                         "semantic_check",
-                                        f"Implementation gaps detected; adapting. {sem.reasoning}",
+                                        f"Implementation does not satisfy intent; adapting. {sem.reasoning}",
                                     )
                                 force_regenerate = True
-                            elif config.verbose:
-                                print_pipeline_log(
-                                    call_site,
-                                    "semantic_check",
-                                    "Implementation covers observed input diversity; proceeding with reuse.",
-                                )
+                            else:
+                                if _adaptive and config.verbose and getattr(sem, "ambiguous_inputs", None):
+                                    ambi_count = len(sem.ambiguous_inputs)
+                                    print_pipeline_log(
+                                        call_site,
+                                        "intent_warn",
+                                        f"[WARN] {ambi_count} ambiguous input(s) detected; implementation chose one interpretation. {sem.reasoning}",
+                                    )
+                                elif config.verbose:
+                                    print_pipeline_log(
+                                        call_site,
+                                        "semantic_check",
+                                        "Implementation satisfies intent for observed inputs; proceeding with reuse.",
+                                    )
                         if not force_regenerate:
                             if config.verbose:
                                 is_donor = bool(resolution.reuse_dispatch_slot_id)
@@ -964,7 +1020,27 @@ def execute_slot(
                                 f"Cached implementation raised at runtime; adapting. {err}",
                             )
                         force_regenerate = True
+                        if getattr(config, "adaptive_mode", False):
+                            _exc_cause = e.__cause__
+                            _record_call_outcome(slot, CallOutcome(
+                                ts=time.time(),
+                                runtime_input_fingerprint=current_fp,
+                                input_repr_short=repr(list(runtime_values.values())[:1])[:80],
+                                returned_type="",
+                                returned_repr_short="",
+                                raised=True,
+                                exception_type=type(_exc_cause).__name__ if _exc_cause else "SemiCallError",
+                            ))
                     else:
+                        if getattr(config, "adaptive_mode", False):
+                            _record_call_outcome(slot, CallOutcome(
+                                ts=time.time(),
+                                runtime_input_fingerprint=current_fp,
+                                input_repr_short=repr(list(runtime_values.values())[:1])[:80],
+                                returned_type=type(result).__name__,
+                                returned_repr_short=repr(result)[:80],
+                                raised=False,
+                            ))
                         if dep_graph is not None:
                             upstream_chain = []
                             for val in runtime_values.values():

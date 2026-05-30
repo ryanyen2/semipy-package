@@ -46,6 +46,9 @@ class SemiConfig:
     #: When the spec/code alignment is unclear, the binding is skipped rather than memorized
     #: as a pattern. Raise to be stricter; lower to be more permissive.
     sketch_library_min_confidence: float = 0.6
+    #: When True, record per-call outcomes, run the intent-fit judge on real data,
+    #: and emit context-change traces. Default off for backward compatibility.
+    adaptive_mode: bool = False
 
 
 _config: Optional[SemiConfig] = None

@@ -150,6 +150,7 @@ export function activate(context: ExtensionContext): void {
   const specSyntaxTypes = createSpecCommentSyntaxTypes();
   const debounceMs = () => cfg().get<number>("debounceMs") ?? 200;
 
+  // const signFlip = false;
   const signFlip = new SignFlipCoordinator(
     () => cfg().get<boolean>("signFlipOnSkeletonEdit") ?? false,
     () => cfg().get<boolean>("signFlipSkipApiEdits") ?? true,

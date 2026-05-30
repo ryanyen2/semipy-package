@@ -183,6 +183,118 @@ def _has_diverse_observations(slot: Any) -> bool:
     return False
 
 
+_CALL_OUTCOMES_KEY = "call_outcomes"
+_MAX_CALL_OUTCOMES = 200
+
+
+def _record_call_outcome(slot: Any, outcome: Any, *, max_outcomes: int = _MAX_CALL_OUTCOMES) -> None:
+    """Append a CallOutcome (as dict) to slot.advisor_state['call_outcomes'] ring."""
+    adv = getattr(slot, "advisor_state", None)
+    if not isinstance(adv, dict):
+        adv = {}
+        slot.advisor_state = adv
+    ring: list = adv.setdefault(_CALL_OUTCOMES_KEY, [])
+    try:
+        import dataclasses as _dc
+        entry = _dc.asdict(outcome) if _dc.is_dataclass(outcome) else dict(outcome)
+    except Exception:
+        entry = {"raised": getattr(outcome, "raised", False)}
+    ring.append(entry)
+    while len(ring) > max_outcomes:
+        ring.pop(0)
+
+
+def _get_recent_call_outcomes(slot: Any, n: int = 20) -> list[dict]:
+    """Return up to n most recent call outcomes from slot.advisor_state."""
+    adv = getattr(slot, "advisor_state", None)
+    if not isinstance(adv, dict):
+        return []
+    ring = adv.get(_CALL_OUTCOMES_KEY, [])
+    if not isinstance(ring, list):
+        return []
+    recent = ring[-n:]
+    return [
+        {
+            "input": entry.get("input_repr_short", ""),
+            "output": entry.get("returned_repr_short", ""),
+            "note": (
+                f"raised:{entry.get('exception_type', 'error')}"
+                if entry.get("raised")
+                else ("ambiguous" if entry.get("ambiguity_signal") else "")
+            ),
+        }
+        for entry in recent
+    ]
+
+
+def _check_intent_judge_pre_filters(slot: Any, commit_id: str) -> tuple[bool, list[str]]:
+    """Cheap pre-filter: check if the intent judge should run based on call outcomes.
+
+    Returns (should_run, triggered_signals). Does NOT route to ADAPT itself;
+    only decides whether to invoke the LLM judge.
+    """
+    adv = getattr(slot, "advisor_state", None)
+    if not isinstance(adv, dict):
+        return False, []
+    ring: list = adv.get(_CALL_OUTCOMES_KEY, [])
+    if not isinstance(ring, list) or len(ring) < 2:
+        return False, []
+
+    last_judge_count = adv.get("intent_judge_last_outcome_count", 0)
+    if len(ring) <= last_judge_count:
+        return False, []
+
+    new_outcomes = ring[last_judge_count:]
+    signals: list[str] = []
+
+    raised_count = sum(1 for o in new_outcomes if isinstance(o, dict) and o.get("raised"))
+    if raised_count > 0:
+        signals.append(f"exceptions:{raised_count}")
+
+    outputs = [
+        o.get("returned_repr_short", "") or o.get("output", "")
+        for o in new_outcomes
+        if isinstance(o, dict) and not o.get("raised")
+        and (o.get("returned_repr_short") or o.get("output"))
+    ]
+    if outputs:
+        unique_out = len(set(outputs))
+        unique_in = len({
+            o.get("input_repr_short", "") or o.get("input", "")
+            for o in new_outcomes if isinstance(o, dict)
+        })
+        if unique_in > 2 and unique_out <= 1:
+            signals.append(f"collapsed_outputs:{unique_out}/{unique_in}")
+
+    return bool(signals), signals
+
+
+def _get_batch_summary_from_outcomes(slot: Any, n: int = 50) -> dict | None:
+    """Compute a batch summary dict from the most recent call outcomes."""
+    adv = getattr(slot, "advisor_state", None)
+    if not isinstance(adv, dict):
+        return None
+    ring: list = adv.get(_CALL_OUTCOMES_KEY, [])
+    if not isinstance(ring, list) or not ring:
+        return None
+    recent = ring[-n:]
+    n_in = len(recent)
+    n_raised = sum(1 for o in recent if isinstance(o, dict) and o.get("raised"))
+    n_returned = n_in - n_raised
+    n_unique_outputs = len({
+        o.get("returned_repr_short", "") or o.get("output", "")
+        for o in recent if isinstance(o, dict) and not o.get("raised")
+    })
+    n_ambiguity = sum(1 for o in recent if isinstance(o, dict) and o.get("ambiguity_signal"))
+    return {
+        "n_in": n_in,
+        "n_returned": n_returned,
+        "n_raised": n_raised,
+        "n_unique_outputs": n_unique_outputs,
+        "n_ambiguity_signals": n_ambiguity,
+    }
+
+
 def _obs_content_fingerprint(slot: Any) -> str:
     """Coarse fingerprint of the observation patterns for a slot.
 

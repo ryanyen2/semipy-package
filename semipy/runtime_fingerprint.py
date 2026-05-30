@@ -27,6 +27,29 @@ def _fingerprint_value(value: Any) -> str:
         for k in sorted(value.keys(), key=lambda x: repr(x)):
             parts.append(f"{_fingerprint_value(k)}={_fingerprint_value(value[k])}")
         return "D:{" + ",".join(parts) + "}"
+    try:
+        import pandas as _pd
+        if isinstance(value, _pd.DataFrame):
+            dtypes_str = ",".join(f"{c}:{str(t)}" for c, t in zip(value.columns, value.dtypes))
+            try:
+                head_hash = hashlib.sha256(value.head(5).to_json().encode()).hexdigest()[:12]
+            except Exception:
+                head_hash = ""
+            return f"df:{value.shape}:{hashlib.sha256(dtypes_str.encode()).hexdigest()[:8]}:{head_hash}"
+        if isinstance(value, _pd.Series):
+            try:
+                head_hash = hashlib.sha256(value.head(5).to_json().encode()).hexdigest()[:12]
+            except Exception:
+                head_hash = ""
+            return f"sr:{value.shape}:{str(value.dtype)}:{head_hash}"
+    except ImportError:
+        pass
+    try:
+        import numpy as _np
+        if isinstance(value, _np.ndarray):
+            return f"np:{value.shape}:{str(value.dtype)}:{hashlib.sha256(value.tobytes()[:512]).hexdigest()[:12]}"
+    except ImportError:
+        pass
     return f"r:{type(value).__name__}:{repr(value)}"
 
 

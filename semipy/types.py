@@ -232,6 +232,42 @@ class ValidationResult:
     failure_kind: Optional[str] = None
 
 
+@dataclass
+class AmbiguousFlag:
+    """One ambiguous input identified by the intent judge."""
+
+    input: str
+    picked_output: str
+    alternative_outputs: list[str] = field(default_factory=list)
+    why: str = ""
+
+
+@dataclass
+class CallOutcome:
+    """Record of one slot call's actual result, stored in slot.advisor_state['call_outcomes']."""
+
+    ts: float
+    runtime_input_fingerprint: str
+    input_repr_short: str
+    returned_type: str
+    returned_repr_short: str
+    raised: bool = False
+    exception_type: str = ""
+    ambiguity_signal: bool = False
+
+
+@dataclass
+class BatchOutcome:
+    """Aggregate stats from a recent batch of calls (e.g. Series.apply) for one slot."""
+
+    ts: float
+    n_in: int
+    n_returned: int
+    n_raised: int
+    n_unique_outputs: int
+    n_ambiguity_signals: int = 0
+
+
 class SemiGenerationError(Exception):
     """Raised when the agent cannot produce a valid function after retries."""
 

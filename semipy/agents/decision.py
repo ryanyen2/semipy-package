@@ -44,6 +44,11 @@ class SemanticDecision(BaseModel):
     decision: Literal["reuse", "adapt"]
     reasoning: str
     problematic_inputs: list[str] = []
+    # Inputs that were resolved but admit multiple plausible interpretations.
+    # Each entry is a dict with keys: input, picked_output, alternative_outputs, why.
+    ambiguous_inputs: list[dict] = []
+    # Which context signals moved the decision (for trace surfacing).
+    context_changed: list[str] = []
 
 
 # ---------------------------------------------------------------------------
@@ -266,34 +271,42 @@ def _run_batch_gist(gist_source: str, timeout: int = 15) -> list[dict[str, Any]]
 # ---------------------------------------------------------------------------
 
 _SEMANTIC_DECISION_SYSTEM = """\
-You evaluate whether a generated Python function produces semantically \
-correct results for the diverse inputs observed in a runtime session.
+You evaluate whether a generated Python function satisfies the **intent** \
+of its spec for the inputs observed in a runtime session.
 
 You receive:
-1. The spec: what the function is supposed to do.
+1. The spec: the stated intent of the function (what it is supposed to do).
 2. The surrounding scaffold (the formal code the spec sits in).
 3. The generated implementation source code.
-4. **Concrete test results**: actual {input -> output} pairs from running \
-the implementation against a representative sample of observed inputs.
+4. **Concrete test results**: actual {input -> output} pairs — either from \
+running the implementation against sampled inputs or from real production \
+calls recorded at runtime.
+5. (Optional) A batch summary: total calls, raises, unique outputs.
 
-Your job: look at the actual outputs and decide whether the implementation \
-is producing correct results for the observed input diversity.
+Your primary question: **does each output satisfy the spec's intent for \
+that input?**
 
 Decision criteria:
-- "reuse": the outputs look semantically correct for the given inputs. \
+- "reuse": outputs satisfy the spec's intent for the observed inputs. \
 Minor cosmetic differences are acceptable.
-- "adapt": there are CLEAR semantic failures in the outputs. Examples: \
-many inputs returning a generic default (like "unknown") when they should \
-have specific meaningful outputs; wrong classifications for inputs that \
-clearly belong to a different category; extraction returning empty or \
-wrong fields for inputs that have clear structure.
+- "adapt": there are CLEAR intent failures. Examples: inputs that should \
+be parsed/classified/extracted are instead returning a generic fallback \
+or default value (like the spec's "unless:" clause result); inputs from a \
+new format that the current impl does not handle and silently falls through; \
+outputs that are wrong for their inputs even if they pass type checks.
 
-Be conservative: only say "adapt" when you see concrete evidence of \
-wrong outputs in the test results. Do not flag cosmetic or style \
-differences. Focus on whether the implementation's coverage is adequate.
+Ambiguity detection (populate ambiguous_inputs when found):
+Flag inputs that the implementation resolved to ONE answer but where \
+multiple legitimate interpretations exist under the spec (e.g. "01-02-2024" \
+could be Jan 2 or Feb 1). List at most 3 such inputs with your best \
+alternative. Ambiguous inputs alone do not force "adapt" — flag them but \
+still return "reuse" unless they cause clear intent failures.
+
+Be conservative: only say "adapt" when you see concrete evidence of intent \
+failures. Do not flag cosmetic or style differences.
 
 Keep "reasoning" under 3 sentences. List at most 5 problematic_inputs \
-(the input values that got wrong outputs)."""
+(the input values that got wrong outputs). List at most 3 ambiguous_inputs."""
 
 
 def _create_decision_model() -> tuple[Any, Any] | tuple[None, None]:
@@ -321,8 +334,10 @@ def _build_evidence_prompt(
     test_results: list[dict[str, Any]],
     slot_category: str,
     output_names: list[str],
+    batch_summary: dict[str, Any] | None = None,
+    real_data: bool = False,
 ) -> str:
-    parts: list[str] = [f"## Spec\n{spec_text}"]
+    parts: list[str] = [f"## Spec (intent)\n{spec_text}"]
     if scaffold_source:
         parts.append(
             f"\n## Scaffold (surrounding formal code)\n```python\n{scaffold_source}\n```"
@@ -334,17 +349,31 @@ def _build_evidence_prompt(
     if output_names:
         parts.append(f"Output names: {output_names}")
 
-    parts.append(f"\n## Concrete test results ({len(test_results)} samples)")
+    if batch_summary:
+        n_in = batch_summary.get("n_in", 0)
+        n_ret = batch_summary.get("n_returned", 0)
+        n_raised = batch_summary.get("n_raised", 0)
+        n_uniq = batch_summary.get("n_unique_outputs", 0)
+        parts.append(
+            f"\n## Batch summary (recent production calls)\n"
+            f"  total_calls={n_in}, returned={n_ret}, raised={n_raised}, "
+            f"unique_outputs={n_uniq}"
+        )
+
+    data_label = "Real production call results" if real_data else "Concrete test results"
+    parts.append(f"\n## {data_label} ({len(test_results)} samples)")
     for i, row in enumerate(test_results, 1):
         inp = row.get("input", {})
         out = row.get("output", "")
+        note = row.get("note", "")
         inp_str = json.dumps(inp, default=str) if isinstance(inp, dict) else str(inp)
         out_str = json.dumps(out, default=str) if isinstance(out, dict) else str(out)
         if len(inp_str) > 200:
             inp_str = inp_str[:197] + "..."
         if len(out_str) > 200:
             out_str = out_str[:197] + "..."
-        parts.append(f"  {i}. input={inp_str}  -->  output={out_str}")
+        note_suffix = f"  [{note}]" if note else ""
+        parts.append(f"  {i}. input={inp_str}  -->  output={out_str}{note_suffix}")
 
     return "\n".join(parts)
 
@@ -357,6 +386,8 @@ async def _judge_async(
     test_results: list[dict[str, Any]],
     slot_category: str,
     output_names: list[str],
+    batch_summary: dict[str, Any] | None = None,
+    real_data: bool = False,
 ) -> SemanticDecision:
     from pydantic_ai import Agent
 
@@ -381,6 +412,8 @@ async def _judge_async(
         test_results=test_results,
         slot_category=slot_category,
         output_names=output_names,
+        batch_summary=batch_summary,
+        real_data=real_data,
     )
 
     result = await agent.run(prompt)
@@ -397,43 +430,52 @@ def evaluate_reuse_semantics(
     slot_spec: SlotSpec,
     implementation_source: str,
     session_observations: dict[str, list[str]] | None,
+    call_outcomes: list[dict] | None = None,
+    batch_summary: dict[str, Any] | None = None,
 ) -> SemanticDecision:
-    """Evaluate whether the cached implementation semantically handles the
-    observed input diversity.
+    """Evaluate whether the cached implementation satisfies the intent of its spec.
 
-    1. Sample diverse observations.
-    2. Run the implementation against the sample via subprocess gist.
-    3. Pass the concrete {input->output} evidence to the LLM for judgment.
+    When ``call_outcomes`` is provided (adaptive_mode), the real production
+    input->output pairs are used directly as evidence, skipping the subprocess
+    gist. When unavailable, falls back to the synthetic gist approach.
 
     Returns a SemanticDecision. On any failure defaults to ``reuse``.
     """
-    if not session_observations:
-        return SemanticDecision(
-            decision="reuse", reasoning="No observations to evaluate."
-        )
+    real_data = False
+    test_results: list[dict[str, Any]] = []
 
-    sample_rows = _pick_diverse_samples(
-        session_observations,
-        list(slot_spec.free_variables),
-    )
-    if not sample_rows:
-        return SemanticDecision(
-            decision="reuse", reasoning="No diverse observations to evaluate."
-        )
-
-    gist_source = _build_batch_gist(
-        implementation_source=implementation_source,
-        free_variables=list(slot_spec.free_variables),
-        sample_rows=sample_rows,
-        scaffold_source=slot_spec.enclosing_function_source,
-    )
-    test_results = _run_batch_gist(gist_source)
+    if call_outcomes:
+        test_results = call_outcomes[:_GIST_SAMPLE_SIZE]
+        real_data = True
 
     if not test_results:
-        return SemanticDecision(
-            decision="reuse",
-            reasoning="Batch gist execution produced no results; defaulting to reuse.",
+        if not session_observations:
+            return SemanticDecision(
+                decision="reuse", reasoning="No observations to evaluate."
+            )
+
+        sample_rows = _pick_diverse_samples(
+            session_observations,
+            list(slot_spec.free_variables),
         )
+        if not sample_rows:
+            return SemanticDecision(
+                decision="reuse", reasoning="No diverse observations to evaluate."
+            )
+
+        gist_source = _build_batch_gist(
+            implementation_source=implementation_source,
+            free_variables=list(slot_spec.free_variables),
+            sample_rows=sample_rows,
+            scaffold_source=slot_spec.enclosing_function_source,
+        )
+        test_results = _run_batch_gist(gist_source)
+
+        if not test_results:
+            return SemanticDecision(
+                decision="reuse",
+                reasoning="Batch gist execution produced no results; defaulting to reuse.",
+            )
 
     try:
         return _run_async(
@@ -444,6 +486,8 @@ def evaluate_reuse_semantics(
                 test_results=test_results,
                 slot_category=slot_spec.expected_category.value,
                 output_names=list(slot_spec.output_names or []),
+                batch_summary=batch_summary,
+                real_data=real_data,
             )
         )
     except Exception:
