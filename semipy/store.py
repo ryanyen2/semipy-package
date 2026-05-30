@@ -67,6 +67,9 @@ def _commit_to_dict(c: Commit) -> dict[str, Any]:
     ss = getattr(c, "source_snapshot", None) or {}
     if not isinstance(ss, dict):
         ss = {}
+    chr_ = getattr(c, "change_record", None) or {}
+    if not isinstance(chr_, dict):
+        chr_ = {}
     return {
         "commit_id": c.commit_id,
         "parent_ids": list(c.parent_ids),
@@ -84,6 +87,7 @@ def _commit_to_dict(c: Commit) -> dict[str, Any]:
         "binding_id": getattr(c, "binding_id", "") or "",
         "commitment_record": dict(cr),
         "source_snapshot": dict(ss),
+        "change_record": dict(chr_),
     }
 
 
@@ -94,6 +98,9 @@ def _commit_from_dict(d: dict[str, Any]) -> Commit:
     ss = d.get("source_snapshot") or {}
     if not isinstance(ss, dict):
         ss = {}
+    chr_ = d.get("change_record") or {}
+    if not isinstance(chr_, dict):
+        chr_ = {}
     return Commit(
         commit_id=d["commit_id"],
         parent_ids=tuple(d.get("parent_ids", [])),
@@ -111,6 +118,7 @@ def _commit_from_dict(d: dict[str, Any]) -> Commit:
         binding_id=str(d.get("binding_id", "") or ""),
         commitment_record=dict(cr),
         source_snapshot=dict(ss),
+        change_record=dict(chr_),
     )
 
 
@@ -129,6 +137,7 @@ def _slot_to_dict(s: Slot) -> dict[str, Any]:
         "enclosing_function_site_id": s.enclosing_function_site_id,
         "advisor_state": dict(getattr(s, "advisor_state", {}) or {}),
         "input_observation_samples": dict(getattr(s, "input_observation_samples", {}) or {}),
+        "contract": dict(getattr(s, "contract", {}) or {}),
     }
 
 
@@ -152,6 +161,7 @@ def _slot_from_dict(d: dict[str, Any]) -> Slot:
         enclosing_function_site_id=d.get("enclosing_function_site_id", None),
         advisor_state=dict(d.get("advisor_state", {}) or {}),
         input_observation_samples=dict(d.get("input_observation_samples", {}) or {}),
+        contract=dict(d.get("contract", {}) or {}),
     )
 
 

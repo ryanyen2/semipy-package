@@ -190,7 +190,17 @@ def _derive_verified(spec: Any, entry: Any, slot: Any) -> SteeringEntry:
         value = f"{sample_repr} → {out_repr}"
     else:
         value = out_repr or sample_repr
-    return SteeringEntry(value=_trim_words(value, 18), input_sig=sig)
+    value = _trim_words(value, 18)
+    # Ground the effect surface in the behavioral contract when present.
+    try:
+        from semipy.contract.access import load_active_cases
+
+        n_active = len(load_active_cases(slot))
+        if n_active and value:
+            value = f"{value} ({n_active} contract cases hold)"
+    except Exception:
+        pass
+    return SteeringEntry(value=value, input_sig=sig)
 
 
 # ---------------------------------------------------------------------------
@@ -422,6 +432,11 @@ def _build_synthesis_prompt(
         parts.extend(f"- {g}" for g in grounding_lines)
     if fail_ctx:
         parts.append(f"Verify failure context: {fail_ctx}")
+    change_summary = getattr(spec, "change_summary", "") or ""
+    if change_summary:
+        parts.append(
+            f"Change reason/effect (ground `by`/`unless` in this): {change_summary}"
+        )
     parts.append("")
     parts.append("### Generated source (first 25 lines)")
     parts.append("```python")

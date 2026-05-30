@@ -213,6 +213,10 @@ class GenerationSpec:
     # Forwarded to the generator prompt so the next implementation aligns with the user's steering.
     steering_overrides: dict[str, str] = field(default_factory=dict)
 
+    # One-line summary of the change's traced effect (from the commit's ChangeRecord),
+    # set after generation so steering synthesis grounds `by`/`unless` in the real reason.
+    change_summary: str | None = None
+
 
 @dataclass
 class ValidationResult:

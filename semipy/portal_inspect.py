@@ -58,3 +58,28 @@ def print_portal_resolution_summary(*, cache_dir: Path, session_anchor: str) -> 
         )
         if preview:
             print(f"  spec_preview={preview!r}")
+        # Behavioral contract: active/superseded counts and head-commit change record.
+        try:
+            from semipy.contract.access import get_contract
+            from semipy.contract.change import change_record_from_dict
+
+            contract = get_contract(sl)
+            n_active = len(contract.active())
+            n_superseded = len(contract.superseded())
+            n_quarantined = len(contract.quarantined())
+            if contract.cases:
+                print(
+                    f"  contract={n_active} active / {n_superseded} superseded "
+                    f"/ {n_quarantined} quarantined"
+                )
+            cr = change_record_from_dict(getattr(head, "change_record", {}) or {})
+            if cr.reason or cr.effect_diff or cr.n_compared:
+                intended = len(cr.effect_diff) - cr.unintended_count
+                reason_line = (cr.reason or "").splitlines()[0][:100] if cr.reason else ""
+                bits = []
+                if reason_line:
+                    bits.append(f"reason={reason_line!r}")
+                bits.append(f"effect=+{intended} changed, {cr.unintended_count} unintended")
+                print("  change: " + " | ".join(bits))
+        except Exception:
+            pass

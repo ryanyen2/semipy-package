@@ -571,6 +571,217 @@ def _schedule_sketch_binding_extraction(
         _run_sketch_binding_extraction(**kwargs)
 
 
+def _run_contract_maintenance(
+    *,
+    slot_spec: SlotSpec,
+    runtime_values: dict[str, Any],
+    new_source: str,
+    change_record: dict,
+    decision: str,
+    commit_id: str,
+    cache_dir: Path,
+    session_id: str,
+    portal_anchor: str,
+    module_name: str,
+    slot_id: str,
+) -> None:
+    try:
+        from semipy.contract.maintainer import maintain_contract
+
+        maintain_contract(
+            slot_spec=slot_spec,
+            runtime_values=runtime_values,
+            new_source=new_source,
+            change_record=change_record,
+            decision=decision,
+            commit_id=commit_id,
+            cache_dir=cache_dir,
+            session_id=session_id,
+            portal_anchor=portal_anchor,
+            module_name=module_name,
+            slot_id=slot_id,
+        )
+    except Exception as ex:
+        if get_config().verbose:
+            import sys
+
+            print(f"[semipy] Contract maintenance failed: {ex}", file=sys.stderr)
+
+
+def _schedule_contract_maintenance(**kwargs: Any) -> None:
+    cfg = get_config()
+    if not getattr(cfg, "contract_enabled", True):
+        return
+    if getattr(cfg, "contract_maintainer_async", False):
+        threading.Thread(
+            target=lambda: _run_contract_maintenance(**kwargs),
+            daemon=True,
+            name="semipy-contract-maintainer",
+        ).start()
+    else:
+        _run_contract_maintenance(**kwargs)
+
+
+def _run_reuse_contract_gate(
+    slot: Any,
+    slot_spec: SlotSpec,
+    commit: Any,
+    config: Any,
+    call_site: Any,
+) -> tuple[str | None, Any]:
+    """Run the behavioral contract against a reuse candidate.
+
+    Returns ``(failure_message, validation_result)`` when a carried-forward case
+    is violated (so the caller forces ADAPT), else ``(None, None)``. Never raises;
+    an inability to run the contract is treated as "no objection".
+    """
+    if not getattr(config, "contract_gate", False):
+        return None, None
+    try:
+        from semipy.contract.access import load_active_cases
+        from semipy.contract.runner import run_contract
+
+        active = load_active_cases(slot)
+        if not active:
+            return None, None
+        cap = int(getattr(config, "contract_max_cases", 25))
+        cr = run_contract(
+            implementation_source=getattr(commit, "generated_source", "") or "",
+            slot_spec=slot_spec,
+            cases=active[:cap],
+            scaffold_source=slot_spec.enclosing_function_source,
+        )
+        if cr.passed:
+            return None, None
+        msg = cr.first_failure_message()
+        if config.verbose:
+            err = msg.replace("\n", " ")
+            if len(err) > 160:
+                err = err[:157] + "..."
+            print_pipeline_log(
+                call_site,
+                "contract_gate",
+                f"Contract case violated; adapting. {err}",
+            )
+        return msg, cr.as_validation_result()
+    except Exception:
+        return None, None
+
+
+def _run_generate_contract_gate(
+    slot: Any,
+    slot_spec: SlotSpec,
+    entry: Any,
+    generation_spec: Any,
+    resolution: Any,
+    runtime_values: dict[str, Any],
+    config: Any,
+    call_site: Any,
+) -> tuple[Any, set[str], dict]:
+    """Acceptance gate + effect tracing for a freshly generated/adapted candidate.
+
+    1. The candidate must satisfy the slot's carried-forward cases (when the gate
+       is enabled). 2. Its EFFECT — the behavior diff vs the parent over the union
+       of contract inputs — is always traced when the contract is enabled.
+       3. An unintended diff (a regression on an input the parent handled) also
+       fails the gate. On any violation, regenerate up to ``contract_gate_max_retries``
+       with the specific problem appended to the failure context.
+
+    Returns ``(entry, unresolved_case_ids, change_record_dict)``. Unresolved ids are
+    quarantined by the caller so the system still makes progress; the change record
+    is attached to the commit as the real "what changed" provenance.
+    """
+    if not getattr(config, "contract_enabled", True):
+        return entry, set(), {}
+    try:
+        from semipy.contract.access import load_active_cases
+        from semipy.contract.change import (
+            change_record_to_dict,
+            compute_effect_diff,
+            regression_summary,
+        )
+        from semipy.contract.fingerprint import structural_input_fingerprint
+        from semipy.contract.runner import ContractRunResult, run_contract
+    except Exception:
+        return entry, set(), {}
+
+    cap = int(getattr(config, "contract_max_cases", 25))
+    active = load_active_cases(slot)[:cap]
+    gate_on = bool(getattr(config, "contract_gate", False))
+    block = bool(getattr(config, "contract_block_regressions", True))
+    max_retries = int(getattr(config, "contract_gate_max_retries", 1))
+
+    parent_sources = resolution.parent_sources or []
+    parent_source = parent_sources[0] if parent_sources else None
+    parent_commit_id = (resolution.parent_commit_ids or [""])[0] if resolution.parent_commit_ids else ""
+    decision = resolution.decision.name if resolution.decision else "GENERATE"
+    triggering_fp = structural_input_fingerprint(
+        runtime_values, free_variables=list(slot_spec.free_variables)
+    )
+    scaffold = slot_spec.enclosing_function_source
+
+    def _assess(src: str) -> tuple[Any, Any]:
+        cr = (
+            run_contract(
+                implementation_source=src,
+                slot_spec=slot_spec,
+                cases=active,
+                scaffold_source=scaffold,
+            )
+            if (gate_on and active)
+            else ContractRunResult(passed=True)
+        )
+        change = compute_effect_diff(
+            parent_source=parent_source,
+            new_source=src,
+            slot_spec=slot_spec,
+            cases=active,
+            triggering_fp=triggering_fp,
+            scaffold_source=scaffold,
+            reason=(generation_spec.verify_failure_context or "").strip(),
+            decision=decision,
+            parent_commit_id=parent_commit_id,
+        )
+        return cr, change
+
+    cr, change = _assess(entry.generated_source)
+    attempt = 0
+    while gate_on and attempt < max_retries and (
+        (not cr.passed) or (block and change.unintended_count > 0)
+    ):
+        attempt += 1
+        if not cr.passed:
+            extra = cr.first_failure_message()
+        else:
+            extra = regression_summary(change)
+        if not extra:
+            break
+        base = generation_spec.verify_failure_context or ""
+        generation_spec.verify_failure_context = f"{base}\n{extra}".strip()
+        if config.verbose:
+            print_pipeline_log(
+                call_site,
+                "contract_gate",
+                f"Candidate conflicts with a prior decision; regenerating ({attempt}/{max_retries}). {extra[:120]}",
+            )
+        try:
+            entry = SemiAgent().generate(generation_spec)
+        except Exception:
+            break
+        cr, change = _assess(entry.generated_source)
+
+    ids: set[str] = set()
+    if gate_on and not cr.passed:
+        ids = cr.failing_case_ids()
+        if config.verbose:
+            print_pipeline_log(
+                call_site,
+                "contract_gate",
+                f"Quarantining {len(ids)} unsatisfiable case(s) after regeneration budget.",
+            )
+    return entry, ids, change_record_to_dict(change)
+
+
 def _call_generated_fn(
     *,
     fn: Callable[..., Any],
@@ -656,6 +867,24 @@ def execute_slot(
         spec_changed = bool(slot.spec_hash) and slot.spec_hash != slot_spec.spec_hash
     if spec_changed:
         force_regenerate = True
+        # The slot's meaning changed: retire cases derived under the old meaning so
+        # the acceptance gate / effect-diff don't fight the user's intent. The
+        # maintainer re-seeds under the new spec; still-valid invariants reactivate.
+        if getattr(config, "contract_enabled", True):
+            try:
+                from semipy.contract.access import retire_active_cases
+
+                n_retired = retire_active_cases(slot, "spec changed")
+                if n_retired:
+                    save_portal(cache_dir, portal)
+                    if config.verbose:
+                        print_pipeline_log(
+                            _call_site_from_slot(slot_spec),
+                            "contract",
+                            f"Spec changed; retired {n_retired} prior case(s) (re-seeding under new spec).",
+                        )
+            except Exception:
+                pass
         if dep_graph is not None:
             mark_downstream_stale(dep_graph, current_slot_ref, "spec changed")
     if dep_graph is not None and is_stale(dep_graph, current_slot_ref):
@@ -871,17 +1100,29 @@ def execute_slot(
                             )
                         force_regenerate = True
                     else:
-                        # Type check passed. Run semantic check if threshold
-                        # crossed to catch implementations that are type-correct
-                        # but semantically inadequate for new input patterns.
+                        # Type check passed. First enforce the behavioral contract:
+                        # a reused impl that violates a previously-recorded decision
+                        # is rejected and the violated case's reason drives the ADAPT.
+                        _c_msg, _c_val = _run_reuse_contract_gate(
+                            slot, slot_spec, commit, config, call_site
+                        )
+                        if _c_msg is not None:
+                            _verify_failure_msg = _c_msg
+                            _post_reuse_validation = _c_val
+                            force_regenerate = True
+                        # Then run semantic check if threshold crossed to catch
+                        # implementations that are type-correct but semantically
+                        # inadequate for new input patterns.
                         _increment_semantic_reuse_counter(slot, commit.commit_id)
                         _adaptive = getattr(config, "adaptive_mode", False)
                         _pre_filter_triggered, _pre_filter_signals = (
                             _check_intent_judge_pre_filters(slot, commit.commit_id)
-                            if _adaptive else (False, [])
+                            if _adaptive and not force_regenerate else (False, [])
                         )
-                        _run_check = _should_semantic_check(slot, commit.commit_id, config) or (
-                            _adaptive and _pre_filter_triggered
+                        _run_check = (not force_regenerate) and (
+                            _should_semantic_check(slot, commit.commit_id, config) or (
+                                _adaptive and _pre_filter_triggered
+                            )
                         )
                         if _run_check:
                             from semipy.agents.decision import evaluate_reuse_semantics
@@ -1086,6 +1327,14 @@ def execute_slot(
     )
     entry = SemiAgent().generate(generation_spec)
 
+    # Behavioral-contract acceptance gate + effect tracing: the candidate must satisfy
+    # carried-forward prior decisions before commit (enforces "don't forget"), and its
+    # behavior diff vs the parent is recorded as the change's traced effect.
+    entry, _gate_quarantine_ids, _change_record = _run_generate_contract_gate(
+        slot, slot_spec, entry, generation_spec, resolution, runtime_values,
+        config, _call_site_from_slot(slot_spec),
+    )
+
     # History identity fields: the new model keys by spec_hash, but existing Commit schema still
     # requires these fields. Keep them stable per spec.
     template_fingerprint = slot_spec.spec_hash
@@ -1105,8 +1354,23 @@ def execute_slot(
         usage_id=slot_spec.slot_id,
         runtime_input_fingerprint=compute_runtime_input_fingerprint(runtime_values),
         source_snapshot=_capture_slot_source_snapshot(slot_spec),
+        change_record=_change_record,
     )
     add_commit_to_slot(slot, commit, branch_name, usage_id=slot_spec.slot_id)
+
+    # Quarantine any carried-forward cases the regeneration budget could not satisfy,
+    # so the system makes forward progress and surfaces the conflict rather than livelocking.
+    if _gate_quarantine_ids:
+        try:
+            from semipy.contract.access import quarantine_cases
+
+            quarantine_cases(
+                slot,
+                list(_gate_quarantine_ids),
+                "unsatisfiable after regeneration budget",
+            )
+        except Exception:
+            pass
 
     # Update stored slot snapshot after regeneration.
     slot.spec_hash = slot_spec.spec_hash
@@ -1142,6 +1406,19 @@ def execute_slot(
 
         prior_steering = _get_prior_steering(slot, slot_spec)
         promoted_keys = _detect_promoted_keys(slot_spec)
+        # Ground steering synthesis in the change's traced reason/effect.
+        try:
+            from semipy.contract.change import change_record_from_dict as _crfd
+
+            _cr_obj = _crfd(_change_record)
+            _summary_bits = []
+            if _cr_obj.reason:
+                _summary_bits.append(_cr_obj.reason.splitlines()[0][:160])
+            if _cr_obj.effect_diff or _cr_obj.n_compared:
+                _summary_bits.append(_cr_obj.summary())
+            generation_spec.change_summary = " | ".join(_summary_bits) or None
+        except Exception:
+            generation_spec.change_summary = None
         try:
             entry.steering = _synthesize_steering(
                 generation_spec,
@@ -1206,6 +1483,22 @@ def execute_slot(
             generated_source=entry.generated_source,
             commit_id=commit.commit_id,
             slot_spec=slot_spec,
+            cache_dir=cache_dir,
+            session_id=session_id,
+            portal_anchor=portal_anchor,
+            module_name=module_name,
+            slot_id=slot_spec.slot_id,
+        )
+        # Maintain the behavioral contract (deterministic invariant seeding + optional
+        # LLM pass): records reason-tagged cases so future iterations cannot forget.
+        # Runs after sketch extraction so it reloads the latest persisted portal.
+        _schedule_contract_maintenance(
+            slot_spec=slot_spec,
+            runtime_values=runtime_values,
+            new_source=entry.generated_source,
+            change_record=dict(getattr(commit, "change_record", {}) or {}),
+            decision=decision_str,
+            commit_id=commit.commit_id,
             cache_dir=cache_dir,
             session_id=session_id,
             portal_anchor=portal_anchor,

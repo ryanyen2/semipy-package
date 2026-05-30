@@ -77,6 +77,11 @@ class Commit:
     # "slot_region_end_line" (1-based, last line of the snapshot). Empty for legacy
     # commits that predate the snapshot field.
     source_snapshot: dict = field(default_factory=dict)
+    # Serialized ChangeRecord (dict): the WHY (reason, triggering input) and the
+    # traced EFFECT (parent-vs-new behavior diff) of the change that produced this
+    # commit. Replaces the generic ``message`` as the real change record; empty for
+    # GENERATE-from-nothing and for legacy commits that predate the field.
+    change_record: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -101,6 +106,11 @@ class Slot:
     advisor_state: dict[str, Any] = field(default_factory=dict)
     # Per-parameter distinct string observations across invocations (bounded); used for generation prompts.
     input_observation_samples: dict[str, list[str]] = field(default_factory=dict)
+    # Serialized SlotContract (dict): the durable, accumulating behavioral contract
+    # for this slot (reason-tagged invariants/examples). Owned by semipy.contract;
+    # kept as a plain dict here so the history layer stays dependency-light. Empty
+    # for slots that predate the contract subsystem.
+    contract: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -125,6 +135,7 @@ def create_commit(
     runtime_input_fingerprint: str = "",
     binding_id: str = "",
     source_snapshot: dict | None = None,
+    change_record: dict | None = None,
 ) -> Commit:
     """Build a new Commit and compute its id, source_hash, and operation_signature."""
     source_hash = compute_source_hash(generated_source)
@@ -147,6 +158,7 @@ def create_commit(
         runtime_input_fingerprint=runtime_input_fingerprint or "",
         binding_id=(binding_id or ""),
         source_snapshot=dict(source_snapshot or {}),
+        change_record=dict(change_record or {}),
     )
 
 

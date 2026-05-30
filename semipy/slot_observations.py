@@ -306,9 +306,9 @@ def _obs_content_fingerprint(slot: Any) -> str:
     genuinely new input *pattern* appears.
     """
     import hashlib as _hl
-    import re as _re
 
-    _PREFIX_LEN = 24
+    from semipy.contract.fingerprint import normalize_token as _normalize_token
+
     obs = getattr(slot, "input_observation_samples", None)
     if not isinstance(obs, dict):
         return ""
@@ -318,8 +318,6 @@ def _obs_content_fingerprint(slot: Any) -> str:
             continue
         v = obs.get(k)
         if isinstance(v, list) and len(v) > 1:
-            prefixes = sorted(
-                {_re.sub(r"\d+", "N", str(x))[:_PREFIX_LEN] for x in v}
-            )
+            prefixes = sorted({_normalize_token(x) for x in v})
             parts.append(f"{k}:{','.join(prefixes)}")
     return _hl.sha256("|".join(parts).encode()).hexdigest()[:16]

@@ -35,6 +35,9 @@ _LAZY: dict[str, tuple[str, str]] = {
     "ProfileDataResult": ("semipy.models", "ProfileDataResult"),
     "GistRunResult": ("semipy.models", "GistRunResult"),
     "OutputValidationResult": ("semipy.models", "OutputValidationResult"),
+    "SlotContract": ("semipy.contract", "SlotContract"),
+    "ContractCase": ("semipy.contract", "ContractCase"),
+    "ChangeRecord": ("semipy.contract.change", "ChangeRecord"),
 }
 
 
@@ -78,4 +81,7 @@ __all__ = [
     "AbstractionLibrary",
     "LibraryPrimitive",
     "ASTPattern",
+    "SlotContract",
+    "ContractCase",
+    "ChangeRecord",
 ]

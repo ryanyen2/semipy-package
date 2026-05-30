@@ -25,7 +25,7 @@ def effective_stream_display_mode(*, verbose: bool) -> str:
 class SemiConfig:
     """Global configuration for semi() and the generation agent."""
     openai_api_key: Optional[str] = field(default_factory=lambda: os.getenv("OPENAI_API_KEY"))
-    openai_model: str = "gpt-5.4"
+    openai_model: str = "gpt-5.5"
     e2b_api_key: Optional[str] = field(default_factory=lambda: os.getenv("E2B_API_KEY"))
     gist_timeout: int = 30
     cache_dir: Path = field(default_factory=lambda: Path(".semiformal"))
@@ -49,6 +49,28 @@ class SemiConfig:
     #: When True, record per-call outcomes, run the intent-fit judge on real data,
     #: and emit context-change traces. Default off for backward compatibility.
     adaptive_mode: bool = False
+
+    # --- Behavioral contract subsystem (records WHY/EFFECT of changes) ---
+    #: Master switch for the contract subsystem (deterministic invariant seeding,
+    #: change records). Cheap; on by default.
+    contract_enabled: bool = True
+    #: Executable acceptance gate: a reused/regenerated impl must satisfy the slot's
+    #: carried-forward behavioral cases. Off until proven on a project; flip on to enforce.
+    contract_gate: bool = False
+    #: Max regeneration retries to satisfy violated cases before quarantining them (latency cap).
+    contract_gate_max_retries: int = 1
+    #: When True, an unintended effect-diff (a change that alters a previously-passing
+    #: input pattern) fails the gate and triggers a regeneration retry.
+    contract_block_regressions: bool = True
+    #: Cap on active cases executed per gate (latency / portal size).
+    contract_max_cases: int = 25
+    #: Selectivity cap: max new golden-master example cases the maintainer pins per commit.
+    contract_max_new_examples: int = 3
+    #: Run the LLM maintainer pass (proposes examples/metamorphic relations, supersedes
+    #: outdated cases). Deterministic invariant seeding runs whenever contract_enabled.
+    contract_maintainer: bool = False
+    #: If True, run the maintainer in a background thread (lower latency; cases may lag a call).
+    contract_maintainer_async: bool = False
 
 
 _config: Optional[SemiConfig] = None
