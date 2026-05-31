@@ -140,6 +140,7 @@ def _validate_basic_execution(
     typeadapter_globals: dict[str, Any] | None = None,
     free_variables: list[str] | None = None,
     usage_hints: list[str] | None = None,
+    effectful: bool = False,
 ) -> ValidationResult:
     # We intentionally do not require non-None results for unknown types.
     if sample_input is None:
@@ -154,6 +155,46 @@ def _validate_basic_execution(
     kwargs = dict(sample_input.get("kwargs", {}) or {})
     fv = free_variables or []
     hints = set(usage_hints or [])
+
+    # Effectful slot: the function emits a reified EffectScript via the injected
+    # ``fx`` capability rather than returning a value. Validation here only
+    # confirms it runs without error given fx + sample inputs; the effect itself
+    # is verified/gated by the effects subsystem (Stage 1+), not by return-type
+    # checks. The recorded script is always well-typed by construction.
+    if effectful:
+        from semipy.effects.inject import make_recorder
+
+        recorder = make_recorder()
+        try:
+            if fv and len(fv) == len(args) and not kwargs:
+                invoke_slot(fn, fv, args, extra_kwargs={"fx": recorder})
+            else:
+                fn(*args, fx=recorder, **kwargs)
+        except TypeError as e:
+            return ValidationResult(
+                passed=False,
+                ast_valid=True,
+                type_correct=True,
+                execution_ok=False,
+                error_message=f"Signature mismatch: {e}",
+                failure_kind="signature_mismatch",
+            )
+        except Exception:
+            return ValidationResult(
+                passed=False,
+                ast_valid=True,
+                type_correct=True,
+                execution_ok=False,
+                error_message=traceback.format_exc(),
+                failure_kind="execution_error",
+            )
+        return ValidationResult(
+            passed=True,
+            ast_valid=True,
+            type_correct=True,
+            execution_ok=True,
+            error_message="",
+        )
 
     try:
         if fv and len(fv) == len(args) and not kwargs:
@@ -491,6 +532,19 @@ def validate(
 
     fv = list(spec.slot_spec.free_variables) if spec and spec.slot_spec else None
 
+    # An effectful slot's generated function declares an ``fx`` parameter and emits
+    # effects via it. Detect it (only when the effects subsystem is enabled) so the
+    # executor injects ``fx`` and skips return-type checks.
+    effectful = False
+    try:
+        from semipy.agents.config import get_config
+        from semipy.effects.inject import fn_is_effectful
+
+        if getattr(get_config(), "effects_enabled", False):
+            effectful = fn_is_effectful(fn)
+    except Exception:
+        effectful = False
+
     return _validate_basic_execution(
         fn=fn,
         expected_type=effective_type,
@@ -500,6 +554,7 @@ def validate(
         typeadapter_globals=ta_globals,
         free_variables=fv,
         usage_hints=usage_hints,
+        effectful=effectful,
     )
 
 

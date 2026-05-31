@@ -217,6 +217,12 @@ class GenerationSpec:
     # set after generation so steering synthesis grounds `by`/`unless` in the real reason.
     change_summary: str | None = None
 
+    # Curated examples rendered into the generation prompt (input -> expected output;
+    # for effectful slots, input -> intended effects). Loaded from the slot's active
+    # contract / effect cases + recent ledger so the model anchors on pinned behavior.
+    # Each item: {"input": {...}, "output_repr": str, "effect_summary": str, "reason": str}.
+    contract_examples: list[dict[str, Any]] | None = None
+
 
 @dataclass
 class ValidationResult:

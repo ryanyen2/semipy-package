@@ -504,7 +504,71 @@ class SemiAgent:
                     continue
                 parts.append(f"- {k}: {v}")
 
+        examples_block = self._describe_contract_examples(spec)
+        if examples_block:
+            parts.append("")
+            parts.append(examples_block)
+
+        effects_block = self._describe_effects_capability(spec)
+        if effects_block:
+            parts.append("")
+            parts.append(effects_block)
+
         return "\n".join(parts)
+
+    def _describe_contract_examples(self, spec: GenerationSpec) -> str:
+        """Render curated examples (input -> expected output / intended effects)."""
+        examples = getattr(spec, "contract_examples", None)
+        if not examples:
+            return ""
+        lines = ["## Examples (curated; your implementation must reproduce these)"]
+        for ex in examples:
+            if not isinstance(ex, dict):
+                continue
+            inp = ex.get("input")
+            reason = (ex.get("reason") or "").strip()
+            tail = f"   (reason: {reason})" if reason else ""
+            eff = (ex.get("effect_summary") or "").strip()
+            if eff:
+                lines.append(f"- input: {inp!r} -> effects: {eff}{tail}")
+            else:
+                out = ex.get("output_repr")
+                lines.append(f"- input: {inp!r} -> output: {out}{tail}")
+        return "\n".join(lines) if len(lines) > 1 else ""
+
+    def _describe_effects_capability(self, spec: GenerationSpec) -> str:
+        """Teach the ``fx`` capability, but only when the effects subsystem is on.
+
+        The model adds ``fx`` *only* when the request requires mutating an external
+        artifact; a pure request still returns a value (so pure behavior is intact).
+        """
+        try:
+            from semipy.agents.config import get_config
+
+            if not getattr(get_config(), "effects_enabled", False):
+                return ""
+        except Exception:
+            return ""
+        return (
+            "## Effects (use ONLY if this request mutates an external artifact)\n"
+            "If, and only if, satisfying this request requires CHANGING an external "
+            "artifact -- a database, file, data store, or API -- rather than merely "
+            "computing and returning a value, add a final parameter named `fx` to your "
+            "function and emit every intended change through it. Do NOT import database "
+            "drivers, open files for writing, or call network APIs directly; `fx` records "
+            "your intent as data that semipy verifies and applies safely.\n"
+            "Available operations (each `target` is a `scheme://name` id, e.g. "
+            "`db://customers`):\n"
+            "  fx.create(target, payload)            # insert a new record\n"
+            "  fx.update(target, payload, selector)  # modify records matching selector\n"
+            "  fx.delete(target, selector)           # remove records matching selector\n"
+            "  fx.append(target, payload)            # append to a list/log target\n"
+            "  fx.read(target, selector) -> records  # read from the artifact\n"
+            "  fx.call(target, payload)              # opaque external call (API)\n"
+            "Prefer the narrowest selector (e.g. a unique key) so the change touches the "
+            "fewest records. End the function with `return fx.script`. If the request only "
+            "computes a value, do NOT add `fx` -- just return the value."
+        )
 
     def _build_named_user_prompt(self, spec: GenerationSpec) -> str:
         # Named semi.* calls are removed in the new lowering architecture.

@@ -397,6 +397,45 @@ def _execution_namespace_for_generation(source_file: str) -> dict[str, Any]:
     return {}
 
 
+def _examples_from_slot(slot_obj: Any) -> list[dict[str, Any]] | None:
+    """Render the slot's active contract ``example`` cases for the generation prompt.
+
+    Pinned input->output examples ground the model on canonical behavior (the
+    example-driven generation half of the design). Effectful slots also merge in
+    effect-case summaries + the most recent applied EffectScript (added in Stage 4).
+    Best-effort: any failure yields ``None`` and the prompt simply omits examples.
+    """
+    if slot_obj is None:
+        return None
+    try:
+        from semipy.contract.access import load_active_cases
+    except Exception:
+        return None
+    try:
+        cases = load_active_cases(slot_obj)
+    except Exception:
+        return None
+    examples: list[dict[str, Any]] = []
+    for c in cases or []:
+        if getattr(c, "kind", "") != "example":
+            continue
+        raw = getattr(c, "input_sample", {}) or {}
+        inp = {
+            k: v
+            for k, v in raw.items()
+            if not (isinstance(k, str) and (k == "self" or k.startswith("_")))
+        }
+        examples.append(
+            {
+                "input": inp,
+                "output_repr": getattr(c, "expected_repr", ""),
+                "effect_summary": "",
+                "reason": getattr(c, "reason", ""),
+            }
+        )
+    return examples or None
+
+
 def build_generation_spec(
     *,
     slot_spec: SlotSpec,
@@ -430,6 +469,7 @@ def build_generation_spec(
 
     slot_obj = portal.slots.get(slot_spec.slot_id)
     session_obs = _slot_session_observations(slot_obj) if slot_obj else None
+    contract_examples = _examples_from_slot(slot_obj)
 
     exec_ns = _execution_namespace_for_generation(slot_spec.source_span[0])
 
@@ -468,6 +508,7 @@ def build_generation_spec(
         verify_failure_context=verify_failure_context,
         sketch_context=sketch_context,
         steering_overrides=steering_overrides,
+        contract_examples=contract_examples,
     )
 
 
@@ -792,7 +833,31 @@ def _call_generated_fn(
     cache_dir: Path,
 ) -> Any:
     args = tuple(runtime_values.get(n) for n in slot_spec.free_variables)
+
+    # Effectful slot: inject the effect-recording ``fx`` capability and return a
+    # reified EffectResult instead of touching the world. Detection is inferred
+    # from the generated signature (an ``fx`` parameter), only when the effects
+    # subsystem is enabled. Pure slots take the unchanged path below.
+    effectful = False
     try:
+        from semipy.agents.config import get_config as _get_cfg
+        from semipy.effects.inject import fn_is_effectful
+
+        if getattr(_get_cfg(), "effects_enabled", False):
+            effectful = fn_is_effectful(fn)
+    except Exception:
+        effectful = False
+
+    try:
+        if effectful:
+            from semipy.effects.inject import make_recorder, wrap_effect_result
+
+            recorder = make_recorder(provenance={"slot_id": slot_spec.slot_id})
+            value = invoke_slot(
+                fn, list(slot_spec.free_variables), args, extra_kwargs={"fx": recorder}
+            )
+            # Stage 0: dry-run only -- staging/gate/apply land in later stages.
+            return wrap_effect_result(recorder, value, applied=False)
         return invoke_slot(fn, list(slot_spec.free_variables), args)
     except Exception as e:
         err = SemiCallError(

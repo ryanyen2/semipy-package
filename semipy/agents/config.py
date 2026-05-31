@@ -72,6 +72,37 @@ class SemiConfig:
     #: If True, run the maintainer in a background thread (lower latency; cases may lag a call).
     contract_maintainer_async: bool = False
 
+    # --- Effects subsystem (reified real-world effects: DB/file/data/API) ---
+    #: Master switch. When on, effectful slots (whose generated function declares an
+    #: ``fx`` parameter) emit a reified EffectScript via ``fx`` and the generation
+    #: prompt teaches that capability. Default OFF: a pure project sees no change to
+    #: generation or runtime until a researcher opts in.
+    effects_enabled: bool = False
+    #: Open shadows and run effect verification before accepting/applying. (Stage 1)
+    effect_staging: bool = False
+    #: Enforce effect-invariant cases + block blast-radius regressions (acceptance gate). (Stage 1)
+    effect_gate: bool = False
+    #: Max regeneration retries to satisfy violated effect cases before quarantining.
+    effect_gate_max_retries: int = 1
+    #: When True, an unintended artifact-state diff vs the parent fails the gate. (Stage 2)
+    effect_block_regressions: bool = True
+    #: Run Z3 + CrossHair proofs over the EffectScript (else static + shadow checks only). (Stage 3)
+    effect_smt: bool = False
+    #: Per-invariant solver/exploration budget for the SMT/concolic pass.
+    effect_smt_timeout_s: float = 5.0
+    effect_smt_max_paths: int = 64
+    #: Commit the verified shadow to the REAL artifact. REQUIRES effect_gate on + passed. (Stage 4)
+    effect_auto_apply: bool = False
+    #: Externalized/irreversible targets (APIs, email) require approval before commit. (Stage 5)
+    effect_require_approval_external: bool = True
+    #: Cap on active effect cases executed per gate (latency / portal size).
+    effect_max_cases: int = 25
+    #: Run the LLM effect-case proposal pass (deterministic seeding always runs when staging). (Stage 4)
+    effect_maintainer: bool = False
+    effect_maintainer_async: bool = False
+    #: Default per-effect blast-radius bound when none is declared.
+    effect_default_blast_radius: int = 1
+
 
 _config: Optional[SemiConfig] = None
 

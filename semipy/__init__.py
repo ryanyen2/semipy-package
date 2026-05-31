@@ -38,6 +38,15 @@ _LAZY: dict[str, tuple[str, str]] = {
     "SlotContract": ("semipy.contract", "SlotContract"),
     "ContractCase": ("semipy.contract", "ContractCase"),
     "ChangeRecord": ("semipy.contract.change", "ChangeRecord"),
+    # Effects subsystem (reified real-world effects).
+    "Effect": ("semipy.effects", "Effect"),
+    "EffectScript": ("semipy.effects", "EffectScript"),
+    "EffectResult": ("semipy.effects", "EffectResult"),
+    "EffectRecorder": ("semipy.effects", "EffectRecorder"),
+    "ArtifactBackend": ("semipy.effects", "ArtifactBackend"),
+    "MemoryArtifactBackend": ("semipy.effects", "MemoryArtifactBackend"),
+    "register_artifact_backend": ("semipy.effects", "register_artifact_backend"),
+    "resolve_backend": ("semipy.effects", "resolve_backend"),
 }
 
 
@@ -84,4 +93,12 @@ __all__ = [
     "SlotContract",
     "ContractCase",
     "ChangeRecord",
+    "Effect",
+    "EffectScript",
+    "EffectResult",
+    "EffectRecorder",
+    "ArtifactBackend",
+    "MemoryArtifactBackend",
+    "register_artifact_backend",
+    "resolve_backend",
 ]

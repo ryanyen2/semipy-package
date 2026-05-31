@@ -159,6 +159,35 @@ def read_upstream():
     return _SEMIPY_UPSTREAM
 
 
+class _SemiFx:
+    \"\"\"Recording effect capability for testing effectful candidates in the sandbox.
+
+    Mirrors semipy.effects.EffectRecorder's surface (create/read/update/delete/
+    append/call) but records into a plain list so it needs no package import.
+    \"\"\"
+    def __init__(self):
+        self.effects = []
+    def _rec(self, op, target, payload=None, selector=None):
+        self.effects.append((op, target, payload, selector))
+        return (op, target)
+    def create(self, target, payload=None):
+        return self._rec("create", target, payload)
+    def update(self, target, payload=None, selector=None):
+        return self._rec("update", target, payload, selector)
+    def delete(self, target, selector=None):
+        return self._rec("delete", target, None, selector)
+    def append(self, target, payload=None):
+        return self._rec("append", target, payload)
+    def read(self, target, selector=None):
+        self._rec("read", target, None, selector)
+        return []
+    def call(self, target, payload=None):
+        return self._rec("call", target, payload)
+    @property
+    def script(self):
+        return self.effects
+
+
 def build_and_run_gist(source, invocation_code=""):
     \"\"\"Execute a candidate function and return a result dict.
 
@@ -171,6 +200,9 @@ def build_and_run_gist(source, invocation_code=""):
     \"\"\"
     # Seed exec namespace with user-defined types from this module's globals
     _ns = {{name: globals()[name] for name in _SEMIPY_USER_TYPE_NAMES if name in globals()}}
+    # Effectful candidates declare an ``fx`` parameter; seed a recording fx so the
+    # model can invoke and inspect them (e.g. invocation_code "fn(x, fx)").
+    _ns["fx"] = _SemiFx()
     try:
         exec(compile(source, "<gist>", "exec"), _ns)
     except Exception:
