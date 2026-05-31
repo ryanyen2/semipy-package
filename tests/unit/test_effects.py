@@ -709,13 +709,16 @@ def test_execute_effectful_refuses_irreversible():
         42: {"id": 42, "tier": "silver"}, 7: {"id": 7, "tier": "silver"}}})
     register_artifact_backend("mem", backend)
     try:
+        from semipy.effects import EffectRefused
         slot, commit = _slot_with_commit(MULTI_DELETE_SRC)
-        with pytest.raises(SemiCallError):
+        with pytest.raises(EffectRefused) as exc:
             execute_effectful(
                 fn=_compile(MULTI_DELETE_SRC), slot_spec=_slot(["customer"]),
                 runtime_values={"customer": {"id": 42}}, config=APPLY_CFG,
                 slot=slot, commit=commit,
             )
+        # the refusal message names the reason and is not framed as a code failure
+        assert "refused to apply" in str(exc.value)
         # refused -> store unchanged, nothing ledgered
         assert len(backend.stores["customers"]) == 2
         assert not get_ledger(slot).events

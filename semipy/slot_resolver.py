@@ -992,6 +992,17 @@ def _run_reuse_effect_gate(
         return None, None
 
 
+def _should_surface_skeleton(slot_spec: SlotSpec) -> bool:
+    """Whether to write ``#<`` skeleton lines into the user's source after generation.
+
+    Never for standalone ``semi()``: there is no ``#>`` block to annotate, and
+    rewriting the source inserts lines that shift line numbers -- which breaks the
+    source-line template extraction (and therefore reuse) on the next call to the
+    same call site (see the standalone-reuse bug fixed alongside this guard).
+    """
+    return slot_spec.expected_category != SlotCategory.EXPRESSION_STANDALONE
+
+
 def _call_generated_fn(
     *,
     fn: Callable[..., Any],
@@ -1718,14 +1729,10 @@ def execute_slot(
             write_dispatch_module(cache_dir, portal, sketch_library=sketch_library)
 
         # Run synchronously so script termination cannot drop the surface write.
-        # Skip for standalone semi(): there is no #> block to annotate, and rewriting
-        # the source inserts #< lines that shift line numbers -- which breaks the
-        # source-line template extraction (and therefore reuse) on the next call to
-        # the same call site.
-        if slot_spec.expected_category == SlotCategory.EXPRESSION_STANDALONE:
-            surface_overrides = {}
-        else:
+        if _should_surface_skeleton(slot_spec):
             surface_overrides = _surface_skeleton(slot_spec, entry) or {}
+        else:
+            surface_overrides = {}
         # Re-snapshot the slot region NOW so the commit captures the freshly
         # written #< surface lines in addition to the user's #> spec.
         try:

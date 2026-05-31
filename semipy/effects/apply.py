@@ -18,7 +18,13 @@ import hashlib
 from typing import Any, Optional
 
 from semipy.effects.capability import EffectRecorder
-from semipy.effects.models import EffectResult, EffectScript, LedgerEvent, compute_event_id
+from semipy.effects.models import (
+    EffectRefused,
+    EffectResult,
+    EffectScript,
+    LedgerEvent,
+    compute_event_id,
+)
 from semipy.effects.shadow import ShadowWorld
 from semipy.types import SemiCallError, SemiCallSite
 
@@ -144,10 +150,7 @@ def execute_effectful(
     reason = _verify_for_apply(script, config)
     if reason:
         world.discard_all()
-        raise SemiCallError(
-            f"semipy refused to auto-apply an unsafe effect: {reason}",
-            call_site=_call_site(slot_spec), prompt_preview=prompt_preview,
-        )
+        raise EffectRefused(reason, effect_script=script, call_site=_call_site(slot_spec))
 
     # Externalized/irreversible targets (API/email) cannot be rolled back: require
     # human approval before performing them. Atomic -- approve-all or apply-nothing,

@@ -39,6 +39,36 @@ EFFECT_INVARIANT_NAMES: tuple[str, ...] = (
 EventStatus = Literal["applied", "reverted", "shadow", "approval_pending"]
 
 
+class EffectRefused(Exception):
+    """Raised when the handler refuses to apply a reified effect.
+
+    Distinct from :class:`semipy.types.SemiCallError` (which means the generated
+    function itself raised): here the function ran fine, but its reified effect was
+    rejected at apply time -- unsafe (irreversible / unbounded / not provably
+    bounded) or not approved (an externalized target without consent). The refused
+    plan is carried for inspection, and the message states the reason plainly rather
+    than framing it as a code failure.
+    """
+
+    def __init__(self, reason: str, *, effect_script: Any = None, call_site: Any = None) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.effect_script = effect_script
+        self.call_site = call_site
+
+    def __str__(self) -> str:
+        msg = f"semipy refused to apply this effect: {self.reason}"
+        script = self.effect_script
+        if script is not None and not getattr(script, "is_empty", lambda: True)():
+            msg += f"\n  planned effect (not applied): {script.summary()}"
+        if self.call_site is not None:
+            where = getattr(self.call_site, "filename", "")
+            line = getattr(self.call_site, "lineno", 0)
+            if where:
+                msg += f"\n  at: {where}:{line}"
+        return msg
+
+
 def _stable_hash(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
