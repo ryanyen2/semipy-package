@@ -186,8 +186,13 @@ class MemoryArtifactBackend:
         return None
 
     def schema(self, target: str) -> Any:
-        # Stage 3 (SMT) populates ArtifactSchema; memory has no declared schema yet.
-        return None
+        # A table store is keyed by ``key_field``, so that field is a unique key.
+        from semipy.effects.schema import ArtifactSchema
+
+        store = self.stores.get(self._name(target))
+        if isinstance(store, dict):
+            return ArtifactSchema(target=target, unique_keys=[frozenset({self.key_field})])
+        return ArtifactSchema(target=target, unique_keys=[])
 
     def commit(self, shadow: MemoryShadow) -> None:
         self.stores[shadow.name] = shadow.working

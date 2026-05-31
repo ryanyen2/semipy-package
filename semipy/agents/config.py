@@ -95,6 +95,11 @@ class SemiConfig:
     effect_auto_apply: bool = False
     #: Externalized/irreversible targets (APIs, email) require approval before commit. (Stage 5)
     effect_require_approval_external: bool = True
+    #: Approval hook for externalized effects: ``callable(EffectScript) -> bool``. Receives the
+    #: planned (un-sent) effects so the caller can show "what I will do" and decide. ``None``
+    #: (default) means external effects are never auto-performed -- they stay planned (dry-run).
+    #: Runtime-only (not persisted).
+    effect_approval_callback: Optional[object] = None
     #: Cap on active effect cases executed per gate (latency / portal size).
     effect_max_cases: int = 25
     #: Run the LLM effect-case proposal pass (deterministic seeding always runs when staging). (Stage 4)

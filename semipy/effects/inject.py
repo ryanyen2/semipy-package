@@ -26,9 +26,9 @@ def fn_is_effectful(fn: Callable[..., Any]) -> bool:
 
 def make_recorder(
     provenance: Optional[dict[str, Any]] = None,
-    reader: Optional[Callable[..., Any]] = None,
+    world: Optional[Any] = None,
 ) -> EffectRecorder:
-    return EffectRecorder(provenance=provenance, reader=reader)
+    return EffectRecorder(provenance=provenance, world=world)
 
 
 def wrap_effect_result(recorder: EffectRecorder, value: Any, *, applied: bool = False,

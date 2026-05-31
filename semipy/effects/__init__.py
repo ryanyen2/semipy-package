@@ -21,8 +21,12 @@ from semipy.effects.backends import (
     scheme_of,
     unregister_artifact_backend,
 )
+from semipy.effects.backends.external import ExternalArtifactBackend
 from semipy.effects.backends.memory import MemoryArtifactBackend
+from semipy.effects.backends.sqlite import SqliteArtifactBackend
 from semipy.effects.capability import EffectRecorder
+from semipy.effects.compensate import revert, revert_ledger_event
+from semipy.effects.provenance import ProvenanceChain, provenance_for
 from semipy.effects.models import (
     DESTRUCTIVE_OPS,
     EFFECT_INVARIANT_NAMES,
@@ -53,9 +57,15 @@ __all__ = [
     "ArtifactBackend",
     "StateDelta",
     "MemoryArtifactBackend",
+    "SqliteArtifactBackend",
+    "ExternalArtifactBackend",
     "register_artifact_backend",
     "unregister_artifact_backend",
     "resolve_backend",
     "registered_schemes",
     "scheme_of",
+    "revert",
+    "revert_ledger_event",
+    "provenance_for",
+    "ProvenanceChain",
 ]

@@ -391,7 +391,14 @@ class SemiCallError(Exception):
     def __str__(self) -> str:
         lines = []
         cause = self.__cause__
-        what, fix = _interpret_semi_call_cause(cause) if cause else (str(self), "Fix the generated code or your prompt.")
+        # Use the raw message (super().__str__) when there is no underlying cause --
+        # calling str(self) here recurses infinitely (e.g. a deliberate refusal raised
+        # without a cause).
+        what, fix = (
+            _interpret_semi_call_cause(cause)
+            if cause
+            else (super().__str__(), "Fix the generated code or your prompt.")
+        )
 
         lines.append("SEMIPY: semi() failed at runtime. Fix your code or prompt in the file below.")
         lines.append("")

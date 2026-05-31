@@ -58,6 +58,34 @@ def _get_call_frame_and_site(depth: int = 2) -> tuple[Optional[inspect.FrameInfo
     return None, SemiCallSite(filename="<unknown>", lineno=0, func_qualname="")
 
 
+def _full_call_statement(filename: str, start_lineno: int, max_lines: int = 80) -> str:
+    """Return the full source of the (possibly multi-line) statement at ``start_lineno``.
+
+    ``linecache`` gives one physical line, but a ``semi(...)`` call often spans several
+    (a wrapped/implicitly-concatenated f-string). Accumulate lines until the statement
+    parses as a complete function body, so the f-string template and its interpolated
+    variables can be recovered (without this, multi-line and ``return semi(...)`` calls
+    silently lose their variables and bake the formatted data into the prompt).
+    """
+    import textwrap
+
+    lines: list[str] = []
+    for i in range(start_lineno, start_lineno + max_lines):
+        ln = linecache.getline(filename, i)
+        if not ln:
+            if i > start_lineno:
+                break
+            continue
+        lines.append(ln)
+        raw = "".join(lines)
+        try:
+            ast.parse("def _semi_w():\n" + textwrap.indent(textwrap.dedent(raw), "    "))
+            return textwrap.dedent(raw).strip()
+        except SyntaxError:
+            continue
+    return textwrap.dedent("".join(lines)).strip()
+
+
 def _extract_semi_template_from_source_line(
     *,
     source_line: str,
@@ -65,13 +93,20 @@ def _extract_semi_template_from_source_line(
     locals_ns: dict[str, Any],
 ) -> tuple[Optional[str], list[str], dict[str, Any]]:
     """
-    Extract a stable template + its formatted values from a single-line semi(...) call.
+    Extract a stable template + its formatted values from a semi(...) call's source.
+    Handles multi-line calls and statements like ``return semi(...)`` / assignments by
+    wrapping in a function body when a bare parse fails.
     Returns (spec_text_template, free_variable_keys, runtime_values).
     """
+    import textwrap
+
     try:
-        tree = ast.parse(source_line.strip())
+        tree: ast.AST = ast.parse(source_line.strip())
     except SyntaxError:
-        return None, [], {}
+        try:
+            tree = ast.parse("def _semi_w():\n" + textwrap.indent(textwrap.dedent(source_line), "    "))
+        except SyntaxError:
+            return None, [], {}
 
     semi_calls: list[ast.Call] = []
     for node in ast.walk(tree):
@@ -190,7 +225,7 @@ def _semi_standalone(prompt: str, *, expected_type: Any = None) -> Any:
     # Try to extract an f-string template from the actual call-site code.
     source_line = ""
     if filename and start_abs:
-        source_line = linecache.getline(filename, start_abs).strip()
+        source_line = _full_call_statement(filename, start_abs)
 
     extracted_spec_text, extracted_free_keys, extracted_runtime_values = _extract_semi_template_from_source_line(
         source_line=source_line,

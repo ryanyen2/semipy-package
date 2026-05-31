@@ -81,6 +81,7 @@ from semipy.types import (
     SemiCallSite,
     SlotCategory,
     SlotSpec,
+    ValidationResult,
     equivalence_key_from_stored_snapshot,
     session_id_from_filename,
     session_module_name_from_filename,
@@ -823,6 +824,174 @@ def _run_generate_contract_gate(
     return entry, ids, change_record_to_dict(change)
 
 
+def _run_generate_effect_gate(
+    slot: Any,
+    slot_spec: SlotSpec,
+    entry: Any,
+    generation_spec: Any,
+    resolution: Any,
+    runtime_values: dict[str, Any],
+    config: Any,
+    call_site: Any,
+) -> Any:
+    """Effect acceptance gate for a freshly generated/adapted effectful candidate.
+
+    Stages the candidate's EffectScript in a shadow over the current input and
+    runs the static effect-invariant checks (reversible + unbounded-blast-radius
+    guard). On violation, append the reason to the failure context and regenerate
+    up to ``effect_gate_max_retries`` -- the same control flow as the contract
+    gate. Pure (non-fx) candidates pass through untouched. Stage 1 is dry-run: the
+    shadow is always discarded; nothing is applied to the real artifact.
+    """
+    if not getattr(config, "effects_enabled", False):
+        return entry
+    if not getattr(config, "effect_gate", False):
+        return entry
+    try:
+        from semipy.effects.diff import compute_effect_state_diff
+        from semipy.effects.inject import fn_is_effectful
+        from semipy.effects.shadow import compile_source, run_effectful_source
+        from semipy.effects.verify import verify_static
+    except Exception:
+        return entry
+
+    ns = getattr(generation_spec, "execution_namespace", None) or None
+    fn = compile_source(entry.generated_source, ns)
+    if fn is None or not fn_is_effectful(fn):
+        return entry  # pure slot (or uncompilable -> the validator owns that)
+
+    free_vars = list(slot_spec.free_variables)
+    prov = {"slot_id": slot_spec.slot_id}
+    max_retries = int(getattr(config, "effect_gate_max_retries", 1))
+    block = bool(getattr(config, "effect_block_regressions", True))
+    blast = int(getattr(config, "effect_default_blast_radius", 1))
+    smt = bool(getattr(config, "effect_smt", False))
+    parent_sources = getattr(resolution, "parent_sources", None) or []
+    parent_source = parent_sources[0] if parent_sources else None
+
+    def _prove_bounded(script: Any) -> str | None:
+        """Schema-grounded forall-inputs blast-radius proof; returns a reason if unproven."""
+        try:
+            from semipy.effects.backends import resolve_backend
+            from semipy.effects.prove import prove_bounded_blast_radius
+
+            pr = prove_bounded_blast_radius(
+                script, lambda t: resolve_backend(t).schema(t)
+            )
+            return None if pr.status == "proved" else pr.detail
+        except Exception:
+            return None  # missing backend/schema -> defer to sample checks
+
+    def _assess(src: str) -> tuple[bool, str]:
+        """Return ``(ok, message)``: static invariants, optional forall-inputs proof,
+        and a blast-radius regression check."""
+        script, world, err = run_effectful_source(
+            src, free_variables=free_vars, runtime_values=runtime_values,
+            provenance=prov, namespace=ns,
+        )
+        world.discard_all()
+        if err is not None:
+            return False, f"effect execution error: {err}"
+        vr = verify_static(script)
+        if not vr.passed:
+            return False, vr.first_message()
+        if smt:
+            unproven = _prove_bounded(script)
+            if unproven:
+                return False, "Blast radius not provably bounded for all inputs: " + unproven
+        if block and parent_source:
+            sdiff = compute_effect_state_diff(
+                parent_source=parent_source, new_script=script,
+                free_variables=free_vars, runtime_values=runtime_values,
+                namespace=ns, provenance=prov, default_blast_radius=blast,
+            )
+            if sdiff.regression:
+                return False, sdiff.summary
+        return True, ""
+
+    ok, msg = _assess(entry.generated_source)
+    attempt = 0
+    while attempt < max_retries and not ok:
+        attempt += 1
+        if not msg:
+            break
+        base = generation_spec.verify_failure_context or ""
+        generation_spec.verify_failure_context = f"{base}\n{msg}".strip()
+        if config.verbose:
+            print_pipeline_log(
+                call_site,
+                "effect_gate",
+                f"Effect check failed; regenerating ({attempt}/{max_retries}). {msg[:120]}",
+            )
+        try:
+            entry = SemiAgent().generate(generation_spec)
+        except Exception:
+            break
+        ok, msg = _assess(entry.generated_source)
+
+    if not ok and config.verbose:
+        print_pipeline_log(
+            call_site,
+            "effect_gate",
+            f"Effect check still failing after budget; accepting candidate. {msg[:120]}",
+        )
+    return entry
+
+
+def _run_reuse_effect_gate(
+    slot: Any,
+    slot_spec: SlotSpec,
+    commit: Any,
+    runtime_values: dict[str, Any],
+    config: Any,
+    call_site: Any,
+) -> tuple[str | None, Any]:
+    """Effect gate for a reuse candidate: a reused effectful impl may emit an
+    invariant-violating script on a *new* input shape (e.g. a selector that is now
+    empty). Re-stage + verify over the current input; on violation return
+    ``(message, validation_result)`` so the caller forces ADAPT. Never raises."""
+    if not getattr(config, "effects_enabled", False):
+        return None, None
+    if not getattr(config, "effect_gate", False):
+        return None, None
+    try:
+        from semipy.effects.inject import fn_is_effectful
+        from semipy.effects.shadow import compile_source, run_effectful_source
+        from semipy.effects.verify import verify_static
+
+        src = getattr(commit, "generated_source", "") or ""
+        ns = _execution_namespace_for_generation(slot_spec.source_span[0])
+        fn = compile_source(src, ns)
+        if fn is None or not fn_is_effectful(fn):
+            return None, None
+        script, world, err = run_effectful_source(
+            src, free_variables=list(slot_spec.free_variables),
+            runtime_values=runtime_values, provenance={"slot_id": slot_spec.slot_id},
+            namespace=ns,
+        )
+        world.discard_all()
+        if err is not None:
+            return err, ValidationResult(
+                passed=False, ast_valid=True, type_correct=True, execution_ok=False,
+                error_message=err, failure_kind="execution_error",
+            )
+        vr = verify_static(script)
+        if vr.passed:
+            return None, None
+        msg = vr.first_message()
+        if config.verbose:
+            print_pipeline_log(
+                call_site, "effect_gate",
+                f"Reused effect violates an invariant on this input; adapting. {msg[:140]}",
+            )
+        return msg, ValidationResult(
+            passed=False, ast_valid=True, type_correct=False, execution_ok=True,
+            error_message=msg, failure_kind=vr.failures[0].failure_kind,
+        )
+    except Exception:
+        return None, None
+
+
 def _call_generated_fn(
     *,
     fn: Callable[..., Any],
@@ -831,33 +1000,34 @@ def _call_generated_fn(
     prompt_preview: str,
     generated_path: str,
     cache_dir: Path,
+    slot: Any = None,
+    commit: Any = None,
+    portal: Any = None,
 ) -> Any:
-    args = tuple(runtime_values.get(n) for n in slot_spec.free_variables)
-
-    # Effectful slot: inject the effect-recording ``fx`` capability and return a
-    # reified EffectResult instead of touching the world. Detection is inferred
-    # from the generated signature (an ``fx`` parameter), only when the effects
-    # subsystem is enabled. Pure slots take the unchanged path below.
+    # Effectful slot (its generated function declares an ``fx`` parameter): the
+    # effects subsystem owns execution -- it binds a shadow, runs with the recording
+    # ``fx``, and either commits + ledgers (auto-apply) or dry-runs. Pure slots take
+    # the unchanged in-process path below.
     effectful = False
     try:
-        from semipy.agents.config import get_config as _get_cfg
         from semipy.effects.inject import fn_is_effectful
 
-        if getattr(_get_cfg(), "effects_enabled", False):
+        if getattr(get_config(), "effects_enabled", False):
             effectful = fn_is_effectful(fn)
     except Exception:
         effectful = False
 
-    try:
-        if effectful:
-            from semipy.effects.inject import make_recorder, wrap_effect_result
+    if effectful:
+        from semipy.effects.apply import execute_effectful
 
-            recorder = make_recorder(provenance={"slot_id": slot_spec.slot_id})
-            value = invoke_slot(
-                fn, list(slot_spec.free_variables), args, extra_kwargs={"fx": recorder}
-            )
-            # Stage 0: dry-run only -- staging/gate/apply land in later stages.
-            return wrap_effect_result(recorder, value, applied=False)
+        return execute_effectful(
+            fn=fn, slot_spec=slot_spec, runtime_values=runtime_values, config=get_config(),
+            slot=slot, commit=commit, portal=portal, cache_dir=cache_dir,
+            prompt_preview=prompt_preview, generated_path=generated_path,
+        )
+
+    args = tuple(runtime_values.get(n) for n in slot_spec.free_variables)
+    try:
         return invoke_slot(fn, list(slot_spec.free_variables), args)
     except Exception as e:
         err = SemiCallError(
@@ -1027,6 +1197,9 @@ def execute_slot(
                     prompt_preview=slot_spec.spec_text,
                     generated_path=str(dispatch_path),
                     cache_dir=cache_dir,
+                    slot=slot,
+                    commit=commit,
+                    portal=portal,
                 )
             except SemiCallError as e:
                 cause = e.__cause__
@@ -1175,6 +1348,16 @@ def execute_slot(
                             _verify_failure_msg = _c_msg
                             _post_reuse_validation = _c_val
                             force_regenerate = True
+                        # Effect gate: a reused effectful impl may emit an
+                        # invariant-violating script on this input shape.
+                        if not force_regenerate:
+                            _e_msg, _e_val = _run_reuse_effect_gate(
+                                slot, slot_spec, commit, runtime_values, config, call_site
+                            )
+                            if _e_msg is not None:
+                                _verify_failure_msg = _e_msg
+                                _post_reuse_validation = _e_val
+                                force_regenerate = True
                         # Then run semantic check if threshold crossed to catch
                         # implementations that are type-correct but semantically
                         # inadequate for new input patterns.
@@ -1184,7 +1367,21 @@ def execute_slot(
                             _check_intent_judge_pre_filters(slot, commit.commit_id)
                             if _adaptive and not force_regenerate else (False, [])
                         )
-                        _run_check = (not force_regenerate) and (
+                        # The semantic judge evaluates whether the impl's OUTPUT fits
+                        # the intent; an effectful slot returns an EffectScript, not a
+                        # domain value, so the judge would misfire and force ADAPT on
+                        # every reuse. Reuse verification for effectful slots is owned
+                        # by the effect gate (already run above), so skip the judge here.
+                        _is_effectful_reuse = False
+                        try:
+                            from semipy.effects.inject import fn_is_effectful
+
+                            _is_effectful_reuse = (
+                                getattr(config, "effects_enabled", False) and fn_is_effectful(fn)
+                            )
+                        except Exception:
+                            _is_effectful_reuse = False
+                        _run_check = (not force_regenerate) and (not _is_effectful_reuse) and (
                             _should_semantic_check(slot, commit.commit_id, config) or (
                                 _adaptive and _pre_filter_triggered
                             )
@@ -1307,6 +1504,9 @@ def execute_slot(
                             prompt_preview=slot_spec.spec_text,
                             generated_path=str(dispatch_path),
                             cache_dir=cache_dir,
+                            slot=slot,
+                            commit=commit,
+                            portal=portal,
                         )
                     except SemiCallError as e:
                         cause = e.__cause__
@@ -1396,6 +1596,14 @@ def execute_slot(
     # carried-forward prior decisions before commit (enforces "don't forget"), and its
     # behavior diff vs the parent is recorded as the change's traced effect.
     entry, _gate_quarantine_ids, _change_record = _run_generate_contract_gate(
+        slot, slot_spec, entry, generation_spec, resolution, runtime_values,
+        config, _call_site_from_slot(slot_spec),
+    )
+
+    # Effect acceptance gate: for an effectful candidate, stage its EffectScript in
+    # a shadow and enforce the effect invariants (reversible + bounded blast radius)
+    # before commit, regenerating on violation. No-op for pure slots.
+    entry = _run_generate_effect_gate(
         slot, slot_spec, entry, generation_spec, resolution, runtime_values,
         config, _call_site_from_slot(slot_spec),
     )
@@ -1510,7 +1718,14 @@ def execute_slot(
             write_dispatch_module(cache_dir, portal, sketch_library=sketch_library)
 
         # Run synchronously so script termination cannot drop the surface write.
-        surface_overrides = _surface_skeleton(slot_spec, entry) or {}
+        # Skip for standalone semi(): there is no #> block to annotate, and rewriting
+        # the source inserts #< lines that shift line numbers -- which breaks the
+        # source-line template extraction (and therefore reuse) on the next call to
+        # the same call site.
+        if slot_spec.expected_category == SlotCategory.EXPRESSION_STANDALONE:
+            surface_overrides = {}
+        else:
+            surface_overrides = _surface_skeleton(slot_spec, entry) or {}
         # Re-snapshot the slot region NOW so the commit captures the freshly
         # written #< surface lines in addition to the user's #> spec.
         try:
@@ -1589,6 +1804,9 @@ def execute_slot(
         prompt_preview=slot_spec.spec_text,
         generated_path=str(dispatch_path),
         cache_dir=cache_dir,
+        slot=slot,
+        commit=commit,
+        portal=portal,
     )
 
     if dep_graph is not None:

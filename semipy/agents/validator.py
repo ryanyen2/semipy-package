@@ -762,6 +762,23 @@ def verify_runtime_execution(
     # Use the function's own __globals__ as the TypeAdapter namespace so user-defined
     # types that were seeded into the dispatch module's exec namespace are resolvable.
     fn_globals = getattr(fn, "__globals__", None)
+
+    # A reused effectful function declares an ``fx`` parameter and needs a bound
+    # shadow world for its reads to return real data. The standard verify can supply
+    # neither, so skip it here -- the reuse effect gate (_run_reuse_effect_gate)
+    # re-runs the function against a real shadow and verifies the effect invariants.
+    try:
+        from semipy.agents.config import get_config
+        from semipy.effects.inject import fn_is_effectful
+
+        if getattr(get_config(), "effects_enabled", False) and fn_is_effectful(fn):
+            return ValidationResult(
+                passed=True, ast_valid=True, type_correct=True, execution_ok=True,
+                error_message="",
+            )
+    except Exception:
+        pass
+
     return _validate_basic_execution(
         fn=fn,
         expected_type=expected_type,

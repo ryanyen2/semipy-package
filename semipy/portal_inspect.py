@@ -83,3 +83,24 @@ def print_portal_resolution_summary(*, cache_dir: Path, session_anchor: str) -> 
                 print("  change: " + " | ".join(bits))
         except Exception:
             pass
+
+        # Effect ledger: applied/reverted counts + provenance for the latest event.
+        try:
+            from semipy.effects.ledger import get_ledger
+            from semipy.effects.provenance import provenance_for
+
+            ledger = get_ledger(sl)
+            if ledger.events:
+                print(
+                    f"  ledger={len(ledger.applied())} applied / "
+                    f"{len(ledger.reverted())} reverted"
+                )
+                chain = provenance_for(sl)
+                if chain is not None:
+                    line = f"  last effect: {', '.join(chain.targets) or '(none)'} " \
+                           f"[{chain.status}] by commit {chain.origin_commit_id[:8]}"
+                    if chain.reason:
+                        line += f"  why={chain.reason.splitlines()[0][:80]!r}"
+                    print(line)
+        except Exception:
+            pass

@@ -111,6 +111,10 @@ class Slot:
     # kept as a plain dict here so the history layer stays dependency-light. Empty
     # for slots that predate the contract subsystem.
     contract: dict[str, Any] = field(default_factory=dict)
+    # Serialized EffectLedger (dict): the append-only log of real-world effects this
+    # slot's implementations have applied, with materialized compensations for revert.
+    # Owned by semipy.effects; a plain dict here. Empty for pure slots / legacy portals.
+    ledger: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

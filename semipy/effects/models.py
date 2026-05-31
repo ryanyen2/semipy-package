@@ -148,6 +148,17 @@ class EffectResult:
         state = "applied" if self.applied else "planned"
         return f"<EffectResult {state}: {self.effect_script.summary()}>"
 
+    def revert(self) -> int:
+        """Undo these effects in-hand by replaying their materialized compensations.
+
+        Returns the number of compensations applied. Works whether or not the
+        effects were auto-applied (a planned, never-applied result reverts to a
+        no-op against the current state).
+        """
+        from semipy.effects.compensate import revert as _revert
+
+        return _revert(self)
+
 
 @dataclass
 class EffectInvariant:

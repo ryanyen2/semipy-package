@@ -45,8 +45,11 @@ _LAZY: dict[str, tuple[str, str]] = {
     "EffectRecorder": ("semipy.effects", "EffectRecorder"),
     "ArtifactBackend": ("semipy.effects", "ArtifactBackend"),
     "MemoryArtifactBackend": ("semipy.effects", "MemoryArtifactBackend"),
+    "SqliteArtifactBackend": ("semipy.effects", "SqliteArtifactBackend"),
     "register_artifact_backend": ("semipy.effects", "register_artifact_backend"),
     "resolve_backend": ("semipy.effects", "resolve_backend"),
+    "revert": ("semipy.effects", "revert"),
+    "provenance_for": ("semipy.effects", "provenance_for"),
 }
 
 
@@ -99,6 +102,9 @@ __all__ = [
     "EffectRecorder",
     "ArtifactBackend",
     "MemoryArtifactBackend",
+    "SqliteArtifactBackend",
     "register_artifact_backend",
     "resolve_backend",
+    "revert",
+    "provenance_for",
 ]
