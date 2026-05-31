@@ -44,6 +44,9 @@ from semipy.store import load_portal, save_portal
 
 # Builtin types whose name survives the subprocess gist and is safe to pin.
 _SAFE_TYPE_NAMES = {"str", "int", "float", "bool", "list", "dict", "tuple"}
+# Scalar types with no meaningful notion of emptiness — a non_empty case on these
+# is vacuous (always passes), so it is not seeded.
+_SCALAR_TYPE_NAMES = {"int", "float", "bool", "complex", "NoneType"}
 _IDENTITY_MIN_LEN = 9
 _MAX_SEED_PATTERNS = 8
 
@@ -182,8 +185,10 @@ def _seed_invariants(
                 origin_commit_id=commit_id,
             )
 
-        # non_empty: the new impl produced a non-empty result here.
-        if not rec.get("is_empty"):
+        # non_empty: only meaningful for types that *can* be empty (str/containers).
+        # For scalars (int/float/bool/None) emptiness is undefined — is_empty is
+        # always False, so the case would be vacuous. Skip it there.
+        if out_type not in _SCALAR_TYPE_NAMES and not rec.get("is_empty"):
             cases.append(_mk("non_empty"))
         # non_identity: string output that transforms a sufficiently long string input.
         if (

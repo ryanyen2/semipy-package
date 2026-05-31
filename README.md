@@ -18,6 +18,13 @@ def parse_log_line(line: str) -> dict:
 row = parse_log_line('127.0.0.1 - - [10/Oct/2000:13:55:36] "GET /index.html" 200')
 ```
 
+## Concepts
+
+For the idea behind `semipy` — semi-formal programming, where part of a program's
+specification stays informal and only commits to an implementation when it is first
+used — and how the pieces fit together, see
+[docs/semi-formal-programming.md](docs/semi-formal-programming.md).
+
 ## Install
 
 ```bash
