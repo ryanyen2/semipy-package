@@ -191,7 +191,8 @@ class _SemiFx:
 def build_and_run_gist(source, invocation_code=""):
     \"\"\"Execute a candidate function and return a result dict.
 
-    source: complete function definition (def fn(...): ...)
+    source: a STRING containing one complete function definition (def fn(...): ...);
+            it is run via exec(), so pass the def as text, not as a live object.
     invocation_code: Python expression calling the function, e.g. 'fn_name("test input")'
     Returns dict with: success (bool), result (repr str or None), error (str or None)
 
@@ -278,13 +279,16 @@ SYSTEM_PROMPT = """You generate a Python function that implements a user's seman
      read_upstream()                    -> list  parent source when adapting (ADAPT only)
      build_and_run_gist(source, invoc)  -> dict  test a function; returns {success, result, error}
 
-2. In the action program: call profile_slot() when you need to inspect the data, call
-   read_upstream() when adapting, define and test your candidate via build_and_run_gist,
-   then end with: print(_json.dumps({"gist_result": <result>}))
+2. In the action program: assign your candidate to a STRING variable named `source`
+   (a single complete `def ...`). Optionally call profile_slot() / read_upstream()
+   first, then test it with build_and_run_gist(source, invocation_code) -- where
+   invocation_code is a call expression that names YOUR function and passes a real
+   test input. End the program with: print(_json.dumps({"gist_result": <result>}))
 
-3. Return a CommitmentRecord with:
+3. Return your answer as the CommitmentRecord structured output -- NOT a prose reply
+   and NOT a fenced code block. Put the function text in generated_source:
    - generated_source: the exact function source that passed build_and_run_gist
-   - goal: ≤ 12 words saying what the function produces (used for trace)
+   - goal: <= 12 words saying what the function produces (used for trace)
    - rejected_alternatives: brief notes on alternatives tried (optional)
    - annotations: leave this as an empty list. It is a deprecated field retained
      for backward compatibility; the steering surface is synthesised separately.
@@ -302,29 +306,40 @@ SYSTEM_PROMPT = """You generate a Python function that implements a user's seman
 
 ## Action program example
 
+`source` is a STRING that build_and_run_gist runs via exec(); invocation_code calls
+the function defined inside it BY NAME. The function name is your choice -- only the
+name used in invocation_code has to match the `def`.
+
 ```python
-ctx = profile_slot()
+ctx = profile_slot()  # inspect observed input values/shapes when useful
 
-def classify_body(self, body):
-    text = "" if body is None else str(body).strip()
-    lower = text.lower()
-    if "scoreboard" in lower or "jk2_init" in lower:
-        return {"family": "jk_child_scoreboard"}
-    if "workerenv" in lower and "error" in lower:
-        return {"family": "jk_worker_env_error"}
-    return {"family": "unknown"}
+source = '''
+def to_value(raw):
+    text = "" if raw is None else str(raw).strip()
+    if not text:
+        return None
+    # real, data-agnostic logic driven by the spec goes here
+    return text
+'''
 
-gist = build_and_run_gist(
-    source,
-    "classify_body(None, 'jk2_init() Found child 1 in scoreboard slot 2')"
-)
+# invocation_code names the function above and passes a real test input.
+gist = build_and_run_gist(source, "to_value('  example  ')")
 print(_json.dumps({"gist_result": gist}))
 ```
 
 ## Notes
 
-- If build_and_run_gist fails, fix and call execute_action_program again.
-- Do not hardcode observed sample values as constants — implement for all possible inputs.
+- `source` is a STRING holding one complete `def`. Do NOT define the candidate as
+  live code in the action program and pass a bare `source` name -- that is a NameError.
+- invocation_code is a call expression on that function name with test inputs. With an
+  empty invocation the gist only defines the function (result is None) and tests nothing.
+- If build_and_run_gist fails (or result is None when you expected a value), fix the
+  `source` string or invocation_code and call execute_action_program again.
+- STATEMENT_BLOCK slots (the user prompt says when one applies): the function returns a
+  dict keyed by the output_names, e.g. {"result": value}, not a bare value.
+- Do not hardcode observed sample values as constants -- implement for all possible inputs.
+- Do not use keyword/substring match lists or fixed pattern tables; drive logic from the
+  spec and the profiled data.
 - Do not use emoji or docstrings.
 """
 

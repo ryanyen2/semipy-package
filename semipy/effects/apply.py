@@ -159,12 +159,15 @@ def execute_effectful(
         config, "effect_require_approval_external", True
     ):
         callback = getattr(config, "effect_approval_callback", None)
-        approved = False
-        if callable(callback):
-            try:
-                approved = bool(callback(script))
-            except Exception:
-                approved = False
+        if not callable(callback):
+            # No mechanism to obtain consent for a non-reversible external effect:
+            # leave it planned rather than performing it unapproved.
+            world.discard_all()
+            return result
+        # A callback that RAISES is a bug in the approval mechanism, not a denial.
+        # Do not swallow it as "denied" -- that silently drops the effect with no
+        # diagnostic. Let it surface; denial is expressed by returning a falsy value.
+        approved = bool(callback(script))
         if not approved:
             world.discard_all()
             return result  # left planned (applied=False) -- the dry-run "what I will do"

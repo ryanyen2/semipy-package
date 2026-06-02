@@ -152,3 +152,65 @@ def test_scan_informal_specs_semi_call():
     """)
     specs = scan_informal_specs(source, "test.py", "classify", 1)
     assert any(s.expected_category == SlotCategory.EXPRESSION for s in specs)
+
+
+# --- placeholder-return idiom: ``result = <placeholder>; #> ...; return result`` ---
+# A variable initialized to a trivial placeholder only so the skeleton parses, then
+# read after the #> block, is the block's OUTPUT -- not a pre-existing input. It must
+# not be subtracted away as "defined before" (which yielded output_names=[] and made
+# the slot a side-effect block that must return None).
+
+def test_scan_placeholder_return_is_output():
+    source = textwrap.dedent("""\
+        def parse_invoice(raw_text):
+            result = None
+            #> extract the vendor and total in cents from {raw_text}
+            return result
+    """)
+    specs = scan_informal_specs(
+        source, "test.py", "parse_invoice", 1,
+        type_hints={"raw_text": str, "return": dict},
+    )
+    assert len(specs) == 1
+    s = specs[0]
+    assert s.expected_category == SlotCategory.STATEMENT_BLOCK
+    assert s.output_names == ["result"]
+    assert "result" not in s.free_variables  # the output is not also an input
+    assert s.free_variables == ["raw_text"]
+
+
+def test_scan_placeholder_variants_and_return_type():
+    for init, ret in [("''", str), ("0", int), ("[]", list), ("{}", dict), ("bytearray()", bytes)]:
+        source = textwrap.dedent(f"""\
+            def f(x):
+                out = {init}
+                #> compute out from {{x}}
+                return out
+        """)
+        specs = scan_informal_specs(source, "test.py", "f", 1, type_hints={"x": str, "return": ret})
+        assert specs[0].output_names == ["out"], init
+        assert specs[0].expected_type is ret, init
+
+
+def test_scan_side_effect_block_stays_empty():
+    # No placeholder var read after the block -> genuinely a side-effect block.
+    source = textwrap.dedent("""\
+        def log_it(x):
+            #> write x to the telemetry sink
+            return None
+    """)
+    specs = scan_informal_specs(source, "test.py", "log_it", 1, type_hints={"x": str, "return": type(None)})
+    assert specs[0].output_names == []
+
+
+def test_scan_returned_real_value_not_hijacked_as_output():
+    # ``x`` carries a real computed value before the block: it is a genuine input the
+    # block consumes, not the block's output. Do not force it to an output.
+    source = textwrap.dedent("""\
+        def f(a):
+            x = compute(a)
+            #> adjust x according to policy
+            return x
+    """)
+    specs = scan_informal_specs(source, "test.py", "f", 1, type_hints={"a": str, "return": str})
+    assert specs[0].output_names == []

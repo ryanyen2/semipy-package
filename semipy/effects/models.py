@@ -139,6 +139,12 @@ class EffectScript:
 
     effects: list[Effect] = field(default_factory=list)
 
+    def __len__(self) -> int:
+        return len(self.effects)
+
+    def __iter__(self):
+        return iter(self.effects)
+
     def is_empty(self) -> bool:
         return not self.effects
 

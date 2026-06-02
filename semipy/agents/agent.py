@@ -567,7 +567,12 @@ class SemiAgent:
             "  fx.call(target, payload)              # opaque external call (API)\n"
             "Prefer the narrowest selector (e.g. a unique key) so the change touches the "
             "fewest records. End the function with `return fx.script`. If the request only "
-            "computes a value, do NOT add `fx` -- just return the value."
+            "computes a value, do NOT add `fx` -- just return the value.\n"
+            "When you add `fx`, this is an effectful function: `return fx.script` and IGNORE "
+            "any return-type, STATEMENT_BLOCK dict-shape, or output-name contract stated "
+            "elsewhere in this prompt -- the effect is recorded through `fx`, not returned as "
+            "data. Do NOT import, define, or construct EffectResult/EffectScript yourself; "
+            "the runtime wraps `fx.script` for you."
         )
 
     def _build_named_user_prompt(self, spec: GenerationSpec) -> str:
@@ -609,7 +614,9 @@ class SemiAgent:
             base,
             "\n\nPrevious attempt failed validation:",
             result.error_message,
-            "\n\nFix the function and output a corrected version in a ```python block.",
+            "\n\nFix the issue and return a corrected CommitmentRecord with `generated_source` "
+            "set to the fixed function (test it with build_and_run_gist first). "
+            "Do not reply with prose or a fenced code block -- return the structured output.",
         ]
         if last_source.strip():
             parts.insert(

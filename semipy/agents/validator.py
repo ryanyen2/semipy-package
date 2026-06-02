@@ -26,6 +26,14 @@ def _should_use_typeadapter_for_expected_type(expected_type: Any) -> bool:
     origin = get_origin(expected_type)
     if origin in (dict,):
         return False
+    # Effect-system return types are not data to validate: an effectful slot records
+    # its effect via ``fx`` and returns ``fx.script``; the framework wraps it in an
+    # EffectResult. Imposing a dict/TypeAdapter contract on these types contradicts the
+    # effects path and makes the model construct/validate them by hand.
+    mod = getattr(expected_type, "__module__", "") or ""
+    name = getattr(expected_type, "__name__", "") or ""
+    if mod.startswith("semipy.effects") and name in ("EffectResult", "EffectScript"):
+        return False
     return True
 
 

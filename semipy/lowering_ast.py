@@ -503,6 +503,52 @@ def _call_target_names_in_stmts(stmts: list[ast.stmt]) -> set[str]:
     return out
 
 
+def _is_placeholder_value(node: ast.AST | None) -> bool:
+    """True when ``node`` is a trivial "empty of its type" initializer.
+
+    These are placeholders a user writes so the skeleton parses before the ``#>``
+    block fills them in (``result = None``, ``acc = []``, ``out = {}``,
+    ``total = 0``, ``buf = bytearray()``), not real inputs carrying data.
+    """
+    if isinstance(node, ast.Constant):
+        v = node.value
+        if v is True:
+            return False
+        return v is None or v is False or v == "" or v == b"" or v == 0
+    if isinstance(node, (ast.List, ast.Tuple)) and not node.elts:
+        return True
+    if isinstance(node, ast.Dict) and not node.keys:
+        return True
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        return (
+            node.func.id in ("list", "dict", "set", "tuple", "frozenset", "bytearray", "bytes")
+            and not node.args
+            and not node.keywords
+        )
+    return False
+
+
+def _placeholder_init_names(
+    fn_def: ast.FunctionDef | ast.AsyncFunctionDef,
+    upto_rel_lineno: int,
+) -> set[str]:
+    """Top-level names whose last binding before ``upto_rel_lineno`` is a placeholder.
+
+    A reassignment to a non-placeholder value clears the name: it now carries real
+    data and is a genuine input, not a slot output. Annotation-only declarations
+    (``result: Invoice``) are placeholders too.
+    """
+    state: dict[str, bool] = {}
+    for stmt in fn_def.body:
+        if (getattr(stmt, "lineno", 0) or 0) > upto_rel_lineno:
+            break
+        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
+            state[stmt.targets[0].id] = _is_placeholder_value(stmt.value)
+        elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+            state[stmt.target.id] = stmt.value is None or _is_placeholder_value(stmt.value)
+    return {name for name, is_ph in state.items() if is_ph}
+
+
 def _infer_output_names_for_statement_block(
     fn_def: ast.FunctionDef | ast.AsyncFunctionDef,
     block_end_rel_lineno: int,
@@ -543,4 +589,15 @@ def _infer_output_names_for_statement_block(
     out = [n for n in out if n not in ("True", "False", "None")]
     if exclude_names:
         out = [n for n in out if n not in exclude_names]
+    if not out:
+        # Canonical idiom: ``result = <placeholder>; #> ...; return result``. The
+        # placeholder var was excluded above as "defined before", but a name
+        # initialized only to make the skeleton parse, then read after the block
+        # (e.g. ``return result``), is the block's OUTPUT, not a real input.
+        placeholders = _placeholder_init_names(fn_def, block_end_rel_lineno)
+        cand = sorted((loaded & placeholders) - assigned)
+        cand = [n for n in cand if n not in ("True", "False", "None")]
+        if exclude_names:
+            cand = [n for n in cand if n not in exclude_names]
+        out = cand
     return out
