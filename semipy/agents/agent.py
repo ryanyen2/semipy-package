@@ -582,6 +582,12 @@ class SemiAgent:
             return None
         if _is_jupyter():
             return JupyterStreamPeek(get_console(), STREAM_PEEK_LINES)
+        # The rolling peek is a Rich Live region: it only animates on a real
+        # terminal. Piped / CI / captured output cannot redraw in place, so the
+        # Live would just emit a frozen, half-rendered panel. Fall back to the
+        # plain transient lines (reasoning, tool intents, receipt) instead.
+        if not get_console().is_terminal:
+            return None
         view = GenerationStreamView(
             get_console(),
             STREAM_PEEK_LINES,
@@ -634,7 +640,10 @@ class SemiAgent:
         prompt = user_prompt_override if user_prompt_override is not None else self._build_user_prompt(spec)
         agent = get_semi_agent()
 
-        if (self.verbose or pipeline_trace) and stream_sink is None:
+        # Only echo the raw "invoking LLM" beat under pipeline trace -- in normal
+        # verbose runs the resolver's "Implementing code (attempt N/M)" line and
+        # the tool intents already narrate this, so this would just be noise.
+        if pipeline_trace and stream_sink is None:
             decision = spec.decision if spec.decision is not None else Decision.GENERATE
             get_console().print(
                 f"[dim][semipy][/] Invoking LLM | decision=[cyan]{decision.value}[/]"

@@ -1,11 +1,16 @@
 import type { Range, TextEditor, TextEditorDecorationType } from "vscode";
 import { Position, Range as VsRange, window } from "vscode";
+import { parseSteeringLine } from "../steering/reasoningSteering";
 
 export type SpecCommentSyntaxTypes = {
   specMarker: TextEditorDecorationType;
   specBody: TextEditorDecorationType;
   reasoningMarker: TextEditorDecorationType;
   reasoningBody: TextEditorDecorationType;
+  /** Tint for the `key:` token on a #< provenance line (goal/because/alt/given). */
+  reasoningKeyProvenance: TextEditorDecorationType;
+  /** Tint for the `key:` token on a #< effect line (commits/verified/yields). */
+  reasoningKeyEffect: TextEditorDecorationType;
 };
 
 /**
@@ -32,6 +37,16 @@ export function createSpecCommentSyntaxTypes(): SpecCommentSyntaxTypes {
     reasoningBody: window.createTextEditorDecorationType({
       light: { color: "#3d6b2e" },
       dark: { color: "#b5cea8" },
+    }),
+    reasoningKeyProvenance: window.createTextEditorDecorationType({
+      fontWeight: "600",
+      light: { color: "#4a6fa5" },
+      dark: { color: "#7fa6d8" },
+    }),
+    reasoningKeyEffect: window.createTextEditorDecorationType({
+      fontWeight: "600",
+      light: { color: "#8a6a2a" },
+      dark: { color: "#d7a65f" },
     }),
   };
 }
@@ -89,6 +104,8 @@ export function refreshSpecCommentSyntaxDecorations(
     editor.setDecorations(types.specBody, []);
     editor.setDecorations(types.reasoningMarker, []);
     editor.setDecorations(types.reasoningBody, []);
+    editor.setDecorations(types.reasoningKeyProvenance, []);
+    editor.setDecorations(types.reasoningKeyEffect, []);
     return;
   }
 
@@ -96,6 +113,8 @@ export function refreshSpecCommentSyntaxDecorations(
   const specB: Range[] = [];
   const reasM: Range[] = [];
   const reasB: Range[] = [];
+  const keyProv: Range[] = [];
+  const keyEff: Range[] = [];
 
   const n = editor.document.lineCount;
   for (let lineIdx = 0; lineIdx < n; lineIdx++) {
@@ -109,12 +128,23 @@ export function refreshSpecCommentSyntaxDecorations(
       reasM.push(r.marker);
       reasB.push(r.body);
     }
+    // Zone tint on the `key:` token of a structured #< line.
+    const steer = parseSteeringLine(line);
+    if (steer) {
+      const r = new VsRange(
+        new Position(lineIdx, steer.keyStart),
+        new Position(lineIdx, steer.keyEnd),
+      );
+      (steer.zone === "provenance" ? keyProv : keyEff).push(r);
+    }
   }
 
   editor.setDecorations(types.specMarker, specM);
   editor.setDecorations(types.specBody, specB);
   editor.setDecorations(types.reasoningMarker, reasM);
   editor.setDecorations(types.reasoningBody, reasB);
+  editor.setDecorations(types.reasoningKeyProvenance, keyProv);
+  editor.setDecorations(types.reasoningKeyEffect, keyEff);
 }
 
 export function disposeSpecCommentSyntaxTypes(types: SpecCommentSyntaxTypes): void {
@@ -122,4 +152,6 @@ export function disposeSpecCommentSyntaxTypes(types: SpecCommentSyntaxTypes): vo
   types.specBody.dispose();
   types.reasoningMarker.dispose();
   types.reasoningBody.dispose();
+  types.reasoningKeyProvenance.dispose();
+  types.reasoningKeyEffect.dispose();
 }

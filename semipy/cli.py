@@ -142,6 +142,43 @@ def cmd_rewind_spec(portal_path: Path, slot_id: str, commit_id: str) -> None:
     )
 
 
+def cmd_revert_effect(portal_path: Path, slot_id: str, event_id: str) -> None:
+    """Durably revert an applied effect: replay its stored compensations and append
+    a ``reverted`` event to the ledger (append-only audit trail), then persist."""
+    from semipy.effects.compensate import revert_ledger_event
+
+    portal, cache_dir = _load_portal_explicit(portal_path)
+    slot = portal.slots.get(slot_id)
+    if slot is None:
+        raise SystemExit(f"unknown slot_id {slot_id!r}")
+    try:
+        count = revert_ledger_event(slot, event_id)
+    except KeyError as exc:
+        raise SystemExit(str(exc))
+    save_portal(cache_dir, portal)
+    sys.stdout.write(
+        f"semipy revert-effect: replayed {count} compensation(s) for event "
+        f"{event_id[:8]} on slot {slot_id[:8]}.\n"
+    )
+
+
+def cmd_quarantine_cases(portal_path: Path, slot_id: str, case_ids: str) -> None:
+    """Relax (quarantine) the named contract cases: keep them for audit but stop
+    enforcing them. Used by the editor's 'Relax guarantee' action."""
+    from semipy.contract.access import quarantine_cases
+
+    portal, cache_dir = _load_portal_explicit(portal_path)
+    slot = portal.slots.get(slot_id)
+    if slot is None:
+        raise SystemExit(f"unknown slot_id {slot_id!r}")
+    ids = [c.strip() for c in case_ids.split(",") if c.strip()]
+    if not ids:
+        raise SystemExit("no case-ids given")
+    quarantine_cases(slot, ids, "relaxed from editor")
+    save_portal(cache_dir, portal)
+    sys.stdout.write(f"semipy quarantine-cases: relaxed {len(ids)} case(s) on slot {slot_id[:8]}.\n")
+
+
 def cmd_diagnostics(cache_dir: Path) -> None:
     path = _diagnostics_path(cache_dir)
     entries = _read_entries(path)
@@ -179,6 +216,16 @@ def main(argv: list[str] | None = None) -> None:
     prw.add_argument("--slot-id", required=True)
     prw.add_argument("--commit-id", required=True)
 
+    pre = sub.add_parser("revert-effect", help="Revert an applied effect by replaying its compensations")
+    pre.add_argument("--portal", type=Path, required=True)
+    pre.add_argument("--slot-id", required=True)
+    pre.add_argument("--event-id", required=True)
+
+    pq = sub.add_parser("quarantine-cases", help="Relax (quarantine) contract cases by id")
+    pq.add_argument("--portal", type=Path, required=True)
+    pq.add_argument("--slot-id", required=True)
+    pq.add_argument("--case-ids", required=True, help="comma-separated case ids")
+
     pd = sub.add_parser("diagnostics", help="Print diagnostics.json entries")
     pd.add_argument("--portal", type=Path, required=True)
 
@@ -194,6 +241,10 @@ def main(argv: list[str] | None = None) -> None:
         cmd_rollback(Path(args.portal), args.slot_id, args.commit_id)
     elif args.cmd == "rewind-spec":
         cmd_rewind_spec(Path(args.portal), args.slot_id, args.commit_id)
+    elif args.cmd == "revert-effect":
+        cmd_revert_effect(Path(args.portal), args.slot_id, args.event_id)
+    elif args.cmd == "quarantine-cases":
+        cmd_quarantine_cases(Path(args.portal), args.slot_id, args.case_ids)
     elif args.cmd == "diagnostics":
         cmd_diagnostics(Path(args.portal).parent)
     else:

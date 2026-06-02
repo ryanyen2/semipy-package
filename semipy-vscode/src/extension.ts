@@ -1,9 +1,12 @@
 import * as path from "path";
 import type { ExtensionContext, TextEditor } from "vscode";
 import {
+  Position,
+  Range,
   RelativePattern,
   StatusBarAlignment,
   Uri,
+  WorkspaceEdit,
   commands,
   languages,
   window,
@@ -15,7 +18,28 @@ import {
   createOpacityDecorationTypes,
   refreshOpacityDecorations,
 } from "./features/commentOpacity/opacityDecorations";
-import { SignFlipCoordinator } from "./features/commentOpacity/signFlipListener";
+import {
+  createDispatchOpacityType,
+  refreshDispatchOpacity,
+} from "./features/commentOpacity/dispatchOpacity";
+import {
+  SignFlipCoordinator,
+  rewriteReasoningPrefixToSpec,
+} from "./features/commentOpacity/signFlipListener";
+import { activeCommitFromPortalSlot } from "./features/splitEditor/portalCommit";
+import {
+  createGutterHealthTypes,
+  disposeGutterHealthTypes,
+  refreshGutterHealth,
+} from "./features/health/gutterHealth";
+import { computeSlotInsight } from "./features/intelligence/slotInsight";
+import { createSlotInsightHoverProvider } from "./features/intelligence/slotInsightHoverProvider";
+import { RegressionDiagnosticManager } from "./features/health/regressionDiagnostics";
+import {
+  createSteeringCodeActionProvider,
+  createSteeringHoverProvider,
+} from "./features/steering/reasoningSteering";
+import { runSteeringModesQuickPick } from "./features/steering/modesControl";
 import { createPhraseHoverProvider } from "./features/phraseHighlight/phraseHoverProvider";
 import {
   createPhraseDecorationTypes,
@@ -146,9 +170,16 @@ export function activate(context: ExtensionContext): void {
   const cfg = () => workspace.getConfiguration("semipy");
 
   const opacityTypes = createOpacityDecorationTypes();
+  const dispatchDimType = createDispatchOpacityType();
   const phraseTypes = createPhraseDecorationTypes();
   const specSyntaxTypes = createSpecCommentSyntaxTypes();
+  const gutterTypes = createGutterHealthTypes(context.extensionPath);
+  const regressionDiag = new RegressionDiagnosticManager();
   const debounceMs = () => cfg().get<number>("debounceMs") ?? 200;
+
+  /** Active head commit per slot, to detect "what just happened" on portal reload. */
+  const lastHeads = new Map<string, string>();
+  let headsSeeded = false;
 
   // const signFlip = false;
   const signFlip = new SignFlipCoordinator(
@@ -180,6 +211,12 @@ export function activate(context: ExtensionContext): void {
   const status = window.createStatusBarItem(StatusBarAlignment.Left, 100);
   status.command = "semipy.refreshHistory";
 
+  const modes = window.createStatusBarItem(StatusBarAlignment.Left, 99);
+  modes.text = "$(settings) Semipy";
+  modes.tooltip = "Semipy steering — enable contract / effect gates (scaffolds configure(...))";
+  modes.command = "semipy.steeringModes";
+  modes.show();
+
   function refreshAllDecorations(editor: TextEditor | undefined): void {
     if (!editor) {
       return;
@@ -194,6 +231,18 @@ export function activate(context: ExtensionContext): void {
       editor.setDecorations(specSyntaxTypes.specBody, []);
       editor.setDecorations(specSyntaxTypes.reasoningMarker, []);
       editor.setDecorations(specSyntaxTypes.reasoningBody, []);
+      editor.setDecorations(specSyntaxTypes.reasoningKeyProvenance, []);
+      editor.setDecorations(specSyntaxTypes.reasoningKeyEffect, []);
+    }
+    if (cfg().get<boolean>("enableGutterHealth") ?? true) {
+      refreshGutterHealth(editor, portalState.portal, gutterTypes);
+    } else {
+      refreshGutterHealth(editor, undefined, gutterTypes);
+    }
+    if (cfg().get<boolean>("dimGeneratedCode") ?? true) {
+      refreshDispatchOpacity(editor, dispatchDimType);
+    } else {
+      editor.setDecorations(dispatchDimType, []);
     }
     refreshPhraseDecorations(
       editor,
@@ -210,6 +259,85 @@ export function activate(context: ExtensionContext): void {
     codeLensProvider.refresh();
     inlayProvider.refresh();
     linked.onSelectionOrPortal(editor, portalState.portal, cacheDir);
+    if (cfg().get<boolean>("notifyOnResolution") ?? true) {
+      regressionDiag.refresh(editor, portalState.portal);
+    } else {
+      regressionDiag.clear();
+    }
+  }
+
+  /** Focus the slot in the slot-history tree (the persistent "inspector"). */
+  async function revealSlot(slotId: string): Promise<void> {
+    const ed = window.activeTextEditor;
+    if (ed) {
+      refreshPortalForUri(ed.document.uri.fsPath, portalState);
+    }
+    tree.refresh();
+    const el = tree.slotElement(slotId);
+    if (!el) {
+      void window.showWarningMessage("Semipy: that slot is not in the current portal.");
+      return;
+    }
+    try {
+      await treeView.reveal(el, { select: true, focus: true, expand: 2 });
+    } catch {
+      /* tree view may not be ready; ignore */
+    }
+  }
+
+  /**
+   * On portal reload, surface "what just happened": which slots gained a new head
+   * commit. Subtle (status-bar message) for clean changes; a toast only when a
+   * regression / blocked effect needs attention. Seeds silently on first load.
+   */
+  function notifyResolutionChanges(portal: PortalJson | undefined): void {
+    if (!portal || !(cfg().get<boolean>("notifyOnResolution") ?? true)) {
+      return;
+    }
+    const seenNow = new Map<string, string>();
+    const changed: SlotJson[] = [];
+    for (const slot of Object.values(portal.slots)) {
+      const commit = activeCommitFromPortalSlot(slot);
+      if (!commit) {
+        continue;
+      }
+      seenNow.set(slot.slot_id, commit.commit_id);
+      const prev = lastHeads.get(slot.slot_id);
+      if (headsSeeded && prev !== undefined && prev !== commit.commit_id) {
+        changed.push(slot);
+      }
+    }
+    lastHeads.clear();
+    for (const [k, v] of seenNow) {
+      lastHeads.set(k, v);
+    }
+    headsSeeded = true;
+    for (const slot of changed) {
+      const insight = computeSlotInsight(slot);
+      if (!insight) {
+        continue;
+      }
+      const fn = slot.slot_spec?.enclosing_function_qualname || slot.function_name_base || "slot";
+      if (insight.health === "danger") {
+        const n = insight.change?.unintended ?? 0;
+        void window
+          .showWarningMessage(
+            `Semipy ${insight.decision} ${fn} — ${n} unintended regression${n === 1 ? "" : "s"}.`,
+            "Inspect",
+          )
+          .then((pick) => {
+            if (pick === "Inspect") {
+              void revealSlot(slot.slot_id);
+            }
+          });
+      } else {
+        const guarantee = insight.contract.active ? ` · ${insight.contract.active} guarantee(s) hold` : "";
+        window.setStatusBarMessage(
+          `$(sparkle) Semipy ${insight.glyph} ${insight.decision} ${fn}${guarantee}`,
+          6000,
+        );
+      }
+    }
   }
 
   const opacitySub = subscribeOpacityWrapper(opacityTypes, debounceMs, refreshAllDecorations);
@@ -218,6 +346,10 @@ export function activate(context: ExtensionContext): void {
     getSemipyOutputChannel(),
     treeView,
     status,
+    modes,
+    { dispose: () => disposeGutterHealthTypes(gutterTypes) },
+    { dispose: () => dispatchDimType.dispose() },
+    regressionDiag,
     { dispose: () => disposeSpecCommentSyntaxTypes(specSyntaxTypes) },
     opacitySub,
     signFlip.attach(),
@@ -250,19 +382,178 @@ export function activate(context: ExtensionContext): void {
         () => workspace.workspaceFolders?.map((w) => w.uri.fsPath) ?? [],
       ),
     ),
+    languages.registerHoverProvider(
+      { language: "python", scheme: "file" },
+      createSlotInsightHoverProvider(
+        () => portalState.portal,
+        () => cfg().get<boolean>("enableInsightHover") ?? true,
+      ),
+    ),
+    languages.registerHoverProvider(
+      { language: "python", scheme: "file" },
+      createSteeringHoverProvider(),
+    ),
+    languages.registerCodeActionsProvider(
+      { language: "python", scheme: "file" },
+      createSteeringCodeActionProvider(),
+    ),
+    commands.registerCommand("semipy.steeringModes", () => runSteeringModesQuickPick()),
+    commands.registerCommand("semipy.inspectSlot", (slotId: string) => {
+      if (slotId) {
+        void revealSlot(slotId);
+      }
+    }),
+    commands.registerCommand(
+      "semipy.relaxGuarantee",
+      async (item: { slot?: SlotJson; guarantee?: { label?: string; caseIds?: string[] } }) => {
+        const slotId = item?.slot?.slot_id;
+        const caseIds = item?.guarantee?.caseIds ?? [];
+        if (!slotId || caseIds.length === 0) {
+          void window.showWarningMessage("Semipy: nothing to relax for this guarantee.");
+          return;
+        }
+        const ed = window.activeTextEditor;
+        if (ed) {
+          refreshPortalForUri(ed.document.uri.fsPath, portalState);
+        }
+        const root = portalState.workspaceRoot;
+        const portalPath = portalState.portalPath;
+        if (!root || !portalPath) {
+          void window.showErrorMessage("Semipy: no portal for relax.");
+          return;
+        }
+        const ok = await window.showWarningMessage(
+          `Relax guarantee "${item.guarantee?.label}"? It will be quarantined (kept for audit, no longer enforced) across ${caseIds.length} input pattern(s).`,
+          { modal: true },
+          "Relax",
+        );
+        if (ok !== "Relax") {
+          return;
+        }
+        const rel = path.relative(root, portalPath);
+        const r = await runSemipyCli(
+          ["quarantine-cases", "--portal", rel, "--slot-id", slotId, "--case-ids", caseIds.join(",")],
+          root,
+        );
+        if (r.code !== 0 && r.code !== null) {
+          void window.showErrorMessage(
+            `Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "relax failed")}`,
+          );
+          return;
+        }
+        void window.showInformationMessage((r.stdout || r.stderr || "Guarantee relaxed.").trim().slice(0, 200));
+        refreshAllDecorations(window.activeTextEditor);
+      },
+    ),
+    commands.registerCommand("semipy.viewActiveCode", async (slotId: string) => {
+      const ed = window.activeTextEditor;
+      const fsPath = ed?.document.uri.fsPath;
+      const portalPath =
+        (fsPath && findPortalJsonPathForEditor(fsPath, sessionSourceOpts())) || portalState.portalPath;
+      const portal = portalPath ? loadPortalJson(portalPath) : portalState.portal;
+      const slot = portal?.slots[slotId];
+      const commit = slot ? activeCommitFromPortalSlot(slot) : undefined;
+      const src = commit?.generated_source;
+      if (!slot || !commit || !src) {
+        void window.showWarningMessage("Semipy: no active implementation found for this slot.");
+        return;
+      }
+      await viewGeneratedCode(slotId, commit.commit_id, src);
+    }),
+    commands.registerCommand("semipy.revertEffectTreeItem", (item: { slot?: SlotJson; event?: { event_id?: string } }) => {
+      if (item?.slot?.slot_id && item.event?.event_id) {
+        return commands.executeCommand("semipy.revertEffect", item.slot.slot_id, item.event.event_id);
+      }
+      return undefined;
+    }),
+    commands.registerCommand("semipy.revertEffect", async (slotId: string, eventId: string) => {
+      const ed = window.activeTextEditor;
+      if (ed) {
+        refreshPortalForUri(ed.document.uri.fsPath, portalState);
+      }
+      const root = portalState.workspaceRoot;
+      const portalPath = portalState.portalPath;
+      if (!root || !portalPath || !slotId || !eventId) {
+        void window.showErrorMessage("Semipy: no portal / event for revert.");
+        return;
+      }
+      const ok = await window.showWarningMessage(
+        `Revert this applied effect? semipy will replay its stored compensations (exact inverse of what was done).`,
+        { modal: true },
+        "Revert",
+      );
+      if (ok !== "Revert") {
+        return;
+      }
+      const rel = path.relative(root, portalPath);
+      const r = await runSemipyCli(
+        ["revert-effect", "--portal", rel, "--slot-id", slotId, "--event-id", eventId],
+        root,
+      );
+      if (r.code !== 0 && r.code !== null) {
+        void window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "revert failed")}`);
+        return;
+      }
+      void window.showInformationMessage((r.stdout || r.stderr || "Effect reverted.").trim().slice(0, 300));
+      refreshAllDecorations(window.activeTextEditor);
+    }),
+    commands.registerCommand("semipy.promoteReasoningLine", async (uriArg: Uri | string, line0: number) => {
+      const uri = typeof uriArg === "string" ? Uri.parse(uriArg) : uriArg;
+      const doc = await workspace.openTextDocument(uri);
+      if (line0 < 0 || line0 >= doc.lineCount) {
+        return;
+      }
+      const line = doc.lineAt(line0);
+      const fixed = rewriteReasoningPrefixToSpec(line.text);
+      if (fixed === null || fixed === line.text) {
+        void window.showInformationMessage("Semipy: that line is not an inferred (#<) note.");
+        return;
+      }
+      const edit = new WorkspaceEdit();
+      edit.replace(uri, line.range, fixed);
+      await workspace.applyEdit(edit);
+      window.setStatusBarMessage("$(pin) Semipy: pinned as contract (#>) — re-run to honour it.", 5000);
+    }),
+    commands.registerCommand("semipy.dismissReasoningLine", async (uriArg: Uri | string, line0: number) => {
+      const uri = typeof uriArg === "string" ? Uri.parse(uriArg) : uriArg;
+      const doc = await workspace.openTextDocument(uri);
+      if (line0 < 0 || line0 >= doc.lineCount) {
+        return;
+      }
+      const start = new Position(line0, 0);
+      const end =
+        line0 + 1 < doc.lineCount ? new Position(line0 + 1, 0) : doc.lineAt(line0).range.end;
+      const edit = new WorkspaceEdit();
+      edit.delete(uri, new Range(start, end));
+      await workspace.applyEdit(edit);
+    }),
     registerCommitTextProvider(),
     commands.registerCommand("semipy.noop", () => { }),
     commands.registerCommand("semipy.showOutput", () => {
       getSemipyOutputChannel().show(true);
     }),
     commands.registerCommand("semipy.openSplitView", async () => {
+      // Resolve a portal even when no text editor is focused -- e.g. when invoked
+      // from the Slot Inspector webview, window.activeTextEditor is undefined.
       const ed = window.activeTextEditor;
-      if (!ed) {
-        return;
+      if (ed) {
+        refreshPortalForUri(ed.document.uri.fsPath, portalState);
       }
-      refreshPortalForUri(ed.document.uri.fsPath, portalState);
       if (!portalState.portal || !portalState.portalCacheDir) {
-        void window.showWarningMessage("Semipy: no portal for this file.");
+        for (const v of window.visibleTextEditors) {
+          if (v.document.languageId !== "python") {
+            continue;
+          }
+          refreshPortalForUri(v.document.uri.fsPath, portalState);
+          if (portalState.portal) {
+            break;
+          }
+        }
+      }
+      if (!portalState.portal || !portalState.portalCacheDir) {
+        void window.showWarningMessage(
+          "Semipy: no portal resolved. Focus the Python file that owns this slot, then try again.",
+        );
         return;
       }
       await openDispatchSplitView(portalState.portalCacheDir, portalState.portal.module_name);
@@ -431,6 +722,7 @@ export function activate(context: ExtensionContext): void {
     signFlip.seedDocument(ed0.document);
   }
   refreshAllDecorations(ed0);
+  notifyResolutionChanges(portalState.portal); // seed head map silently
 
   if (workspace.workspaceFolders?.length) {
     const wf = workspace.workspaceFolders[0]!.uri.fsPath;
@@ -442,6 +734,7 @@ export function activate(context: ExtensionContext): void {
       timer = setTimeout(() => {
         timer = undefined;
         refreshAllDecorations(window.activeTextEditor);
+        notifyResolutionChanges(portalState.portal);
       }, debounceMs());
     };
     const wPortal = workspace.createFileSystemWatcher(new RelativePattern(wf, "**/*.portal.json"));

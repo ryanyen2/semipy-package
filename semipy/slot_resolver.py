@@ -534,8 +534,7 @@ def _run_sketch_binding_extraction(
         if binding is None:
             if get_config().verbose:
                 print(
-                    "[semipy] Sketch library: no binding extracted "
-                    "(model unavailable, parse failure, or empty response).",
+                    "  Pattern learning: no reusable pattern from this generation.",
                     file=sys.stderr,
                 )
             return
@@ -546,10 +545,8 @@ def _run_sketch_binding_extraction(
         )
         if not is_clear:
             if cfg.verbose:
-                reason = reject_reason or (binding.clarity_reason or "unclear alignment")
                 print(
-                    f"[semipy] Sketch library: skipping pattern "
-                    f"(spec<->code relationship unclear: {reason}).",
+                    "  Pattern learning: skipped (no confident reusable pattern).",
                     file=sys.stderr,
                 )
             return
@@ -574,7 +571,7 @@ def _run_sketch_binding_extraction(
         if get_config().verbose:
             import sys
 
-            print(f"[semipy] Sketch library: extraction failed: {ex}", file=sys.stderr)
+            print(f"  Pattern learning: extraction failed ({ex}).", file=sys.stderr)
 
 
 def _schedule_sketch_binding_extraction(

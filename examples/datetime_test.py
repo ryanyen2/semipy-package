@@ -19,7 +19,10 @@ configure(
 
 @semiformal
 def infer_datetime_formatter(date_str: str) -> str:
-    input_pattern = ...  # > infer the input date regex/strptime pattern from the observed string format in this session.
+    #> intent: Infer strptime pattern for observed date strings
+    #< by: probing regex-gated date-format candidates; because observed strings select unambiguous strptime patterns
+    #< unless: empty input returns default slash-date pattern
+    input_pattern = ...  #> infer the input date regex/strptime pattern from the observed string format in this session.
     output_pattern = "%b %Y"
     return datetime.strptime(str(date_str), input_pattern).strftime(output_pattern)  # type: ignore[return-value]
 

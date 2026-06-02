@@ -5,6 +5,51 @@ export interface CommitSourceSnapshotJson {
   source_file?: string;
 }
 
+/** One before -> after entry recorded by effect-diff on GENERATE/ADAPT. */
+export interface ChangeDiffEntryJson {
+  input_fingerprint?: string;
+  input_repr?: string;
+  old_repr?: string;
+  new_repr?: string;
+  /** true when on the triggering input (or the parent was already wrong here). */
+  intended?: boolean;
+}
+
+/** Why a regeneration happened and what its effect was (Commit.change_record). */
+export interface ChangeRecordJson {
+  reason?: string;
+  triggering_input_fingerprint?: string;
+  decision?: string;
+  parent_commit_id?: string;
+  unintended_count?: number;
+  n_compared?: number;
+  effect_diff?: ChangeDiffEntryJson[];
+}
+
+/** One steering value, with whether the user has frozen it (promoted to #>). */
+export interface SteeringValueJson {
+  value?: string;
+  input_sig?: string;
+  user_frozen?: boolean;
+}
+
+/** Structured #< surface: provenance (goal/because/alt/given) + effect (commits/verified/yields). */
+export interface SteeringJson {
+  goal?: SteeringValueJson;
+  because?: SteeringValueJson;
+  alt?: SteeringValueJson;
+  given?: SteeringValueJson | SteeringValueJson[];
+  commits?: SteeringValueJson;
+  verified?: SteeringValueJson;
+  yields?: SteeringValueJson;
+  [key: string]: SteeringValueJson | SteeringValueJson[] | undefined;
+}
+
+export interface CommitmentRecordJson {
+  steering?: SteeringJson;
+  [key: string]: unknown;
+}
+
 export interface CommitJson {
   commit_id: string;
   parent_ids: string[];
@@ -14,6 +59,74 @@ export interface CommitJson {
   decision: string;
   binding_id?: string;
   source_snapshot?: CommitSourceSnapshotJson;
+  change_record?: ChangeRecordJson;
+  commitment_record?: CommitmentRecordJson;
+  runtime_input_fingerprint?: string;
+}
+
+// --- Behavioral contract (why/effect of changes) --------------------------
+
+export type ContractCaseKind = "example" | "invariant" | "metamorphic";
+export type ContractCaseStatus = "active" | "superseded" | "quarantined";
+
+export interface ContractCaseJson {
+  case_id: string;
+  kind: ContractCaseKind;
+  input_sample?: Record<string, unknown>;
+  input_fingerprint?: string;
+  expected_repr?: string;
+  expected_type?: string;
+  invariant?: string;
+  relation?: string;
+  relation_param?: Record<string, unknown>;
+  reason?: string;
+  effect?: string;
+  decision?: string;
+  origin_commit_id?: string;
+  created_ts?: number;
+  updated_ts?: number;
+  status?: ContractCaseStatus;
+  superseded_by?: string;
+  supersede_reason?: string;
+}
+
+export interface SlotContractJson {
+  version?: number;
+  cases?: Record<string, ContractCaseJson>;
+}
+
+// --- Effects (reified real-world effects) ---------------------------------
+
+export type EffectOp = "create" | "read" | "update" | "delete" | "append" | "call";
+export type LedgerEventStatus = "applied" | "reverted" | "shadow" | "approval_pending";
+
+export interface EffectJson {
+  op: EffectOp;
+  target: string;
+  payload?: Record<string, unknown>;
+  selector?: Record<string, unknown> | null;
+  compensation?: EffectJson | null;
+  provenance?: Record<string, unknown>;
+  effect_id?: string;
+}
+
+export interface LedgerEventJson {
+  event_id: string;
+  slot_id?: string;
+  origin_commit_id?: string;
+  invocation_id?: string;
+  applied_effects?: EffectJson[];
+  compensations?: EffectJson[];
+  artifact_snapshot_ref?: string;
+  contract_case_ids?: string[];
+  status?: LedgerEventStatus;
+  timestamp?: number;
+  parent_event_id?: string;
+}
+
+export interface EffectLedgerJson {
+  version?: number;
+  events?: LedgerEventJson[];
 }
 
 export interface BranchJson {
@@ -29,6 +142,10 @@ export interface SlotSpecJson {
   enclosing_function_span?: [string, number, number];
   enclosing_function_qualname?: string;
   expected_category?: string;
+  expected_type?: string;
+  free_variables?: string[];
+  output_names?: string[] | null;
+  spec_equivalence_key?: string;
   [key: string]: unknown;
 }
 
@@ -41,6 +158,12 @@ export interface SlotJson {
   refs: Record<string, string>;
   default_branch: string;
   slot_spec?: SlotSpecJson | null;
+  /** Behavioral contract (why/effect of changes); {} on portals predating contracts. */
+  contract?: SlotContractJson;
+  /** Append-only effect ledger; {} on portals predating effects. */
+  ledger?: EffectLedgerJson;
+  advisor_state?: Record<string, unknown>;
+  input_observation_samples?: Record<string, string[]>;
 }
 
 export interface PortalJson {

@@ -735,6 +735,7 @@ class GenerationProgress:
                 source_link=_call_site_file_url(cs.filename, cs.lineno),
                 path_link=_file_link_url(path),
             )
+            console.print("[dim]  -> its guarantees are on hover in the editor[/]")
         elif self._result == "success":
             source = ""
             source_link = None
@@ -749,6 +750,7 @@ class GenerationProgress:
                 source_link=source_link,
                 path_link=path_link,
             )
+            console.print("[dim]  -> hover the spec in your editor for why, guarantees, and effects[/]")
         elif self._result == "failure":
             source = ""
             source_link = None

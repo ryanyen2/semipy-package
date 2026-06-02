@@ -34,8 +34,8 @@ __export(extension_exports, {
   deactivate: () => deactivate
 });
 module.exports = __toCommonJS(extension_exports);
-var path8 = __toESM(require("path"));
-var import_vscode16 = require("vscode");
+var path10 = __toESM(require("path"));
+var import_vscode22 = require("vscode");
 
 // src/data/portalLoader.ts
 var fs = __toESM(require("fs"));
@@ -108,9 +108,9 @@ function portalReferencesEditorPath(portal, editorFsPath) {
   return false;
 }
 function resolvePortalAnchorSourcePath(actualFilename) {
-  const env = (process.env.SEMIPY_SESSION_SOURCE || "").trim();
-  if (env) {
-    return path.resolve(env);
+  const env2 = (process.env.SEMIPY_SESSION_SOURCE || "").trim();
+  if (env2) {
+    return path.resolve(env2);
   }
   const norm = actualFilename.replace(/\\/g, "/").toLowerCase();
   if (norm.includes("ipykernel")) {
@@ -239,9 +239,9 @@ function findPortalJsonPathForEditor(sourceFilePath, opts) {
   if (fromSettings) {
     pushId(() => sessionIdFromFilename(path.resolve(fromSettings)));
   }
-  const env = (process.env.SEMIPY_SESSION_SOURCE || "").trim();
-  if (env) {
-    pushId(() => sessionIdFromFilename(path.resolve(env)));
+  const env2 = (process.env.SEMIPY_SESSION_SOURCE || "").trim();
+  if (env2) {
+    pushId(() => sessionIdFromFilename(path.resolve(env2)));
   }
   pushId(() => sessionIdFromFilename(resolvePortalAnchorSourcePath(sourceFilePath)));
   pushId(() => sessionIdFromFilename(parentDir));
@@ -342,6 +342,85 @@ function refreshOpacityDecorations(editor, reasoningDim) {
     }
   }
   editor.setDecorations(reasoningDim, reasoning);
+}
+
+// src/features/commentOpacity/dispatchOpacity.ts
+var fs2 = __toESM(require("fs"));
+var path2 = __toESM(require("path"));
+var import_vscode2 = require("vscode");
+function createDispatchOpacityType() {
+  return import_vscode2.window.createTextEditorDecorationType({ isWholeLine: true, opacity: "0.5" });
+}
+function isDispatchFile(fsPath) {
+  const norm = fsPath.replace(/\\/g, "/");
+  return /\/runtime\/[^/]+\.semi\.py$/.test(norm);
+}
+function loadPortalForDispatch(fsPath) {
+  const moduleName = path2.basename(fsPath).replace(/\.semi\.py$/, "");
+  const cacheDir = path2.dirname(path2.dirname(fsPath));
+  let entries;
+  try {
+    entries = fs2.readdirSync(cacheDir).filter((f) => f.endsWith(".portal.json"));
+  } catch {
+    return void 0;
+  }
+  for (const f of entries) {
+    try {
+      const p = JSON.parse(fs2.readFileSync(path2.join(cacheDir, f), "utf8"));
+      if (p.module_name === moduleName) {
+        return p;
+      }
+    } catch {
+    }
+  }
+  return void 0;
+}
+function committedLineSet(portal) {
+  const set = /* @__PURE__ */ new Set();
+  for (const slot of Object.values(portal.slots)) {
+    for (const commit of Object.values(slot.commits || {})) {
+      const src = commit.generated_source || "";
+      for (const raw of src.split(/\r?\n/)) {
+        const t = raw.trim();
+        if (t) {
+          set.add(t);
+        }
+      }
+    }
+  }
+  return set;
+}
+function isGeneratedLine(text, committed) {
+  const t = text.trim();
+  if (!t) {
+    return true;
+  }
+  if (t.startsWith("#")) {
+    return true;
+  }
+  return committed.has(t);
+}
+function refreshDispatchOpacity(editor, dimType) {
+  const fsPath = editor.document.uri.fsPath;
+  if (!isDispatchFile(fsPath)) {
+    editor.setDecorations(dimType, []);
+    return;
+  }
+  const portal = loadPortalForDispatch(fsPath);
+  if (!portal) {
+    editor.setDecorations(dimType, []);
+    return;
+  }
+  const committed = committedLineSet(portal);
+  const dim = [];
+  const n = editor.document.lineCount;
+  for (let i = 0; i < n; i++) {
+    const text = editor.document.lineAt(i).text;
+    if (isGeneratedLine(text, committed)) {
+      dim.push(new import_vscode2.Range(i, 0, i, 0));
+    }
+  }
+  editor.setDecorations(dimType, dim);
 }
 
 // node_modules/diff/lib/index.mjs
@@ -449,11 +528,11 @@ Diff.prototype = {
       }
     }
   },
-  addToPath: function addToPath(path9, added, removed, oldPosInc) {
-    var last = path9.lastComponent;
+  addToPath: function addToPath(path11, added, removed, oldPosInc) {
+    var last = path11.lastComponent;
     if (last && last.added === added && last.removed === removed) {
       return {
-        oldPos: path9.oldPos + oldPosInc,
+        oldPos: path11.oldPos + oldPosInc,
         lastComponent: {
           count: last.count + 1,
           added,
@@ -463,7 +542,7 @@ Diff.prototype = {
       };
     } else {
       return {
-        oldPos: path9.oldPos + oldPosInc,
+        oldPos: path11.oldPos + oldPosInc,
         lastComponent: {
           count: 1,
           added,
@@ -511,7 +590,7 @@ Diff.prototype = {
   tokenize: function tokenize(value) {
     return value.split("");
   },
-  join: function join2(chars) {
+  join: function join3(chars) {
     return chars.join("");
   }
 };
@@ -699,7 +778,7 @@ arrayDiff.join = arrayDiff.removeEmpty = function(value) {
 };
 
 // src/features/commentOpacity/signFlipListener.ts
-var import_vscode2 = require("vscode");
+var import_vscode3 = require("vscode");
 function splitLines(text) {
   const t = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   if (t === "") {
@@ -747,7 +826,7 @@ var SignFlipCoordinator = class {
   previousText = /* @__PURE__ */ new Map();
   applying = /* @__PURE__ */ new Set();
   attach() {
-    const sub = import_vscode2.workspace.onDidChangeTextDocument((e) => this.onChange(e));
+    const sub = import_vscode3.workspace.onDidChangeTextDocument((e) => this.onChange(e));
     return {
       dispose: () => sub.dispose()
     };
@@ -757,7 +836,7 @@ var SignFlipCoordinator = class {
       return;
     }
     const uriKey = e.document.uri.toString();
-    if (e.reason === import_vscode2.TextDocumentChangeReason.Undo || e.reason === import_vscode2.TextDocumentChangeReason.Redo) {
+    if (e.reason === import_vscode3.TextDocumentChangeReason.Undo || e.reason === import_vscode3.TextDocumentChangeReason.Redo) {
       this.previousText.set(uriKey, e.document.getText());
       return;
     }
@@ -789,7 +868,7 @@ var SignFlipCoordinator = class {
     if (flips.length === 0) {
       return;
     }
-    const edit = new import_vscode2.WorkspaceEdit();
+    const edit = new import_vscode3.WorkspaceEdit();
     for (const line1 of flips) {
       if (line1 < 1 || line1 > e.document.lineCount) {
         continue;
@@ -805,7 +884,7 @@ var SignFlipCoordinator = class {
       return;
     }
     this.applying.add(uriKey);
-    void import_vscode2.workspace.applyEdit(edit).then(
+    void import_vscode3.workspace.applyEdit(edit).then(
       (ok) => {
         this.applying.delete(uriKey);
         if (ok) {
@@ -871,110 +950,6 @@ function collectFlipLineNumbers1Based(before, after) {
   return out;
 }
 
-// src/features/phraseHighlight/phraseHoverProvider.ts
-var import_vscode3 = require("vscode");
-var import_vscode4 = require("vscode");
-
-// src/data/sketchLoader.ts
-var fs2 = __toESM(require("fs"));
-var path2 = __toESM(require("path"));
-function sketchLibraryPath(cacheDir) {
-  return path2.join(cacheDir, "sketch_library.json");
-}
-function loadSketchLibraryFile(p) {
-  try {
-    const raw = fs2.readFileSync(p, "utf8");
-    return JSON.parse(raw);
-  } catch {
-    return void 0;
-  }
-}
-function loadSketchLibraryMerged(cacheDir, workspaceRoots) {
-  const merged = { version: 1, sketches: {}, bindings: {} };
-  let any = false;
-  const absorb = (lib) => {
-    if (!lib) {
-      return;
-    }
-    any = true;
-    Object.assign(merged.bindings ||= {}, lib.bindings || {});
-    Object.assign(merged.sketches ||= {}, lib.sketches || {});
-    if (lib.version !== void 0) {
-      merged.version = lib.version;
-    }
-  };
-  absorb(loadSketchLibraryFile(sketchLibraryPath(cacheDir)));
-  const scanDir = (dir) => {
-    let names;
-    try {
-      names = fs2.readdirSync(dir);
-    } catch {
-      return;
-    }
-    for (const name of names) {
-      if (!name.startsWith(".semiformal")) {
-        continue;
-      }
-      const sub = path2.join(dir, name);
-      let isDir = false;
-      try {
-        isDir = fs2.statSync(sub).isDirectory();
-      } catch {
-        continue;
-      }
-      if (!isDir) {
-        continue;
-      }
-      absorb(loadSketchLibraryFile(path2.join(sub, "sketch_library.json")));
-    }
-  };
-  for (const root of workspaceRoots ?? []) {
-    scanDir(root);
-    let entries;
-    try {
-      entries = fs2.readdirSync(root, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const ent of entries) {
-      if (!ent.isDirectory() || ent.name.startsWith(".")) {
-        continue;
-      }
-      scanDir(path2.join(root, ent.name));
-    }
-  }
-  return any ? merged : void 0;
-}
-function bindingById(lib, bindingId) {
-  if (!lib?.bindings || !bindingId) {
-    return void 0;
-  }
-  return lib.bindings[bindingId];
-}
-function resolveBindingIdForCommit(lib, commitId, explicitBindingId) {
-  const e = (explicitBindingId || "").trim();
-  if (e) {
-    return e;
-  }
-  if (!lib?.sketches || !commitId) {
-    return void 0;
-  }
-  for (const sk of Object.values(lib.sketches)) {
-    if (!sk || typeof sk !== "object") {
-      continue;
-    }
-    const ids = sk.source_commit_ids || [];
-    if (!ids.includes(commitId)) {
-      continue;
-    }
-    const bid = (sk.binding_id || "").trim();
-    if (bid) {
-      return bid;
-    }
-  }
-  return void 0;
-}
-
 // src/features/splitEditor/portalCommit.ts
 var LOCK_REF = "__locked__";
 function activeCommitFromPortalSlot(slot) {
@@ -1006,6 +981,10 @@ function activeCommitFromPortalSlot(slot) {
   }
   return candidates.reduce((a, b) => a.timestamp >= b.timestamp ? a : b);
 }
+
+// src/features/health/gutterHealth.ts
+var path4 = __toESM(require("path"));
+var import_vscode4 = require("vscode");
 
 // src/features/splitEditor/correspondenceMap.ts
 var path3 = __toESM(require("path"));
@@ -1113,765 +1092,6 @@ function dispatchRangeForSlot(portal, slotId, portalCacheDir) {
   };
 }
 
-// src/features/phraseHighlight/phraseHoverProvider.ts
-function createPhraseHoverProvider(getPortal, getPortalCacheDir, getWorkspaceRoots) {
-  return {
-    provideHover(document, pos) {
-      if (document.languageId !== "python") {
-        return void 0;
-      }
-      const portal = getPortal();
-      const cacheDir = getPortalCacheDir();
-      if (!portal || !cacheDir) {
-        return void 0;
-      }
-      const line1 = pos.line + 1;
-      const fullText = document.getText();
-      const lineText = document.lineAt(pos.line).text;
-      const specRegion = hashArrowSpecSuffixFromLine(lineText);
-      if (!specRegion || pos.character < specRegion.baseCol) {
-        return void 0;
-      }
-      const lib = loadSketchLibraryMerged(cacheDir, getWorkspaceRoots());
-      const suffix = specRegion.suffix;
-      const rel = pos.character - specRegion.baseCol;
-      const lowerSuffix = suffix.toLowerCase();
-      for (const slot of Object.values(portal.slots)) {
-        const head = activeCommitFromPortalSlot(slot);
-        const cid = head?.commit_id || "";
-        const bid = resolveBindingIdForCommit(lib, cid, head?.binding_id) || "";
-        if (!bid) {
-          continue;
-        }
-        const binding = bindingById(lib, bid);
-        if (!binding?.phrases?.length) {
-          continue;
-        }
-        const block = resolveSourceBlockRange(fullText, slot);
-        if (!block || line1 < block.startLine1 || line1 > block.endLine1) {
-          continue;
-        }
-        const sorted = [...binding.phrases].sort((x, y) => y.text.length - x.text.length);
-        for (const p of sorted) {
-          const t = (p.text || "").trim();
-          if (!t) {
-            continue;
-          }
-          const tl = t.toLowerCase();
-          let idx = 0;
-          while (idx <= lowerSuffix.length) {
-            const at = lowerSuffix.indexOf(tl, idx);
-            if (at < 0) {
-              break;
-            }
-            if (suffix.slice(at, at + t.length).toLowerCase() !== tl) {
-              idx = at + 1;
-              continue;
-            }
-            if (rel >= at && rel < at + t.length) {
-              const md = new import_vscode4.MarkdownString();
-              md.appendMarkdown(`**${p.role}**
-
-`);
-              md.appendMarkdown(`code referent: \`${p.code_referent || ""}\`
-
-`);
-              if (p.hole_name) {
-                md.appendMarkdown(`hole: \`${p.hole_name}\`
-
-`);
-              }
-              if (p.safe_swap_set?.length) {
-                md.appendMarkdown(`safe swaps: ${p.safe_swap_set.map((s) => `\`${s}\``).join(", ")}`);
-              }
-              return new import_vscode3.Hover(md);
-            }
-            idx = at + 1;
-          }
-        }
-      }
-      return void 0;
-    }
-  };
-}
-
-// src/features/phraseHighlight/phraseDecorations.ts
-var import_vscode6 = require("vscode");
-
-// src/logging/semipyOutputChannel.ts
-var import_vscode5 = require("vscode");
-var channel;
-function getSemipyOutputChannel() {
-  if (!channel) {
-    channel = import_vscode5.window.createOutputChannel("Semipy");
-  }
-  return channel;
-}
-function appendSemipyLog(line) {
-  getSemipyOutputChannel().appendLine(line);
-}
-
-// src/features/phraseHighlight/phraseDecorations.ts
-var ROLE_ORDER = ["operation", "param", "operator", "connective"];
-var ROLE_STYLES = {
-  operation: {
-    light: { color: "#00639c", backgroundColor: "rgba(0, 99, 156, 0)" },
-    dark: { color: "#4ec9b0", backgroundColor: "rgba(78, 201, 176, 0)" }
-  },
-  param: {
-    light: { color: "#a31515", backgroundColor: "rgba(163, 21, 21, 0)" },
-    dark: { color: "#ce9178", backgroundColor: "rgba(206, 145, 120, 0)" }
-  },
-  operator: {
-    light: { color: "#811f3f", backgroundColor: "rgba(129, 31, 63, 0)" },
-    dark: { color: "#dcdcaa", backgroundColor: "rgba(220, 220, 170, 0)" }
-  },
-  connective: {
-    light: { color: "#444444", backgroundColor: "rgba(68, 68, 68, 0)" },
-    dark: { color: "#9cdcfe", backgroundColor: "rgba(156, 220, 254, 0)" }
-  }
-};
-function createPhraseDecorationTypes() {
-  const out = {};
-  for (const role of ROLE_ORDER) {
-    const st = ROLE_STYLES[role] ?? ROLE_STYLES.param;
-    out[role] = import_vscode6.window.createTextEditorDecorationType({
-      rangeBehavior: import_vscode6.DecorationRangeBehavior.ClosedClosed,
-      light: { ...st.light, fontWeight: role === "operation" ? "600" : void 0 },
-      dark: { ...st.dark, fontWeight: role === "operation" ? "600" : void 0 }
-    });
-  }
-  return out;
-}
-function sortPhrasesLongestFirst(phrases) {
-  return [...phrases].sort((a, b) => (b.text || "").length - (a.text || "").length);
-}
-function phraseSpansInSuffix(suffix, phrases) {
-  const sorted = sortPhrasesLongestFirst(phrases);
-  const used = [];
-  const spans = [];
-  const overlaps = (s, e) => used.some((u) => !(e <= u.start || s >= u.end));
-  const lowerSuffix = suffix.toLowerCase();
-  for (const p of sorted) {
-    const t = (p.text || "").trim();
-    if (!t) {
-      continue;
-    }
-    const tl = t.toLowerCase();
-    let search = 0;
-    while (search <= lowerSuffix.length) {
-      const pos = lowerSuffix.indexOf(tl, search);
-      if (pos < 0) {
-        break;
-      }
-      const end = pos + t.length;
-      if (suffix.slice(pos, end).toLowerCase() !== tl) {
-        search = pos + 1;
-        continue;
-      }
-      if (!overlaps(pos, end)) {
-        used.push({ start: pos, end });
-        spans.push({ start: pos, end, role: p.role || "param" });
-        break;
-      }
-      search = pos + 1;
-    }
-  }
-  return spans;
-}
-function refreshPhraseDecorations(editor, portal, portalCacheDir, types, workspaceRoots) {
-  for (const t of Object.values(types)) {
-    editor.setDecorations(t, []);
-  }
-  if (!portal || !portalCacheDir) {
-    return;
-  }
-  const lib = loadSketchLibraryMerged(portalCacheDir, workspaceRoots);
-  const doc = editor.document;
-  const full = doc.getText();
-  const lines = full.split(/\r?\n/);
-  const trace = import_vscode6.workspace.getConfiguration("semipy").get("tracePhraseDecorations") ?? false;
-  if (trace) {
-    appendSemipyLog(`[phrase] refresh ${doc.uri.fsPath}`);
-    appendSemipyLog(
-      `  cacheDir=${portalCacheDir} lib=${lib ? "ok" : "missing"} bindingKeys=${lib?.bindings ? Object.keys(lib.bindings).length : 0}`
-    );
-  }
-  const rangesByRole = {};
-  for (const r of ROLE_ORDER) {
-    rangesByRole[r] = [];
-  }
-  for (const slot of Object.values(portal.slots)) {
-    const head = activeCommitFromPortalSlot(slot);
-    const cid = head?.commit_id || "";
-    const bid = resolveBindingIdForCommit(lib, cid, head?.binding_id) || "";
-    if (trace) {
-      appendSemipyLog(
-        `  slot ${slot.slot_id.slice(0, 8)} commit ${cid.slice(0, 12) || "?"} resolved binding_id=${bid || "none"}`
-      );
-    }
-    if (!bid) {
-      continue;
-    }
-    const binding = bindingById(lib, bid);
-    if (!binding?.phrases?.length) {
-      if (trace) {
-        appendSemipyLog(`    no phrases for binding ${bid.slice(0, 8)}`);
-      }
-      continue;
-    }
-    const block = resolveSourceBlockRange(full, slot);
-    if (!block) {
-      if (trace) {
-        appendSemipyLog(`    no source block range`);
-      }
-      continue;
-    }
-    const { startLine1: start1, endLine1: end1 } = block;
-    let spanTotal = 0;
-    for (let lineIdx = start1 - 1; lineIdx <= end1 - 1; lineIdx++) {
-      if (lineIdx < 0 || lineIdx >= lines.length) {
-        continue;
-      }
-      const line = lines[lineIdx];
-      const specRegion = hashArrowSpecSuffixFromLine(line);
-      if (!specRegion) {
-        continue;
-      }
-      const suffix = specRegion.suffix;
-      const spans = phraseSpansInSuffix(suffix, binding.phrases);
-      spanTotal += spans.length;
-      const lineObj = doc.lineAt(lineIdx);
-      for (const sp of spans) {
-        const role = ROLE_ORDER.includes(sp.role) ? sp.role : "param";
-        const startCol = specRegion.baseCol + sp.start;
-        const endCol = specRegion.baseCol + sp.end;
-        const r = new import_vscode6.Range(
-          new import_vscode6.Position(lineIdx, startCol),
-          new import_vscode6.Position(lineIdx, Math.min(endCol, lineObj.text.length))
-        );
-        rangesByRole[role].push(r);
-      }
-    }
-    if (trace) {
-      appendSemipyLog(`    block lines ${start1}-${end1} phraseSpans=${spanTotal}`);
-    }
-  }
-  for (const role of ROLE_ORDER) {
-    const t = types[role];
-    if (t) {
-      editor.setDecorations(t, rangesByRole[role] || []);
-    }
-  }
-}
-
-// src/features/splitEditor/linkedHighlight.ts
-var path4 = __toESM(require("path"));
-var import_vscode7 = require("vscode");
-var LinkedHighlightCoordinator = class {
-  constructor(fadeMs) {
-    this.fadeMs = fadeMs;
-    this.highlight = import_vscode7.window.createTextEditorDecorationType({
-      backgroundColor: new import_vscode7.ThemeColor("editor.wordHighlightBackground"),
-      isWholeLine: false
-    });
-  }
-  highlight;
-  fadeTimer;
-  dispose() {
-    if (this.fadeTimer) {
-      clearTimeout(this.fadeTimer);
-    }
-    this.highlight.dispose();
-  }
-  onSelectionOrPortal(editor, portal, portalCacheDir) {
-    if (this.fadeTimer) {
-      clearTimeout(this.fadeTimer);
-      this.fadeTimer = void 0;
-    }
-    for (const ed of import_vscode7.window.visibleTextEditors) {
-      ed.setDecorations(this.highlight, []);
-    }
-    if (!editor || !portal || !portalCacheDir) {
-      return;
-    }
-    const doc = editor.document;
-    const docPath = doc.uri.fsPath;
-    const sel = editor.selection.active;
-    const line1 = sel.line + 1;
-    const fullText = doc.getText();
-    const dispatchPath = path4.join(portalCacheDir, "runtime", `${portal.module_name}.semi.py`);
-    if (pathsEqual(docPath, dispatchPath) || doc.uri.fsPath.endsWith(".semi.py")) {
-      this.highlightDispatchToSource(editor, portal, portalCacheDir);
-      return;
-    }
-    const slot = findSlotForSourceLine(portal, docPath, line1, fullText);
-    if (!slot) {
-      return;
-    }
-    const dr = dispatchRangeForSlot(portal, slot.slot_id, portalCacheDir);
-    if (!dr) {
-      return;
-    }
-    const targetUri = import_vscode7.Uri.file(dr.uriPath);
-    const dispEd = import_vscode7.window.visibleTextEditors.find(
-      (e) => e.document.uri.toString() === targetUri.toString()
-    );
-    if (!dispEd) {
-      return;
-    }
-    const start = Math.max(1, dr.startLine1) - 1;
-    const end = Math.max(1, dr.endLine1) - 1;
-    const ranges = [];
-    for (let i = start; i <= end; i++) {
-      if (i < dispEd.document.lineCount) {
-        ranges.push(dispEd.document.lineAt(i).range);
-      }
-    }
-    dispEd.setDecorations(this.highlight, ranges);
-    this.scheduleFade();
-  }
-  highlightDispatchToSource(editor, portal, portalCacheDir) {
-    const line1 = editor.selection.active.line + 1;
-    for (const slot of Object.values(portal.slots)) {
-      const dr = dispatchRangeForSlot(portal, slot.slot_id, portalCacheDir);
-      if (!dr) {
-        continue;
-      }
-      if (!pathsEqual(dr.uriPath, editor.document.uri.fsPath)) {
-        continue;
-      }
-      if (line1 >= dr.startLine1 && line1 <= dr.endLine1) {
-        const sp = slot.slot_spec?.source_span;
-        if (!sp || sp.length < 3) {
-          return;
-        }
-        const [srcFile] = sp;
-        const srcUri = import_vscode7.Uri.file(srcFile);
-        const srcEd = import_vscode7.window.visibleTextEditors.find(
-          (e) => e.document.uri.toString() === srcUri.toString()
-        );
-        if (!srcEd) {
-          return;
-        }
-        const full = srcEd.document.getText();
-        const block = resolveSourceBlockRange(full, slot);
-        const ranges = [];
-        const a = block?.startLine1 ?? sp[1];
-        const b = block?.endLine1 ?? sp[2];
-        for (let i = a - 1; i <= b - 1; i++) {
-          if (i < srcEd.document.lineCount) {
-            ranges.push(srcEd.document.lineAt(i).range);
-          }
-        }
-        srcEd.setDecorations(this.highlight, ranges);
-        this.scheduleFade();
-        return;
-      }
-    }
-  }
-  scheduleFade() {
-    const ms = this.fadeMs();
-    this.fadeTimer = setTimeout(() => {
-      this.fadeTimer = void 0;
-      for (const ed of import_vscode7.window.visibleTextEditors) {
-        ed.setDecorations(this.highlight, []);
-      }
-    }, ms);
-  }
-};
-
-// src/features/splitEditor/splitEditorCommand.ts
-var path5 = __toESM(require("path"));
-var import_vscode8 = require("vscode");
-async function openDispatchSplitView(portalCacheDir, moduleName) {
-  const abs = path5.join(portalCacheDir, "runtime", `${moduleName}.semi.py`);
-  const uri = import_vscode8.Uri.file(abs);
-  try {
-    const doc = await import_vscode8.workspace.openTextDocument(uri);
-    await import_vscode8.window.showTextDocument(doc, {
-      viewColumn: import_vscode8.ViewColumn.Beside,
-      preserveFocus: false
-    });
-  } catch {
-    void import_vscode8.window.showErrorMessage(`Semipy: could not open dispatch file: ${abs}`);
-  }
-}
-
-// src/features/versionTree/slotHistoryProvider.ts
-var import_vscode10 = require("vscode");
-
-// src/features/versionTree/walkHistory.ts
-function walkHistoryCommits(slot, commitId) {
-  const result = [];
-  const seen = /* @__PURE__ */ new Set();
-  const stack = [commitId];
-  while (stack.length) {
-    const cid = stack.pop();
-    if (seen.has(cid)) {
-      continue;
-    }
-    seen.add(cid);
-    const c = slot.commits[cid];
-    if (!c) {
-      continue;
-    }
-    result.push(c);
-    for (const pid of c.parent_ids) {
-      stack.push(pid);
-    }
-  }
-  return result;
-}
-
-// src/features/versionTree/slotTreeItems.ts
-var import_vscode9 = require("vscode");
-function decisionIcon(decision) {
-  const d = (decision || "").toUpperCase();
-  if (d === "GENERATE") {
-    return new import_vscode9.ThemeIcon("git-commit");
-  }
-  if (d === "ADAPT") {
-    return new import_vscode9.ThemeIcon("git-merge");
-  }
-  if (d === "REUSE" || d === "reuse") {
-    return new import_vscode9.ThemeIcon("link");
-  }
-  if (d === "INSTANTIATE" || d === "instantiate") {
-    return new import_vscode9.ThemeIcon("puzzle");
-  }
-  return new import_vscode9.ThemeIcon("git-commit");
-}
-function formatCommitLabel(c) {
-  const id = c.commit_id.slice(0, 8);
-  const msg = (c.message || "").replace(/\s+/g, " ").slice(0, 48);
-  const ts = c.timestamp ? new Date(c.timestamp * 1e3).toLocaleString() : "";
-  return `${id} | ${c.decision || "?"} | ${msg}${ts ? ` | ${ts}` : ""}`;
-}
-function truncateSpecPreview(spec, n = 60) {
-  const t = spec.replace(/\s+/g, " ").trim();
-  if (t.length <= n) {
-    return t;
-  }
-  return t.slice(0, n - 1) + "\u2026";
-}
-
-// src/features/versionTree/slotHistoryProvider.ts
-var SlotHistoryProvider = class {
-  constructor(getPortal) {
-    this.getPortal = getPortal;
-  }
-  _onDidChange = new import_vscode10.EventEmitter();
-  onDidChangeTreeData = this._onDidChange.event;
-  refresh() {
-    this._onDidChange.fire(void 0);
-  }
-  getTreeItem(element) {
-    if (element.kind === "portal") {
-      const ti2 = new import_vscode10.TreeItem(
-        element.portal.source_file || element.portal.module_name || "portal",
-        import_vscode10.TreeItemCollapsibleState.Expanded
-      );
-      ti2.description = element.portal.module_name;
-      return ti2;
-    }
-    if (element.kind === "slot") {
-      const spec = element.slot.slot_spec?.spec_text || "";
-      const ti2 = new import_vscode10.TreeItem(
-        truncateSpecPreview(spec) || element.slot.slot_id.slice(0, 8),
-        import_vscode10.TreeItemCollapsibleState.Expanded
-      );
-      ti2.description = element.slot.slot_id.slice(0, 8);
-      return ti2;
-    }
-    if (element.kind === "branch") {
-      const isDefault = element.branch.name === (element.slot.default_branch || "main");
-      const ti2 = new import_vscode10.TreeItem(
-        `${element.branch.name}${isDefault ? " (HEAD)" : ""}`,
-        import_vscode10.TreeItemCollapsibleState.Expanded
-      );
-      return ti2;
-    }
-    const ti = new import_vscode10.TreeItem(
-      formatCommitLabel(element.commit),
-      import_vscode10.TreeItemCollapsibleState.None
-    );
-    ti.iconPath = decisionIcon(element.commit.decision);
-    ti.contextValue = "semipy.commit";
-    ti.command = {
-      command: "semipy.viewGeneratedCode",
-      title: "View generated code",
-      arguments: [element.slot.slot_id, element.commit.commit_id]
-    };
-    return ti;
-  }
-  getChildren(element) {
-    const portal = this.getPortal();
-    if (!portal) {
-      return [];
-    }
-    if (!element) {
-      return [{ kind: "portal", portal }];
-    }
-    if (element.kind === "portal") {
-      return Object.values(element.portal.slots).filter((slot) => slot.commits && Object.keys(slot.commits).length > 0).map((slot) => ({
-        kind: "slot",
-        portal: element.portal,
-        slot
-      }));
-    }
-    if (element.kind === "slot") {
-      return Object.values(element.slot.branches).map((branch) => ({
-        kind: "branch",
-        portal: element.portal,
-        slot: element.slot,
-        branch
-      }));
-    }
-    if (element.kind === "branch") {
-      const headId = element.branch.head;
-      const chain = walkHistoryCommits(element.slot, headId);
-      return chain.map((commit) => ({
-        kind: "commit",
-        portal: element.portal,
-        slot: element.slot,
-        branchName: element.branch.name,
-        commit
-      }));
-    }
-    return [];
-  }
-  getParent(element) {
-    return void 0;
-  }
-};
-
-// src/features/versionTree/versionActions.ts
-var import_child_process = require("child_process");
-var fs3 = __toESM(require("fs"));
-var path6 = __toESM(require("path"));
-var import_vscode11 = require("vscode");
-var previewSources = /* @__PURE__ */ new Map();
-function setCommitPreviewSource(slotId, commitId, source) {
-  const key = `${slotId}:${commitId}`;
-  previewSources.set(key, source);
-  return import_vscode11.Uri.from({ scheme: "semipy-commit", path: "/preview.py", query: key });
-}
-function registerCommitTextProvider() {
-  return import_vscode11.workspace.registerTextDocumentContentProvider("semipy-commit", {
-    provideTextDocumentContent(uri) {
-      const key = uri.query;
-      return previewSources.get(key) || "# Preview expired; run the tree command again.\n";
-    }
-  });
-}
-async function viewGeneratedCode(slotId, commitId, source) {
-  const uri = setCommitPreviewSource(slotId, commitId, source);
-  const doc = await import_vscode11.workspace.openTextDocument(uri);
-  await import_vscode11.window.showTextDocument(doc, { preview: true });
-}
-function expandWorkspaceVars(s) {
-  let out = s;
-  const folders = import_vscode11.workspace.workspaceFolders ?? [];
-  if (out.includes("${workspaceFolder}")) {
-    const first = folders[0]?.uri.fsPath;
-    if (first) {
-      out = out.replace(/\$\{workspaceFolder\}/g, first);
-    }
-  }
-  return out;
-}
-function resolveConfiguredPythonPath(raw) {
-  let out = expandWorkspaceVars(raw.trim());
-  if (!out) {
-    return out;
-  }
-  if (!path6.isAbsolute(out)) {
-    const wf = import_vscode11.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (wf) {
-      out = path6.resolve(wf, out);
-    }
-  }
-  try {
-    return path6.normalize(out);
-  } catch {
-    return out;
-  }
-}
-function pushIfFile(out, p) {
-  try {
-    if (fs3.existsSync(p) && fs3.statSync(p).isFile()) {
-      out.push(p);
-    }
-  } catch {
-  }
-}
-function candidateVenvInterpreterPaths() {
-  const candidates = [];
-  const roots = /* @__PURE__ */ new Set();
-  for (const wf of import_vscode11.workspace.workspaceFolders ?? []) {
-    roots.add(wf.uri.fsPath);
-    roots.add(path6.dirname(wf.uri.fsPath));
-  }
-  for (const root of roots) {
-    pushIfFile(candidates, path6.join(root, ".venv", "bin", "python"));
-    pushIfFile(candidates, path6.join(root, ".venv", "bin", "python3"));
-    pushIfFile(candidates, path6.join(root, "venv", "bin", "python"));
-    pushIfFile(candidates, path6.join(root, "venv", "bin", "python3"));
-    pushIfFile(candidates, path6.join(root, ".venv", "Scripts", "python.exe"));
-    pushIfFile(candidates, path6.join(root, "venv", "Scripts", "python.exe"));
-  }
-  return candidates;
-}
-function resolvePythonExecutable() {
-  const cfg = import_vscode11.workspace.getConfiguration("semipy");
-  const explicit = resolveConfiguredPythonPath((cfg.get("pythonPath") || "").trim());
-  if (explicit) {
-    return explicit;
-  }
-  for (const p of candidateVenvInterpreterPaths()) {
-    return p;
-  }
-  const py = import_vscode11.workspace.getConfiguration("python");
-  const interpreter = expandWorkspaceVars((py.get("defaultInterpreterPath") || "").trim());
-  if (interpreter) {
-    return interpreter;
-  }
-  return process.platform === "win32" ? "python" : "python3";
-}
-function runSemipyCli(args, cwd) {
-  return new Promise((resolve3) => {
-    const exe = resolvePythonExecutable();
-    (0, import_child_process.execFile)(exe, ["-m", "semipy", ...args], { cwd }, (error, stdout, stderr) => {
-      let code = 0;
-      if (error) {
-        const c = error.code;
-        code = typeof c === "number" ? c : 1;
-      }
-      resolve3({
-        stdout: String(stdout),
-        stderr: String(stderr),
-        code
-      });
-    });
-  });
-}
-
-// src/features/diagnostics/diagnosticProvider.ts
-var fs4 = __toESM(require("fs"));
-var path7 = __toESM(require("path"));
-var import_vscode12 = require("vscode");
-var SemipyDiagnosticManager = class {
-  /** semipy `cache_dir` (directory containing `diagnostics.json`). */
-  constructor(portalCacheDir) {
-    this.portalCacheDir = portalCacheDir;
-  }
-  collection = import_vscode12.languages.createDiagnosticCollection("semipy");
-  dispose() {
-    this.collection.dispose();
-  }
-  refresh() {
-    this.collection.clear();
-    const cacheDir = this.portalCacheDir();
-    if (!cacheDir) {
-      return;
-    }
-    const p = path7.join(cacheDir, "diagnostics.json");
-    let data;
-    try {
-      const raw = fs4.readFileSync(p, "utf8");
-      data = JSON.parse(raw);
-    } catch {
-      return;
-    }
-    const byFile = /* @__PURE__ */ new Map();
-    for (const e of data.entries || []) {
-      const d = this.entryToDiagnostic(e);
-      if (!d) {
-        continue;
-      }
-      const fp = e.source_file;
-      const list = byFile.get(fp) || [];
-      list.push(d);
-      byFile.set(fp, list);
-    }
-    for (const [fp, diags] of byFile) {
-      const uri = import_vscode12.Uri.file(fp);
-      this.collection.set(uri, diags);
-    }
-  }
-  entryToDiagnostic(e) {
-    const start = Math.max(1, e.source_line_start) - 1;
-    const end = Math.max(1, e.source_line_end) - 1;
-    const sev = e.severity === "error" ? import_vscode12.DiagnosticSeverity.Error : e.severity === "warning" ? import_vscode12.DiagnosticSeverity.Warning : import_vscode12.DiagnosticSeverity.Information;
-    const d = new import_vscode12.Diagnostic(
-      new import_vscode12.Range(new import_vscode12.Position(start, 0), new import_vscode12.Position(end, 2e3)),
-      e.message,
-      sev
-    );
-    d.source = "semipy";
-    d.code = e.slot_id ? `semi-call-error:${e.slot_id}` : e.code || "semi-call-error";
-    d.relatedInformation = [];
-    if (e.generated_path && e.generated_line_range?.length === 2) {
-      const [a, b] = e.generated_line_range;
-      const root = this.portalCacheDir() || "";
-      const gp = path7.isAbsolute(e.generated_path) ? e.generated_path : path7.join(root, e.generated_path);
-      d.relatedInformation.push({
-        location: {
-          uri: import_vscode12.Uri.file(gp),
-          range: new import_vscode12.Range(
-            new import_vscode12.Position(Math.max(1, a) - 1, 0),
-            new import_vscode12.Position(Math.max(1, b) - 1, 2e3)
-          )
-        },
-        message: "Generated implementation"
-      });
-    }
-    return d;
-  }
-};
-
-// src/features/diagnostics/codeActions.ts
-var import_vscode13 = require("vscode");
-function slotIdFromDiagnosticCode(code) {
-  const s = typeof code === "object" && code !== null ? String(code.value) : String(code ?? "");
-  if (s.startsWith("semi-call-error:")) {
-    return s.slice("semi-call-error:".length);
-  }
-  return void 0;
-}
-function createRegenerateCodeActionProvider(getWorkspaceRoot, getPortalRelPath) {
-  return {
-    provideCodeActions(_document, _range, context) {
-      const ws = getWorkspaceRoot();
-      const portal = getPortalRelPath();
-      if (!ws || !portal) {
-        return [];
-      }
-      const hit = context.diagnostics.filter(
-        (d) => String(d.source || "").includes("semipy")
-      );
-      if (!hit.length) {
-        return [];
-      }
-      const slotId = slotIdFromDiagnosticCode(hit[0].code);
-      if (!slotId) {
-        return [];
-      }
-      const action = new import_vscode13.CodeAction("Regenerate this spec (semipy CLI)", import_vscode13.CodeActionKind.QuickFix);
-      action.command = {
-        command: "semipy.regenerateSlotDiagnostic",
-        title: "Regenerate",
-        arguments: [ws, portal, slotId]
-      };
-      return [action];
-    }
-  };
-}
-
-// src/features/slotAnnotations/slotEditorAnnotations.ts
-var import_vscode14 = require("vscode");
-
 // src/features/slotAnnotations/slotLineResolve.ts
 function resolveSlotUiLines(document, slot) {
   const spec = slot.slot_spec;
@@ -1930,7 +1150,1769 @@ function resolveSlotUiLines(document, slot) {
   return { codeLensLine0, inlayLine0: inlayLine1 - 1 };
 }
 
+// src/features/intelligence/slotInsight.ts
+var GUARANTEE_GLOSSARY = {
+  non_empty: "output is never empty",
+  non_identity: "output actually transforms the input (never echoes it back)",
+  type_match: "output is always the declared type",
+  category_preserving: "output stays in the same category as the input",
+  idempotent: "applying it twice gives the same result as once",
+  whitespace_invariance: "leading/trailing whitespace does not change the result",
+  case_invariance: "input letter-casing does not change the result"
+};
+function assertionKey(c) {
+  if (c.kind === "invariant") {
+    return `inv:${c.invariant}:${c.expected_type || ""}`;
+  }
+  if (c.kind === "metamorphic") {
+    return `mr:${c.relation}`;
+  }
+  return `ex:${c.case_id}`;
+}
+function guaranteeLabel(c) {
+  if (c.kind === "invariant") {
+    return `${c.invariant}${c.expected_type ? `=${c.expected_type}` : ""}`;
+  }
+  if (c.kind === "metamorphic") {
+    return c.relation || "relation";
+  }
+  return "example";
+}
+function guaranteeMeaning(c) {
+  if (c.kind === "invariant") {
+    return GUARANTEE_GLOSSARY[c.invariant || ""] || "a structural property of the output";
+  }
+  if (c.kind === "metamorphic") {
+    return GUARANTEE_GLOSSARY[c.relation || ""] || "a relation between an input and a transformed input";
+  }
+  return "a pinned input -> output example";
+}
+var SEEDED_REASONS = /* @__PURE__ */ new Set(["initial behavior", "adapted for new input pattern"]);
+function primarySampleRepr(c) {
+  const sample = c.input_sample || {};
+  for (const [k, v] of Object.entries(sample)) {
+    if (k === "self" || k.startsWith("_")) {
+      continue;
+    }
+    const s = typeof v === "string" ? v : JSON.stringify(v);
+    const t = (s ?? "").replace(/\s+/g, " ").trim();
+    return t.length <= 48 ? t : t.slice(0, 47) + "\u2026";
+  }
+  return "";
+}
+function groupGuarantees(cases) {
+  const byKey = /* @__PURE__ */ new Map();
+  for (const c of cases) {
+    const status = c.status || "active";
+    if (status === "superseded") {
+      continue;
+    }
+    const key = assertionKey(c);
+    let g = byKey.get(key);
+    if (!g) {
+      g = { rep: c, fps: /* @__PURE__ */ new Set(), quarantined: 0, caseIds: [] };
+      byKey.set(key, g);
+    }
+    if (status === "quarantined") {
+      g.quarantined += 1;
+    } else {
+      g.fps.add(c.input_fingerprint || "");
+      if (c.case_id) {
+        g.caseIds.push(c.case_id);
+      }
+      if (SEEDED_REASONS.has((g.rep.reason || "").trim()) && !SEEDED_REASONS.has((c.reason || "").trim())) {
+        g.rep = c;
+      }
+    }
+  }
+  const out = [];
+  for (const [key, g] of byKey) {
+    const rep = g.rep;
+    const reason = (rep.reason || "").trim();
+    out.push({
+      key,
+      kind: rep.kind,
+      label: guaranteeLabel(rep),
+      meaning: guaranteeMeaning(rep),
+      patterns: g.fps.size,
+      reason: SEEDED_REASONS.has(reason) ? "" : reason,
+      quarantined: g.quarantined,
+      caseIds: g.caseIds,
+      sampleRepr: primarySampleRepr(rep)
+    });
+  }
+  const order = { invariant: 0, metamorphic: 1, example: 2 };
+  return out.sort((a, b) => (order[a.kind] ?? 9) - (order[b.kind] ?? 9));
+}
+var LOCK_REF2 = "__locked__";
+function decisionGlyph(decision) {
+  switch ((decision || "").toUpperCase()) {
+    case "GENERATE":
+      return "\u25C6";
+    case "ADAPT":
+      return "\u25D0";
+    case "REUSE":
+      return "\u21BB";
+    case "INSTANTIATE":
+      return "\u29C9";
+    case "FORK":
+      return "\u2387";
+    case "MERGE":
+      return "\u2A07";
+    default:
+      return "\u25C7";
+  }
+}
+function activeCases(contract, status) {
+  const cases = contract?.cases;
+  if (!cases) {
+    return [];
+  }
+  return Object.values(cases).filter((c) => (c.status || "active") === status);
+}
+function contractInsight(slot) {
+  const contract = slot.contract;
+  const all = contract?.cases ? Object.values(contract.cases) : [];
+  const guarantees = groupGuarantees(all);
+  return {
+    active: activeCases(contract, "active").length,
+    superseded: activeCases(contract, "superseded").length,
+    quarantined: activeCases(contract, "quarantined").length,
+    distinct: guarantees.filter((g) => g.patterns > 0).length,
+    guarantees
+  };
+}
+function changeInsight(commit) {
+  const cr = commit?.change_record;
+  if (!cr || !cr.reason && !(cr.effect_diff && cr.effect_diff.length)) {
+    return void 0;
+  }
+  const diffs = (cr.effect_diff || []).map((d) => ({
+    oldRepr: String(d.old_repr ?? ""),
+    newRepr: String(d.new_repr ?? ""),
+    intended: !!d.intended,
+    inputRepr: String(d.input_repr ?? "")
+  }));
+  const unintended = typeof cr.unintended_count === "number" ? cr.unintended_count : diffs.filter((d) => !d.intended).length;
+  return {
+    reason: (cr.reason || "").trim(),
+    decision: cr.decision || commit?.decision || "",
+    intended: diffs.filter((d) => d.intended).length,
+    unintended,
+    compared: typeof cr.n_compared === "number" ? cr.n_compared : diffs.length,
+    hasRegression: unintended > 0,
+    diffs
+  };
+}
+function distinctTargets(effects) {
+  return [...new Set((effects || []).map((e) => e.target).filter(Boolean))];
+}
+function distinctOps(effects) {
+  return [...new Set((effects || []).map((e) => e.op).filter(Boolean))];
+}
+function effectInsight(slot) {
+  const events = slot.ledger?.events || [];
+  const applied = events.filter((e) => (e.status || "applied") === "applied");
+  const reverted = events.filter((e) => e.status === "reverted");
+  const pending = events.filter(
+    (e) => e.status === "approval_pending" || e.status === "shadow"
+  );
+  const latest = events.length ? events[events.length - 1] : void 0;
+  const latestEffects = latest?.applied_effects || [];
+  const mutating = latestEffects.filter((e) => e.op !== "read" && e.op !== "call");
+  const reversible = mutating.length > 0 && mutating.every((e) => !!e.compensation);
+  return {
+    isEffectful: events.length > 0,
+    applied: applied.length,
+    reverted: reverted.length,
+    pending: pending.length,
+    targets: distinctTargets(latestEffects),
+    reversible,
+    latestStatus: latest?.status || "",
+    latestEventId: latest?.event_id || "",
+    latestOps: distinctOps(latestEffects)
+  };
+}
+function computeSlotInsight(slot) {
+  if (!slot.commits || Object.keys(slot.commits).length === 0) {
+    return void 0;
+  }
+  const commit = activeCommitFromPortalSlot(slot);
+  const contract = contractInsight(slot);
+  const change = changeInsight(commit);
+  const effect = effectInsight(slot);
+  const locked = !!slot.refs?.[LOCK_REF2];
+  let health = "ok";
+  if (change?.hasRegression) {
+    health = "danger";
+  } else if (contract.quarantined > 0 || effect.pending > 0) {
+    health = "warn";
+  } else if (effect.isEffectful) {
+    health = "effect";
+  }
+  return {
+    decision: (commit?.decision || "?").toUpperCase(),
+    glyph: decisionGlyph(commit?.decision || ""),
+    commitShort: commit?.commit_id?.slice(0, 8) ?? "?",
+    timestamp: commit?.timestamp ?? 0,
+    locked,
+    health,
+    contract,
+    change,
+    effect
+  };
+}
+function insightChips(insight) {
+  const chips = [`${insight.glyph} ${insight.decision}`];
+  if (insight.locked) {
+    chips.push("locked");
+  }
+  const c = insight.contract;
+  if (c.distinct > 0) {
+    chips.push(`\u2713${c.distinct} hold`);
+  }
+  if (c.quarantined > 0) {
+    chips.push(`\u26A0${c.quarantined} quarantined`);
+  }
+  if (insight.change?.hasRegression) {
+    chips.push(`\u26A0${insight.change.unintended} regression${insight.change.unintended === 1 ? "" : "s"}`);
+  }
+  const e = insight.effect;
+  if (e.isEffectful) {
+    const tgt = e.targets[0] || "effect";
+    const more = e.targets.length > 1 ? ` +${e.targets.length - 1}` : "";
+    let state = e.latestStatus || "applied";
+    if (state === "approval_pending") {
+      state = "approval pending";
+    }
+    chips.push(`\u26A1 ${tgt}${more} ${state}`);
+  }
+  return chips;
+}
+
+// src/features/health/gutterHealth.ts
+function icon(extensionPath, name) {
+  return import_vscode4.Uri.file(path4.join(extensionPath, "images", "gutter", `slot-${name}.svg`));
+}
+function createGutterHealthTypes(extensionPath) {
+  const make = (name, ruler) => import_vscode4.window.createTextEditorDecorationType({
+    gutterIconPath: icon(extensionPath, name),
+    gutterIconSize: "contain",
+    ...ruler ? { overviewRulerColor: ruler, overviewRulerLane: import_vscode4.OverviewRulerLane.Right } : {}
+  });
+  return {
+    ok: make("ok"),
+    effect: make("effect", "rgba(215,166,95,0.55)"),
+    warn: make("warn", "rgba(215,166,95,0.85)"),
+    danger: make("danger", "rgba(209,105,105,0.9)")
+  };
+}
+function refreshGutterHealth(editor, portal, types) {
+  const clear = () => {
+    editor.setDecorations(types.ok, []);
+    editor.setDecorations(types.effect, []);
+    editor.setDecorations(types.warn, []);
+    editor.setDecorations(types.danger, []);
+  };
+  if (!portal || editor.document.languageId !== "python") {
+    clear();
+    return;
+  }
+  const fsPath = editor.document.uri.fsPath;
+  const buckets = { ok: [], effect: [], warn: [], danger: [] };
+  for (const slot of Object.values(portal.slots)) {
+    if (!slot.commits || Object.keys(slot.commits).length === 0) {
+      continue;
+    }
+    const src = slot.slot_spec?.source_span;
+    if (!Array.isArray(src) || src.length < 3 || !pathsEqualRobust(src[0], fsPath)) {
+      continue;
+    }
+    const ui = resolveSlotUiLines(editor.document, slot);
+    const line0 = ui?.codeLensLine0;
+    if (line0 === void 0 || line0 >= editor.document.lineCount) {
+      continue;
+    }
+    const insight = computeSlotInsight(slot);
+    if (!insight) {
+      continue;
+    }
+    buckets[insight.health].push(new import_vscode4.Range(line0, 0, line0, 0));
+  }
+  editor.setDecorations(types.ok, buckets.ok);
+  editor.setDecorations(types.effect, buckets.effect);
+  editor.setDecorations(types.warn, buckets.warn);
+  editor.setDecorations(types.danger, buckets.danger);
+}
+function disposeGutterHealthTypes(types) {
+  types.ok.dispose();
+  types.effect.dispose();
+  types.warn.dispose();
+  types.danger.dispose();
+}
+
+// src/features/intelligence/slotInsightHoverProvider.ts
+var import_vscode5 = require("vscode");
+
+// src/features/intelligence/explanationCard.ts
+function relativeTime(tsSeconds) {
+  if (!tsSeconds) {
+    return "";
+  }
+  const deltaMs = Date.now() - tsSeconds * 1e3;
+  const s = Math.round(deltaMs / 1e3);
+  if (s < 0) {
+    return "just now";
+  }
+  if (s < 60) {
+    return `${s}s ago`;
+  }
+  const m = Math.round(s / 60);
+  if (m < 60) {
+    return `${m}m ago`;
+  }
+  const h = Math.round(m / 60);
+  if (h < 24) {
+    return `${h}h ago`;
+  }
+  const d = Math.round(h / 24);
+  if (d < 30) {
+    return `${d}d ago`;
+  }
+  return new Date(tsSeconds * 1e3).toLocaleDateString();
+}
+function truncate(s, n) {
+  const t = (s || "").replace(/\s+/g, " ").trim();
+  return t.length <= n ? t : t.slice(0, n - 1) + "\u2026";
+}
+function cmdLink(label, command, args) {
+  const q = encodeURIComponent(JSON.stringify(args));
+  return `[${label}](command:${command}?${q})`;
+}
+function constraintLine(slot) {
+  const s = slot.slot_spec;
+  if (!s) {
+    return "";
+  }
+  const bits = [];
+  if (s.expected_type) {
+    bits.push(`returns \`${truncate(s.expected_type, 40)}\``);
+  }
+  const outs = s.output_names;
+  if (Array.isArray(outs) && outs.length) {
+    bits.push(`as \`${outs.join(", ")}\``);
+  }
+  const ctx = s.control_context;
+  if (ctx && ctx !== "none") {
+    bits.push(`in a \`${ctx}\``);
+  }
+  return bits.join(" ");
+}
+function buildHoverMarkdown(slot, insight) {
+  const lines = [];
+  const lockBadge = insight.locked ? " \xB7 $(lock) locked" : "";
+  const t = relativeTime(insight.timestamp);
+  lines.push(
+    `**${insight.glyph} ${insight.decision}** \xB7 \`${insight.commitShort}\`${t ? ` \xB7 ${t}` : ""}${lockBadge}`
+  );
+  lines.push("");
+  if (insight.change?.reason) {
+    lines.push(`$(info) **Why** \u2014 ${truncate(insight.change.reason, 180)}`);
+    lines.push("");
+  }
+  if (insight.change && (insight.change.compared > 0 || insight.change.diffs.length > 0)) {
+    const ch = insight.change;
+    const reg = ch.hasRegression ? `$(warning) **${ch.unintended} unintended**` : "0 unintended";
+    lines.push(`$(diff) **Effect** \u2014 +${ch.intended} changed \xB7 ${reg}  *(over ${ch.compared} input pattern${ch.compared === 1 ? "" : "s"})*`);
+    for (const d of ch.diffs.slice(0, 2)) {
+      const mark = d.intended ? "" : " $(warning)";
+      lines.push(`> \`${truncate(d.oldRepr, 36)}\` \u2192 \`${truncate(d.newRepr, 36)}\`${mark}`);
+    }
+    lines.push("");
+  }
+  const guarantees = insight.contract.guarantees.filter((g) => g.patterns > 0);
+  if (guarantees.length) {
+    lines.push(`$(law) **Guarantees**`);
+    for (const g of guarantees.slice(0, 8)) {
+      const span = g.patterns > 1 ? ` *(across ${g.patterns} input patterns)*` : "";
+      const detail = g.reason ? ` \u2014 ${truncate(g.reason, 70)}` : ` \u2014 ${g.meaning}`;
+      lines.push(`- \`${g.label}\`${detail}${span}`);
+    }
+    const quarGroups = insight.contract.guarantees.filter((g) => g.patterns === 0 && g.quarantined > 0);
+    const sup = insight.contract.superseded;
+    if (quarGroups.length || sup) {
+      const bits = [];
+      if (quarGroups.length)
+        bits.push(`${quarGroups.length} quarantined`);
+      if (sup)
+        bits.push(`${sup} superseded`);
+      lines.push(`- *${bits.join(" \xB7 ")}*`);
+    }
+    lines.push("");
+  }
+  const constraint = constraintLine(slot);
+  if (constraint) {
+    lines.push(`$(symbol-type) **Spec** \u2014 ${constraint}`);
+    lines.push("");
+  }
+  if (insight.effect.isEffectful) {
+    const e = insight.effect;
+    const ops = e.latestOps.length ? ` (${e.latestOps.join(", ")})` : "";
+    const rev = e.reversible ? "reversible" : "$(warning) irreversible";
+    const counts = `applied ${e.applied}\xD7${e.reverted ? ` \xB7 reverted ${e.reverted}\xD7` : ""}`;
+    lines.push(`$(zap) **Touches** \u2014 ${e.targets.join(", ") || "\u2014"}${ops}`);
+    lines.push(`> ${rev} \xB7 ${counts}${e.pending ? ` \xB7 $(warning) ${e.pending} pending approval` : ""}`);
+    lines.push("");
+  }
+  const actions = [
+    cmdLink("$(search) Inspect", "semipy.inspectSlot", [slot.slot_id]),
+    cmdLink("$(code) View code", "semipy.viewActiveCode", [slot.slot_id])
+  ];
+  const ncommits = Object.keys(slot.commits || {}).length;
+  if (ncommits > 1) {
+    actions.push(cmdLink("$(history) Switch version", "semipy.pickSlotVersion", [slot.slot_id]));
+  }
+  if (insight.effect.applied > 0 && insight.effect.latestEventId) {
+    actions.push(
+      cmdLink("$(discard) Revert effect", "semipy.revertEffect", [slot.slot_id, insight.effect.latestEventId])
+    );
+  }
+  lines.push(actions.join("  \xB7  "));
+  return lines.join("\n");
+}
+
+// src/features/intelligence/slotInsightHoverProvider.ts
+function createSlotInsightHoverProvider(getPortal, enabled) {
+  return {
+    provideHover(document, position, _token) {
+      if (!enabled() || document.languageId !== "python") {
+        return void 0;
+      }
+      const portal = getPortal();
+      if (!portal) {
+        return void 0;
+      }
+      const fsPath = document.uri.fsPath;
+      const fullText = document.getText();
+      const line0 = position.line;
+      for (const slot of Object.values(portal.slots)) {
+        if (!slot.commits || Object.keys(slot.commits).length === 0) {
+          continue;
+        }
+        const src = slot.slot_spec?.source_span;
+        if (!Array.isArray(src) || src.length < 3 || !pathsEqualRobust(src[0], fsPath)) {
+          continue;
+        }
+        const ui = resolveSlotUiLines(document, slot);
+        const block = resolveSourceBlockRange(fullText, slot);
+        const anchor0 = ui?.codeLensLine0;
+        const inBlock = block && line0 >= block.startLine1 - 1 && line0 <= block.endLine1 - 1;
+        const onAnchor = anchor0 !== void 0 && line0 === anchor0;
+        if (!inBlock && !onAnchor) {
+          continue;
+        }
+        const insight = computeSlotInsight(slot);
+        if (!insight) {
+          continue;
+        }
+        const md = new import_vscode5.MarkdownString(buildHoverMarkdown(slot, insight));
+        md.isTrusted = true;
+        md.supportThemeIcons = true;
+        return new import_vscode5.Hover(md);
+      }
+      return void 0;
+    }
+  };
+}
+
+// src/features/health/regressionDiagnostics.ts
+var import_vscode6 = require("vscode");
+function trunc(s, n) {
+  const t = (s || "").replace(/\s+/g, " ").trim();
+  return t.length <= n ? t : t.slice(0, n - 1) + "\u2026";
+}
+var RegressionDiagnosticManager = class {
+  collection;
+  constructor() {
+    this.collection = import_vscode6.languages.createDiagnosticCollection("semipy-insight");
+  }
+  clear() {
+    this.collection.clear();
+  }
+  /** Recompute regression diagnostics for the active editor's file. */
+  refresh(editor, portal) {
+    if (!editor || !portal || editor.document.languageId !== "python") {
+      return;
+    }
+    const fsPath = editor.document.uri.fsPath;
+    const diags = [];
+    for (const slot of Object.values(portal.slots)) {
+      if (!slot.commits || Object.keys(slot.commits).length === 0) {
+        continue;
+      }
+      const src = slot.slot_spec?.source_span;
+      if (!Array.isArray(src) || src.length < 3 || !pathsEqualRobust(src[0], fsPath)) {
+        continue;
+      }
+      const insight = computeSlotInsight(slot);
+      const ch = insight?.change;
+      if (!ch || !ch.hasRegression) {
+        continue;
+      }
+      const ui = resolveSlotUiLines(editor.document, slot);
+      const line0 = ui?.inlayLine0 ?? ui?.codeLensLine0;
+      if (line0 === void 0 || line0 >= editor.document.lineCount) {
+        continue;
+      }
+      const line = editor.document.lineAt(line0);
+      const example = ch.diffs.find((d2) => !d2.intended);
+      const detail = example ? ` e.g. \`${trunc(example.oldRepr, 28)}\` \u2192 \`${trunc(example.newRepr, 28)}\`` : "";
+      const msg = `semipy: ${insight.decision} introduced ${ch.unintended} unintended change${ch.unintended === 1 ? "" : "s"} (${ch.intended} intended).${detail}`;
+      const d = new import_vscode6.Diagnostic(line.range, msg, import_vscode6.DiagnosticSeverity.Warning);
+      d.source = "semipy";
+      d.code = `semi-regression:${slot.slot_id}`;
+      diags.push(d);
+    }
+    this.collection.set(editor.document.uri, diags);
+  }
+  dispose() {
+    this.collection.dispose();
+  }
+};
+
+// src/features/steering/reasoningSteering.ts
+var import_vscode7 = require("vscode");
+var PROVENANCE_KEYS = /* @__PURE__ */ new Set(["goal", "because", "alt", "given"]);
+var EFFECT_KEYS = /* @__PURE__ */ new Set(["commits", "verified", "yields"]);
+var KEY_HELP = {
+  goal: "what this slot is meant to achieve",
+  because: "why semipy chose this implementation (decision rationale)",
+  alt: "an alternative the model considered but did not take",
+  given: "the inputs / assumptions it was generated under",
+  commits: "what behaviour this implementation locks in",
+  verified: "what was checked to hold (derived, not synthesised)",
+  yields: "the shape of the value it returns"
+};
+function parseSteeringLine(lineText) {
+  const m = lineText.match(/^(\s*)#\s*<\s*([a-zA-Z_]+)\s*:/);
+  if (!m) {
+    return null;
+  }
+  const key = m[2].toLowerCase();
+  let zone;
+  if (PROVENANCE_KEYS.has(key)) {
+    zone = "provenance";
+  } else if (EFFECT_KEYS.has(key)) {
+    zone = "effect";
+  }
+  if (!zone) {
+    return null;
+  }
+  const keyStart = m.index + m[1].length + lineText.slice(m[1].length).indexOf(m[2]);
+  return { key, zone, keyStart, keyEnd: keyStart + m[2].length };
+}
+function isReasoning(lineText) {
+  const s = lineText.replace(/^\s+/, "");
+  return s.startsWith("#<") || s.startsWith("# <");
+}
+function createSteeringCodeActionProvider() {
+  return {
+    provideCodeActions(document, range, _context, _token) {
+      const line = document.lineAt(range.start.line);
+      if (!isReasoning(line.text)) {
+        return [];
+      }
+      const parsed = parseSteeringLine(line.text);
+      const keyLabel = parsed ? ` (${parsed.key})` : "";
+      const pin = new import_vscode7.CodeAction(
+        `Semipy: Pin as contract${keyLabel} \u2192 #>`,
+        import_vscode7.CodeActionKind.RefactorRewrite
+      );
+      pin.command = {
+        command: "semipy.promoteReasoningLine",
+        title: "Pin as contract",
+        arguments: [document.uri, range.start.line]
+      };
+      const dismiss = new import_vscode7.CodeAction("Semipy: Dismiss this note", import_vscode7.CodeActionKind.RefactorRewrite);
+      dismiss.command = {
+        command: "semipy.dismissReasoningLine",
+        title: "Dismiss note",
+        arguments: [document.uri, range.start.line]
+      };
+      return [pin, dismiss];
+    }
+  };
+}
+function createSteeringHoverProvider() {
+  return {
+    provideHover(document, position, _token) {
+      const line = document.lineAt(position.line);
+      if (!isReasoning(line.text)) {
+        return void 0;
+      }
+      const parsed = parseSteeringLine(line.text);
+      const md = new import_vscode7.MarkdownString();
+      md.isTrusted = true;
+      md.supportThemeIcons = true;
+      if (parsed) {
+        const zoneLabel = parsed.zone === "provenance" ? "provenance" : "effect";
+        md.appendMarkdown(
+          `$(lightbulb) **\`${parsed.key}\`** \u2014 ${KEY_HELP[parsed.key] || "an inferred note"}  \xB7  *${zoneLabel}*
+
+`
+        );
+      } else {
+        md.appendMarkdown(`$(lightbulb) **Inferred note** \u2014 semipy's reasoning, not part of your contract.
+
+`);
+      }
+      const q = encodeURIComponent(JSON.stringify([document.uri.toString(), position.line]));
+      md.appendMarkdown(
+        `[$(pin) Pin as contract (#>)](command:semipy.promoteReasoningLine?${q})  \xB7  [$(close) Dismiss](command:semipy.dismissReasoningLine?${q})`
+      );
+      return new import_vscode7.Hover(md);
+    }
+  };
+}
+
+// src/features/steering/modesControl.ts
+var import_vscode8 = require("vscode");
+var MODE_FLAGS = [
+  { flag: "verbose", label: "Verbose pipeline stream", detail: "Show the live generation stream and phase strip." },
+  { flag: "contract_gate", label: "Contract gate", detail: "Reject generated code that violates a carried behavioral case; regenerate." },
+  { flag: "contract_maintainer", label: "Contract maintainer (LLM)", detail: "Let an LLM propose golden-master examples and metamorphic relations." },
+  { flag: "sketch_library_learning", label: "Pattern learning", detail: "Learn NL->code sketches so similar specs can INSTANTIATE without an LLM call." },
+  { flag: "effects_enabled", label: "Effects subsystem", detail: "Treat slots that declare fx as effectful (reified real-world effects)." },
+  { flag: "effect_staging", label: "Effect staging (shadow)", detail: "Run effects against a shadow of the artifact; capture compensations." },
+  { flag: "effect_gate", label: "Effect gate", detail: "Enforce reversibility + bounded blast radius before an effect is allowed.", caution: true },
+  { flag: "effect_smt", label: "Effect proofs", detail: "Prove bounded blast radius for all inputs via schema superkeys." },
+  { flag: "effect_auto_apply", label: "Auto-apply effects", detail: "Commit verified effects to the real artifact (otherwise dry-run).", caution: true },
+  { flag: "effect_require_approval_external", label: "Approve external effects", detail: "Require explicit approval before sending to an external (non-shadowable) target." }
+];
+function buildConfigureSnippet(flags) {
+  if (!flags.length) {
+    return "configure()";
+  }
+  const body = flags.map((f) => `    ${f}=True,`).join("\n");
+  return `configure(
+${body}
+)`;
+}
+function hasConfigureImport(text) {
+  return /from\s+semipy\s+import\s+[^\n]*\bconfigure\b/.test(text) || /\bimport\s+semipy\b/.test(text);
+}
+async function insertConfigure(editor, snippet) {
+  const doc = editor.document;
+  let lastImport = -1;
+  for (let i = 0; i < Math.min(doc.lineCount, 200); i++) {
+    const t = doc.lineAt(i).text.trim();
+    if (t.startsWith("import ") || t.startsWith("from ")) {
+      lastImport = i;
+    } else if (t && !t.startsWith("#") && lastImport >= 0) {
+      break;
+    }
+  }
+  const needsImport = !hasConfigureImport(doc.getText());
+  const importLine = needsImport ? "from semipy import configure\n" : "";
+  const at = new import_vscode8.Position(lastImport + 1, 0);
+  const block = `${importLine}${snippet}
+
+`;
+  await editor.insertSnippet(new import_vscode8.SnippetString(block.replace(/\$/g, "\\$")), at);
+}
+async function runSteeringModesQuickPick() {
+  const items = MODE_FLAGS.map((m) => ({
+    label: `${m.caution ? "$(alert) " : ""}${m.label}`,
+    description: m.flag,
+    detail: m.detail,
+    flag: m.flag
+  }));
+  const picked = await import_vscode8.window.showQuickPick(items, {
+    canPickMany: true,
+    title: "Semipy \xB7 Steering \u2014 choose the modes to enable",
+    placeHolder: "These map to configure(...) flags. Caution-marked modes change real-world behaviour."
+  });
+  if (!picked || picked.length === 0) {
+    return;
+  }
+  const snippet = buildConfigureSnippet(picked.map((p) => p.flag));
+  const action = await import_vscode8.window.showQuickPick(
+    [
+      { label: "$(insert) Insert configure() at top of file", id: "insert" },
+      { label: "$(clippy) Copy to clipboard", id: "copy" }
+    ],
+    { title: "Apply steering", placeHolder: snippet.replace(/\n\s*/g, " ") }
+  );
+  if (!action) {
+    return;
+  }
+  if (action.id === "copy") {
+    await import_vscode8.env.clipboard.writeText(snippet);
+    void import_vscode8.window.showInformationMessage("Semipy: configure(...) snippet copied to clipboard.");
+    return;
+  }
+  const editor = import_vscode8.window.activeTextEditor;
+  if (!editor) {
+    await import_vscode8.env.clipboard.writeText(snippet);
+    void import_vscode8.window.showInformationMessage("Semipy: no active editor \u2014 snippet copied to clipboard instead.");
+    return;
+  }
+  await insertConfigure(editor, snippet);
+}
+
+// src/features/phraseHighlight/phraseHoverProvider.ts
+var import_vscode9 = require("vscode");
+var import_vscode10 = require("vscode");
+
+// src/data/sketchLoader.ts
+var fs3 = __toESM(require("fs"));
+var path5 = __toESM(require("path"));
+function sketchLibraryPath(cacheDir) {
+  return path5.join(cacheDir, "sketch_library.json");
+}
+function loadSketchLibraryFile(p) {
+  try {
+    const raw = fs3.readFileSync(p, "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return void 0;
+  }
+}
+function loadSketchLibraryMerged(cacheDir, workspaceRoots) {
+  const merged = { version: 1, sketches: {}, bindings: {} };
+  let any = false;
+  const absorb = (lib) => {
+    if (!lib) {
+      return;
+    }
+    any = true;
+    Object.assign(merged.bindings ||= {}, lib.bindings || {});
+    Object.assign(merged.sketches ||= {}, lib.sketches || {});
+    if (lib.version !== void 0) {
+      merged.version = lib.version;
+    }
+  };
+  absorb(loadSketchLibraryFile(sketchLibraryPath(cacheDir)));
+  const scanDir = (dir) => {
+    let names;
+    try {
+      names = fs3.readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      if (!name.startsWith(".semiformal")) {
+        continue;
+      }
+      const sub = path5.join(dir, name);
+      let isDir = false;
+      try {
+        isDir = fs3.statSync(sub).isDirectory();
+      } catch {
+        continue;
+      }
+      if (!isDir) {
+        continue;
+      }
+      absorb(loadSketchLibraryFile(path5.join(sub, "sketch_library.json")));
+    }
+  };
+  for (const root of workspaceRoots ?? []) {
+    scanDir(root);
+    let entries;
+    try {
+      entries = fs3.readdirSync(root, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const ent of entries) {
+      if (!ent.isDirectory() || ent.name.startsWith(".")) {
+        continue;
+      }
+      scanDir(path5.join(root, ent.name));
+    }
+  }
+  return any ? merged : void 0;
+}
+function bindingById(lib, bindingId) {
+  if (!lib?.bindings || !bindingId) {
+    return void 0;
+  }
+  return lib.bindings[bindingId];
+}
+function resolveBindingIdForCommit(lib, commitId, explicitBindingId) {
+  const e = (explicitBindingId || "").trim();
+  if (e) {
+    return e;
+  }
+  if (!lib?.sketches || !commitId) {
+    return void 0;
+  }
+  for (const sk of Object.values(lib.sketches)) {
+    if (!sk || typeof sk !== "object") {
+      continue;
+    }
+    const ids = sk.source_commit_ids || [];
+    if (!ids.includes(commitId)) {
+      continue;
+    }
+    const bid = (sk.binding_id || "").trim();
+    if (bid) {
+      return bid;
+    }
+  }
+  return void 0;
+}
+
+// src/features/phraseHighlight/phraseHoverProvider.ts
+function createPhraseHoverProvider(getPortal, getPortalCacheDir, getWorkspaceRoots) {
+  return {
+    provideHover(document, pos) {
+      if (document.languageId !== "python") {
+        return void 0;
+      }
+      const portal = getPortal();
+      const cacheDir = getPortalCacheDir();
+      if (!portal || !cacheDir) {
+        return void 0;
+      }
+      const line1 = pos.line + 1;
+      const fullText = document.getText();
+      const lineText = document.lineAt(pos.line).text;
+      const specRegion = hashArrowSpecSuffixFromLine(lineText);
+      if (!specRegion || pos.character < specRegion.baseCol) {
+        return void 0;
+      }
+      const lib = loadSketchLibraryMerged(cacheDir, getWorkspaceRoots());
+      const suffix = specRegion.suffix;
+      const rel = pos.character - specRegion.baseCol;
+      const lowerSuffix = suffix.toLowerCase();
+      for (const slot of Object.values(portal.slots)) {
+        const head = activeCommitFromPortalSlot(slot);
+        const cid = head?.commit_id || "";
+        const bid = resolveBindingIdForCommit(lib, cid, head?.binding_id) || "";
+        if (!bid) {
+          continue;
+        }
+        const binding = bindingById(lib, bid);
+        if (!binding?.phrases?.length) {
+          continue;
+        }
+        const block = resolveSourceBlockRange(fullText, slot);
+        if (!block || line1 < block.startLine1 || line1 > block.endLine1) {
+          continue;
+        }
+        const sorted = [...binding.phrases].sort((x, y) => y.text.length - x.text.length);
+        for (const p of sorted) {
+          const t = (p.text || "").trim();
+          if (!t) {
+            continue;
+          }
+          const tl = t.toLowerCase();
+          let idx = 0;
+          while (idx <= lowerSuffix.length) {
+            const at = lowerSuffix.indexOf(tl, idx);
+            if (at < 0) {
+              break;
+            }
+            if (suffix.slice(at, at + t.length).toLowerCase() !== tl) {
+              idx = at + 1;
+              continue;
+            }
+            if (rel >= at && rel < at + t.length) {
+              const md = new import_vscode10.MarkdownString();
+              md.appendMarkdown(`**${p.role}**
+
+`);
+              md.appendMarkdown(`code referent: \`${p.code_referent || ""}\`
+
+`);
+              if (p.hole_name) {
+                md.appendMarkdown(`hole: \`${p.hole_name}\`
+
+`);
+              }
+              if (p.safe_swap_set?.length) {
+                md.appendMarkdown(`safe swaps: ${p.safe_swap_set.map((s) => `\`${s}\``).join(", ")}`);
+              }
+              return new import_vscode9.Hover(md);
+            }
+            idx = at + 1;
+          }
+        }
+      }
+      return void 0;
+    }
+  };
+}
+
+// src/features/phraseHighlight/phraseDecorations.ts
+var import_vscode12 = require("vscode");
+
+// src/logging/semipyOutputChannel.ts
+var import_vscode11 = require("vscode");
+var channel;
+function getSemipyOutputChannel() {
+  if (!channel) {
+    channel = import_vscode11.window.createOutputChannel("Semipy");
+  }
+  return channel;
+}
+function appendSemipyLog(line) {
+  getSemipyOutputChannel().appendLine(line);
+}
+
+// src/features/phraseHighlight/phraseDecorations.ts
+var ROLE_ORDER = ["operation", "param", "operator", "connective"];
+var ROLE_STYLES = {
+  operation: {
+    light: { color: "#00639c", backgroundColor: "rgba(0, 99, 156, 0)" },
+    dark: { color: "#4ec9b0", backgroundColor: "rgba(78, 201, 176, 0)" }
+  },
+  param: {
+    light: { color: "#a31515", backgroundColor: "rgba(163, 21, 21, 0)" },
+    dark: { color: "#ce9178", backgroundColor: "rgba(206, 145, 120, 0)" }
+  },
+  operator: {
+    light: { color: "#811f3f", backgroundColor: "rgba(129, 31, 63, 0)" },
+    dark: { color: "#dcdcaa", backgroundColor: "rgba(220, 220, 170, 0)" }
+  },
+  connective: {
+    light: { color: "#444444", backgroundColor: "rgba(68, 68, 68, 0)" },
+    dark: { color: "#9cdcfe", backgroundColor: "rgba(156, 220, 254, 0)" }
+  }
+};
+function createPhraseDecorationTypes() {
+  const out = {};
+  for (const role of ROLE_ORDER) {
+    const st = ROLE_STYLES[role] ?? ROLE_STYLES.param;
+    out[role] = import_vscode12.window.createTextEditorDecorationType({
+      rangeBehavior: import_vscode12.DecorationRangeBehavior.ClosedClosed,
+      light: { ...st.light, fontWeight: role === "operation" ? "600" : void 0 },
+      dark: { ...st.dark, fontWeight: role === "operation" ? "600" : void 0 }
+    });
+  }
+  return out;
+}
+function sortPhrasesLongestFirst(phrases) {
+  return [...phrases].sort((a, b) => (b.text || "").length - (a.text || "").length);
+}
+function phraseSpansInSuffix(suffix, phrases) {
+  const sorted = sortPhrasesLongestFirst(phrases);
+  const used = [];
+  const spans = [];
+  const overlaps = (s, e) => used.some((u) => !(e <= u.start || s >= u.end));
+  const lowerSuffix = suffix.toLowerCase();
+  for (const p of sorted) {
+    const t = (p.text || "").trim();
+    if (!t) {
+      continue;
+    }
+    const tl = t.toLowerCase();
+    let search = 0;
+    while (search <= lowerSuffix.length) {
+      const pos = lowerSuffix.indexOf(tl, search);
+      if (pos < 0) {
+        break;
+      }
+      const end = pos + t.length;
+      if (suffix.slice(pos, end).toLowerCase() !== tl) {
+        search = pos + 1;
+        continue;
+      }
+      if (!overlaps(pos, end)) {
+        used.push({ start: pos, end });
+        spans.push({ start: pos, end, role: p.role || "param" });
+        break;
+      }
+      search = pos + 1;
+    }
+  }
+  return spans;
+}
+function refreshPhraseDecorations(editor, portal, portalCacheDir, types, workspaceRoots) {
+  for (const t of Object.values(types)) {
+    editor.setDecorations(t, []);
+  }
+  if (!portal || !portalCacheDir) {
+    return;
+  }
+  const lib = loadSketchLibraryMerged(portalCacheDir, workspaceRoots);
+  const doc = editor.document;
+  const full = doc.getText();
+  const lines = full.split(/\r?\n/);
+  const trace = import_vscode12.workspace.getConfiguration("semipy").get("tracePhraseDecorations") ?? false;
+  if (trace) {
+    appendSemipyLog(`[phrase] refresh ${doc.uri.fsPath}`);
+    appendSemipyLog(
+      `  cacheDir=${portalCacheDir} lib=${lib ? "ok" : "missing"} bindingKeys=${lib?.bindings ? Object.keys(lib.bindings).length : 0}`
+    );
+  }
+  const rangesByRole = {};
+  for (const r of ROLE_ORDER) {
+    rangesByRole[r] = [];
+  }
+  for (const slot of Object.values(portal.slots)) {
+    const head = activeCommitFromPortalSlot(slot);
+    const cid = head?.commit_id || "";
+    const bid = resolveBindingIdForCommit(lib, cid, head?.binding_id) || "";
+    if (trace) {
+      appendSemipyLog(
+        `  slot ${slot.slot_id.slice(0, 8)} commit ${cid.slice(0, 12) || "?"} resolved binding_id=${bid || "none"}`
+      );
+    }
+    if (!bid) {
+      continue;
+    }
+    const binding = bindingById(lib, bid);
+    if (!binding?.phrases?.length) {
+      if (trace) {
+        appendSemipyLog(`    no phrases for binding ${bid.slice(0, 8)}`);
+      }
+      continue;
+    }
+    const block = resolveSourceBlockRange(full, slot);
+    if (!block) {
+      if (trace) {
+        appendSemipyLog(`    no source block range`);
+      }
+      continue;
+    }
+    const { startLine1: start1, endLine1: end1 } = block;
+    let spanTotal = 0;
+    for (let lineIdx = start1 - 1; lineIdx <= end1 - 1; lineIdx++) {
+      if (lineIdx < 0 || lineIdx >= lines.length) {
+        continue;
+      }
+      const line = lines[lineIdx];
+      const specRegion = hashArrowSpecSuffixFromLine(line);
+      if (!specRegion) {
+        continue;
+      }
+      const suffix = specRegion.suffix;
+      const spans = phraseSpansInSuffix(suffix, binding.phrases);
+      spanTotal += spans.length;
+      const lineObj = doc.lineAt(lineIdx);
+      for (const sp of spans) {
+        const role = ROLE_ORDER.includes(sp.role) ? sp.role : "param";
+        const startCol = specRegion.baseCol + sp.start;
+        const endCol = specRegion.baseCol + sp.end;
+        const r = new import_vscode12.Range(
+          new import_vscode12.Position(lineIdx, startCol),
+          new import_vscode12.Position(lineIdx, Math.min(endCol, lineObj.text.length))
+        );
+        rangesByRole[role].push(r);
+      }
+    }
+    if (trace) {
+      appendSemipyLog(`    block lines ${start1}-${end1} phraseSpans=${spanTotal}`);
+    }
+  }
+  for (const role of ROLE_ORDER) {
+    const t = types[role];
+    if (t) {
+      editor.setDecorations(t, rangesByRole[role] || []);
+    }
+  }
+}
+
+// src/features/splitEditor/linkedHighlight.ts
+var path6 = __toESM(require("path"));
+var import_vscode13 = require("vscode");
+var LinkedHighlightCoordinator = class {
+  constructor(fadeMs) {
+    this.fadeMs = fadeMs;
+    this.highlight = import_vscode13.window.createTextEditorDecorationType({
+      backgroundColor: new import_vscode13.ThemeColor("editor.wordHighlightBackground"),
+      isWholeLine: false
+    });
+  }
+  highlight;
+  fadeTimer;
+  dispose() {
+    if (this.fadeTimer) {
+      clearTimeout(this.fadeTimer);
+    }
+    this.highlight.dispose();
+  }
+  onSelectionOrPortal(editor, portal, portalCacheDir) {
+    if (this.fadeTimer) {
+      clearTimeout(this.fadeTimer);
+      this.fadeTimer = void 0;
+    }
+    for (const ed of import_vscode13.window.visibleTextEditors) {
+      ed.setDecorations(this.highlight, []);
+    }
+    if (!editor || !portal || !portalCacheDir) {
+      return;
+    }
+    const doc = editor.document;
+    const docPath = doc.uri.fsPath;
+    const sel = editor.selection.active;
+    const line1 = sel.line + 1;
+    const fullText = doc.getText();
+    const dispatchPath = path6.join(portalCacheDir, "runtime", `${portal.module_name}.semi.py`);
+    if (pathsEqual(docPath, dispatchPath) || doc.uri.fsPath.endsWith(".semi.py")) {
+      this.highlightDispatchToSource(editor, portal, portalCacheDir);
+      return;
+    }
+    const slot = findSlotForSourceLine(portal, docPath, line1, fullText);
+    if (!slot) {
+      return;
+    }
+    const dr = dispatchRangeForSlot(portal, slot.slot_id, portalCacheDir);
+    if (!dr) {
+      return;
+    }
+    const targetUri = import_vscode13.Uri.file(dr.uriPath);
+    const dispEd = import_vscode13.window.visibleTextEditors.find(
+      (e) => e.document.uri.toString() === targetUri.toString()
+    );
+    if (!dispEd) {
+      return;
+    }
+    const start = Math.max(1, dr.startLine1) - 1;
+    const end = Math.max(1, dr.endLine1) - 1;
+    const ranges = [];
+    for (let i = start; i <= end; i++) {
+      if (i < dispEd.document.lineCount) {
+        ranges.push(dispEd.document.lineAt(i).range);
+      }
+    }
+    dispEd.setDecorations(this.highlight, ranges);
+    this.scheduleFade();
+  }
+  highlightDispatchToSource(editor, portal, portalCacheDir) {
+    const line1 = editor.selection.active.line + 1;
+    for (const slot of Object.values(portal.slots)) {
+      const dr = dispatchRangeForSlot(portal, slot.slot_id, portalCacheDir);
+      if (!dr) {
+        continue;
+      }
+      if (!pathsEqual(dr.uriPath, editor.document.uri.fsPath)) {
+        continue;
+      }
+      if (line1 >= dr.startLine1 && line1 <= dr.endLine1) {
+        const sp = slot.slot_spec?.source_span;
+        if (!sp || sp.length < 3) {
+          return;
+        }
+        const [srcFile] = sp;
+        const srcUri = import_vscode13.Uri.file(srcFile);
+        const srcEd = import_vscode13.window.visibleTextEditors.find(
+          (e) => e.document.uri.toString() === srcUri.toString()
+        );
+        if (!srcEd) {
+          return;
+        }
+        const full = srcEd.document.getText();
+        const block = resolveSourceBlockRange(full, slot);
+        const ranges = [];
+        const a = block?.startLine1 ?? sp[1];
+        const b = block?.endLine1 ?? sp[2];
+        for (let i = a - 1; i <= b - 1; i++) {
+          if (i < srcEd.document.lineCount) {
+            ranges.push(srcEd.document.lineAt(i).range);
+          }
+        }
+        srcEd.setDecorations(this.highlight, ranges);
+        this.scheduleFade();
+        return;
+      }
+    }
+  }
+  scheduleFade() {
+    const ms = this.fadeMs();
+    this.fadeTimer = setTimeout(() => {
+      this.fadeTimer = void 0;
+      for (const ed of import_vscode13.window.visibleTextEditors) {
+        ed.setDecorations(this.highlight, []);
+      }
+    }, ms);
+  }
+};
+
+// src/features/splitEditor/splitEditorCommand.ts
+var path7 = __toESM(require("path"));
+var import_vscode14 = require("vscode");
+async function openDispatchSplitView(portalCacheDir, moduleName) {
+  const abs = path7.join(portalCacheDir, "runtime", `${moduleName}.semi.py`);
+  const uri = import_vscode14.Uri.file(abs);
+  try {
+    const doc = await import_vscode14.workspace.openTextDocument(uri);
+    await import_vscode14.window.showTextDocument(doc, {
+      viewColumn: import_vscode14.ViewColumn.Beside,
+      preserveFocus: false
+    });
+  } catch {
+    void import_vscode14.window.showErrorMessage(`Semipy: could not open dispatch file: ${abs}`);
+  }
+}
+
+// src/features/versionTree/slotHistoryProvider.ts
+var import_vscode16 = require("vscode");
+
+// src/features/versionTree/walkHistory.ts
+function walkHistoryCommits(slot, commitId) {
+  const result = [];
+  const seen = /* @__PURE__ */ new Set();
+  const stack = [commitId];
+  while (stack.length) {
+    const cid = stack.pop();
+    if (seen.has(cid)) {
+      continue;
+    }
+    seen.add(cid);
+    const c = slot.commits[cid];
+    if (!c) {
+      continue;
+    }
+    result.push(c);
+    for (const pid of c.parent_ids) {
+      stack.push(pid);
+    }
+  }
+  return result;
+}
+
+// src/features/versionTree/slotTreeItems.ts
+var import_vscode15 = require("vscode");
+function decisionIcon(decision) {
+  const d = (decision || "").toUpperCase();
+  if (d === "GENERATE") {
+    return new import_vscode15.ThemeIcon("git-commit");
+  }
+  if (d === "ADAPT") {
+    return new import_vscode15.ThemeIcon("git-merge");
+  }
+  if (d === "REUSE" || d === "reuse") {
+    return new import_vscode15.ThemeIcon("link");
+  }
+  if (d === "INSTANTIATE" || d === "instantiate") {
+    return new import_vscode15.ThemeIcon("puzzle");
+  }
+  return new import_vscode15.ThemeIcon("git-commit");
+}
+function healthIcon(health) {
+  switch (health) {
+    case "danger":
+      return new import_vscode15.ThemeIcon("error", new import_vscode15.ThemeColor("errorForeground"));
+    case "warn":
+      return new import_vscode15.ThemeIcon("warning", new import_vscode15.ThemeColor("charts.yellow"));
+    case "effect":
+      return new import_vscode15.ThemeIcon("circle-outline", new import_vscode15.ThemeColor("charts.yellow"));
+    default:
+      return new import_vscode15.ThemeIcon("circle-filled", new import_vscode15.ThemeColor("charts.green"));
+  }
+}
+function guaranteeIcon(g) {
+  if (g.patterns === 0 && g.quarantined > 0) {
+    return new import_vscode15.ThemeIcon("warning", new import_vscode15.ThemeColor("charts.yellow"));
+  }
+  if (g.kind === "invariant") {
+    return new import_vscode15.ThemeIcon("shield", new import_vscode15.ThemeColor("charts.green"));
+  }
+  if (g.kind === "metamorphic") {
+    return new import_vscode15.ThemeIcon("symbol-operator", new import_vscode15.ThemeColor("charts.blue"));
+  }
+  return new import_vscode15.ThemeIcon("bookmark", new import_vscode15.ThemeColor("charts.green"));
+}
+function eventIcon(e) {
+  const status = e.status || "applied";
+  if (status === "reverted") {
+    return new import_vscode15.ThemeIcon("discard");
+  }
+  if (status === "approval_pending" || status === "shadow") {
+    return new import_vscode15.ThemeIcon("clock", new import_vscode15.ThemeColor("charts.yellow"));
+  }
+  return new import_vscode15.ThemeIcon("zap", new import_vscode15.ThemeColor("charts.yellow"));
+}
+function eventLabel(e) {
+  const ops = [...new Set((e.applied_effects || []).map((x) => x.op))];
+  const targets = [...new Set((e.applied_effects || []).map((x) => x.target).filter(Boolean))];
+  const head = targets.length ? targets.join(", ") : (e.event_id || "").slice(0, 8);
+  return `${ops.join("/")} ${head}`.trim();
+}
+function formatCommitLabel(c) {
+  const id = c.commit_id.slice(0, 8);
+  const msg = (c.message || "").replace(/\s+/g, " ").slice(0, 48);
+  const ts = c.timestamp ? new Date(c.timestamp * 1e3).toLocaleString() : "";
+  return `${id} | ${c.decision || "?"} | ${msg}${ts ? ` | ${ts}` : ""}`;
+}
+function truncateSpecPreview(spec, n = 60) {
+  const t = spec.replace(/\s+/g, " ").trim();
+  if (t.length <= n) {
+    return t;
+  }
+  return t.slice(0, n - 1) + "\u2026";
+}
+
+// src/features/versionTree/slotHistoryProvider.ts
+function elementId(e) {
+  switch (e.kind) {
+    case "portal":
+      return "portal";
+    case "slot":
+      return `slot:${e.slot.slot_id}`;
+    case "contractGroup":
+      return `cg:${e.slot.slot_id}`;
+    case "guarantee":
+      return `g:${e.slot.slot_id}:${e.guarantee.key}`;
+    case "ledgerGroup":
+      return `lg:${e.slot.slot_id}`;
+    case "event":
+      return `ev:${e.slot.slot_id}:${e.event.event_id}`;
+    case "branch":
+      return `br:${e.slot.slot_id}:${e.branch.name}`;
+    case "commit":
+      return `c:${e.slot.slot_id}:${e.branchName}:${e.commit.commit_id}`;
+  }
+}
+var SlotHistoryProvider = class {
+  constructor(getPortal) {
+    this.getPortal = getPortal;
+  }
+  _onDidChange = new import_vscode16.EventEmitter();
+  onDidChangeTreeData = this._onDidChange.event;
+  refresh() {
+    this._onDidChange.fire(void 0);
+  }
+  /** A tree element for a slot id (for treeView.reveal from the Inspect action). */
+  slotElement(slotId) {
+    const portal = this.getPortal();
+    const slot = portal?.slots?.[slotId];
+    if (!portal || !slot) {
+      return void 0;
+    }
+    return { kind: "slot", portal, slot };
+  }
+  getTreeItem(element) {
+    const ti = this.buildTreeItem(element);
+    ti.id = elementId(element);
+    return ti;
+  }
+  buildTreeItem(element) {
+    if (element.kind === "portal") {
+      const ti2 = new import_vscode16.TreeItem(
+        element.portal.source_file || element.portal.module_name || "portal",
+        import_vscode16.TreeItemCollapsibleState.Expanded
+      );
+      ti2.description = element.portal.module_name;
+      ti2.iconPath = new import_vscode16.ThemeIcon("symbol-namespace");
+      return ti2;
+    }
+    if (element.kind === "slot") {
+      const spec = element.slot.slot_spec?.spec_text || "";
+      const insight = computeSlotInsight(element.slot);
+      const ti2 = new import_vscode16.TreeItem(
+        truncateSpecPreview(spec) || element.slot.slot_id.slice(0, 8),
+        import_vscode16.TreeItemCollapsibleState.Expanded
+      );
+      ti2.description = insight ? `${insight.glyph} ${insight.decision} \xB7 ${insight.commitShort}` : element.slot.slot_id.slice(0, 8);
+      ti2.iconPath = insight ? healthIcon(insight.health) : new import_vscode16.ThemeIcon("circle-outline");
+      ti2.contextValue = "semipy.slot";
+      ti2.command = {
+        command: "semipy.viewActiveCode",
+        title: "View active implementation",
+        arguments: [element.slot.slot_id]
+      };
+      return ti2;
+    }
+    if (element.kind === "contractGroup") {
+      const c = computeSlotInsight(element.slot)?.contract;
+      const ti2 = new import_vscode16.TreeItem("Guarantees", import_vscode16.TreeItemCollapsibleState.Collapsed);
+      ti2.iconPath = new import_vscode16.ThemeIcon("law");
+      if (c) {
+        const patterns = new Set(
+          Object.values(element.slot.contract?.cases || {}).map((x) => x.input_fingerprint || "")
+        ).size;
+        const bits = [`${c.distinct} distinct`];
+        if (patterns > 1)
+          bits.push(`${patterns} patterns`);
+        if (c.quarantined)
+          bits.push(`${c.quarantined} quarantined`);
+        ti2.description = bits.join(" \xB7 ");
+      }
+      return ti2;
+    }
+    if (element.kind === "guarantee") {
+      const g = element.guarantee;
+      const quarantined = g.patterns === 0 && g.quarantined > 0;
+      const ti2 = new import_vscode16.TreeItem(g.label, import_vscode16.TreeItemCollapsibleState.None);
+      ti2.iconPath = guaranteeIcon(g);
+      ti2.description = g.patterns > 1 ? `\xD7 ${g.patterns} patterns` : quarantined ? "quarantined" : g.kind;
+      const sample = g.sampleRepr ? `
+
+Example input: \`${g.sampleRepr}\`` : "";
+      ti2.tooltip = new import_vscode16.MarkdownString(
+        `**\`${g.label}\`** _(${g.kind})_
+
+${g.meaning}${g.reason ? `
+
+${g.reason}` : ""}${sample}`
+      );
+      ti2.contextValue = quarantined ? "semipy.guaranteeQuarantined" : "semipy.guarantee";
+      return ti2;
+    }
+    if (element.kind === "ledgerGroup") {
+      const e = computeSlotInsight(element.slot)?.effect;
+      const ti2 = new import_vscode16.TreeItem("Effects", import_vscode16.TreeItemCollapsibleState.Collapsed);
+      ti2.iconPath = new import_vscode16.ThemeIcon("zap");
+      if (e) {
+        const bits = [`${e.applied} applied`];
+        if (e.reverted)
+          bits.push(`${e.reverted} reverted`);
+        if (e.pending)
+          bits.push(`${e.pending} pending`);
+        ti2.description = bits.join(" \xB7 ");
+      }
+      return ti2;
+    }
+    if (element.kind === "event") {
+      const e = element.event;
+      const ti2 = new import_vscode16.TreeItem(eventLabel(e), import_vscode16.TreeItemCollapsibleState.None);
+      ti2.iconPath = eventIcon(e);
+      ti2.description = e.status || "applied";
+      ti2.contextValue = (e.status || "applied") === "applied" ? "semipy.ledgerEvent" : "semipy.ledgerEventReverted";
+      ti2.command = {
+        command: "semipy.viewActiveCode",
+        title: "View active implementation",
+        arguments: [element.slot.slot_id]
+      };
+      return ti2;
+    }
+    if (element.kind === "branch") {
+      const isDefault = element.branch.name === (element.slot.default_branch || "main");
+      const ti2 = new import_vscode16.TreeItem(
+        `${element.branch.name}${isDefault ? " (HEAD)" : ""}`,
+        import_vscode16.TreeItemCollapsibleState.Collapsed
+      );
+      ti2.iconPath = new import_vscode16.ThemeIcon("git-branch");
+      return ti2;
+    }
+    const ti = new import_vscode16.TreeItem(formatCommitLabel(element.commit), import_vscode16.TreeItemCollapsibleState.None);
+    ti.iconPath = decisionIcon(element.commit.decision);
+    ti.contextValue = "semipy.commit";
+    ti.command = {
+      command: "semipy.viewGeneratedCode",
+      title: "View generated code",
+      arguments: [element.slot.slot_id, element.commit.commit_id]
+    };
+    return ti;
+  }
+  getChildren(element) {
+    const portal = this.getPortal();
+    if (!portal) {
+      return [];
+    }
+    if (!element) {
+      return [{ kind: "portal", portal }];
+    }
+    if (element.kind === "portal") {
+      return Object.values(element.portal.slots).filter((slot) => slot.commits && Object.keys(slot.commits).length > 0).map((slot) => ({ kind: "slot", portal: element.portal, slot }));
+    }
+    if (element.kind === "slot") {
+      const out = [];
+      const hasContract = !!element.slot.contract?.cases && Object.keys(element.slot.contract.cases).length > 0;
+      const hasLedger = !!element.slot.ledger?.events && element.slot.ledger.events.length > 0;
+      if (hasContract) {
+        out.push({ kind: "contractGroup", portal: element.portal, slot: element.slot });
+      }
+      if (hasLedger) {
+        out.push({ kind: "ledgerGroup", portal: element.portal, slot: element.slot });
+      }
+      for (const branch of Object.values(element.slot.branches)) {
+        out.push({ kind: "branch", portal: element.portal, slot: element.slot, branch });
+      }
+      return out;
+    }
+    if (element.kind === "contractGroup") {
+      const cases = Object.values(element.slot.contract?.cases || {});
+      return groupGuarantees(cases).filter((g) => g.patterns > 0 || g.quarantined > 0).map((guarantee) => ({
+        kind: "guarantee",
+        portal: element.portal,
+        slot: element.slot,
+        guarantee
+      }));
+    }
+    if (element.kind === "ledgerGroup") {
+      const events = element.slot.ledger?.events || [];
+      return [...events].reverse().map((event) => ({
+        kind: "event",
+        portal: element.portal,
+        slot: element.slot,
+        event
+      }));
+    }
+    if (element.kind === "branch") {
+      const chain = walkHistoryCommits(element.slot, element.branch.head);
+      return chain.map((commit) => ({
+        kind: "commit",
+        portal: element.portal,
+        slot: element.slot,
+        branchName: element.branch.name,
+        commit
+      }));
+    }
+    return [];
+  }
+  getParent(element) {
+    const portal = element.kind === "portal" ? void 0 : element.portal;
+    if (!portal) {
+      return void 0;
+    }
+    switch (element.kind) {
+      case "slot":
+        return { kind: "portal", portal };
+      case "contractGroup":
+      case "ledgerGroup":
+      case "branch":
+        return { kind: "slot", portal, slot: element.slot };
+      case "guarantee":
+        return { kind: "contractGroup", portal, slot: element.slot };
+      case "event":
+        return { kind: "ledgerGroup", portal, slot: element.slot };
+      case "commit":
+        return {
+          kind: "branch",
+          portal,
+          slot: element.slot,
+          branch: element.slot.branches[element.branchName] || {
+            name: element.branchName,
+            head: element.commit.commit_id
+          }
+        };
+      default:
+        return void 0;
+    }
+  }
+};
+
+// src/features/versionTree/versionActions.ts
+var import_child_process = require("child_process");
+var fs4 = __toESM(require("fs"));
+var path8 = __toESM(require("path"));
+var import_vscode17 = require("vscode");
+var previewSources = /* @__PURE__ */ new Map();
+function setCommitPreviewSource(slotId, commitId, source) {
+  const key = `${slotId}:${commitId}`;
+  previewSources.set(key, source);
+  return import_vscode17.Uri.from({ scheme: "semipy-commit", path: "/preview.py", query: key });
+}
+function registerCommitTextProvider() {
+  return import_vscode17.workspace.registerTextDocumentContentProvider("semipy-commit", {
+    provideTextDocumentContent(uri) {
+      const key = uri.query;
+      return previewSources.get(key) || "# Preview expired; run the tree command again.\n";
+    }
+  });
+}
+async function viewGeneratedCode(slotId, commitId, source) {
+  const uri = setCommitPreviewSource(slotId, commitId, source);
+  const doc = await import_vscode17.workspace.openTextDocument(uri);
+  await import_vscode17.window.showTextDocument(doc, { preview: true });
+}
+function expandWorkspaceVars(s) {
+  let out = s;
+  const folders = import_vscode17.workspace.workspaceFolders ?? [];
+  if (out.includes("${workspaceFolder}")) {
+    const first = folders[0]?.uri.fsPath;
+    if (first) {
+      out = out.replace(/\$\{workspaceFolder\}/g, first);
+    }
+  }
+  return out;
+}
+function resolveConfiguredPythonPath(raw) {
+  let out = expandWorkspaceVars(raw.trim());
+  if (!out) {
+    return out;
+  }
+  if (!path8.isAbsolute(out)) {
+    const wf = import_vscode17.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (wf) {
+      out = path8.resolve(wf, out);
+    }
+  }
+  try {
+    return path8.normalize(out);
+  } catch {
+    return out;
+  }
+}
+function pushIfFile(out, p) {
+  try {
+    if (fs4.existsSync(p) && fs4.statSync(p).isFile()) {
+      out.push(p);
+    }
+  } catch {
+  }
+}
+function candidateVenvInterpreterPaths() {
+  const candidates = [];
+  const roots = /* @__PURE__ */ new Set();
+  for (const wf of import_vscode17.workspace.workspaceFolders ?? []) {
+    roots.add(wf.uri.fsPath);
+    roots.add(path8.dirname(wf.uri.fsPath));
+  }
+  for (const root of roots) {
+    pushIfFile(candidates, path8.join(root, ".venv", "bin", "python"));
+    pushIfFile(candidates, path8.join(root, ".venv", "bin", "python3"));
+    pushIfFile(candidates, path8.join(root, "venv", "bin", "python"));
+    pushIfFile(candidates, path8.join(root, "venv", "bin", "python3"));
+    pushIfFile(candidates, path8.join(root, ".venv", "Scripts", "python.exe"));
+    pushIfFile(candidates, path8.join(root, "venv", "Scripts", "python.exe"));
+  }
+  return candidates;
+}
+function resolvePythonExecutable() {
+  const cfg = import_vscode17.workspace.getConfiguration("semipy");
+  const explicit = resolveConfiguredPythonPath((cfg.get("pythonPath") || "").trim());
+  if (explicit) {
+    return explicit;
+  }
+  for (const p of candidateVenvInterpreterPaths()) {
+    return p;
+  }
+  const py = import_vscode17.workspace.getConfiguration("python");
+  const interpreter = expandWorkspaceVars((py.get("defaultInterpreterPath") || "").trim());
+  if (interpreter) {
+    return interpreter;
+  }
+  return process.platform === "win32" ? "python" : "python3";
+}
+function runSemipyCli(args, cwd) {
+  return new Promise((resolve3) => {
+    const exe = resolvePythonExecutable();
+    (0, import_child_process.execFile)(exe, ["-m", "semipy", ...args], { cwd }, (error, stdout, stderr) => {
+      let code = 0;
+      if (error) {
+        const c = error.code;
+        code = typeof c === "number" ? c : 1;
+      }
+      resolve3({
+        stdout: String(stdout),
+        stderr: String(stderr),
+        code
+      });
+    });
+  });
+}
+
+// src/features/diagnostics/diagnosticProvider.ts
+var fs5 = __toESM(require("fs"));
+var path9 = __toESM(require("path"));
+var import_vscode18 = require("vscode");
+var SemipyDiagnosticManager = class {
+  /** semipy `cache_dir` (directory containing `diagnostics.json`). */
+  constructor(portalCacheDir) {
+    this.portalCacheDir = portalCacheDir;
+  }
+  collection = import_vscode18.languages.createDiagnosticCollection("semipy");
+  dispose() {
+    this.collection.dispose();
+  }
+  refresh() {
+    this.collection.clear();
+    const cacheDir = this.portalCacheDir();
+    if (!cacheDir) {
+      return;
+    }
+    const p = path9.join(cacheDir, "diagnostics.json");
+    let data;
+    try {
+      const raw = fs5.readFileSync(p, "utf8");
+      data = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    const byFile = /* @__PURE__ */ new Map();
+    for (const e of data.entries || []) {
+      const d = this.entryToDiagnostic(e);
+      if (!d) {
+        continue;
+      }
+      const fp = e.source_file;
+      const list = byFile.get(fp) || [];
+      list.push(d);
+      byFile.set(fp, list);
+    }
+    for (const [fp, diags] of byFile) {
+      const uri = import_vscode18.Uri.file(fp);
+      this.collection.set(uri, diags);
+    }
+  }
+  entryToDiagnostic(e) {
+    const start = Math.max(1, e.source_line_start) - 1;
+    const end = Math.max(1, e.source_line_end) - 1;
+    const sev = e.severity === "error" ? import_vscode18.DiagnosticSeverity.Error : e.severity === "warning" ? import_vscode18.DiagnosticSeverity.Warning : import_vscode18.DiagnosticSeverity.Information;
+    const d = new import_vscode18.Diagnostic(
+      new import_vscode18.Range(new import_vscode18.Position(start, 0), new import_vscode18.Position(end, 2e3)),
+      e.message,
+      sev
+    );
+    d.source = "semipy";
+    d.code = e.slot_id ? `semi-call-error:${e.slot_id}` : e.code || "semi-call-error";
+    d.relatedInformation = [];
+    if (e.generated_path && e.generated_line_range?.length === 2) {
+      const [a, b] = e.generated_line_range;
+      const root = this.portalCacheDir() || "";
+      const gp = path9.isAbsolute(e.generated_path) ? e.generated_path : path9.join(root, e.generated_path);
+      d.relatedInformation.push({
+        location: {
+          uri: import_vscode18.Uri.file(gp),
+          range: new import_vscode18.Range(
+            new import_vscode18.Position(Math.max(1, a) - 1, 0),
+            new import_vscode18.Position(Math.max(1, b) - 1, 2e3)
+          )
+        },
+        message: "Generated implementation"
+      });
+    }
+    return d;
+  }
+};
+
+// src/features/diagnostics/codeActions.ts
+var import_vscode19 = require("vscode");
+function slotIdFromDiagnosticCode(code) {
+  const s = typeof code === "object" && code !== null ? String(code.value) : String(code ?? "");
+  if (s.startsWith("semi-call-error:")) {
+    return s.slice("semi-call-error:".length);
+  }
+  return void 0;
+}
+function createRegenerateCodeActionProvider(getWorkspaceRoot, getPortalRelPath) {
+  return {
+    provideCodeActions(_document, _range, context) {
+      const ws = getWorkspaceRoot();
+      const portal = getPortalRelPath();
+      if (!ws || !portal) {
+        return [];
+      }
+      const hit = context.diagnostics.filter(
+        (d) => String(d.source || "").includes("semipy")
+      );
+      if (!hit.length) {
+        return [];
+      }
+      const slotId = slotIdFromDiagnosticCode(hit[0].code);
+      if (!slotId) {
+        return [];
+      }
+      const action = new import_vscode19.CodeAction("Regenerate this spec (semipy CLI)", import_vscode19.CodeActionKind.QuickFix);
+      action.command = {
+        command: "semipy.regenerateSlotDiagnostic",
+        title: "Regenerate",
+        arguments: [ws, portal, slotId]
+      };
+      return [action];
+    }
+  };
+}
+
 // src/features/slotAnnotations/slotEditorAnnotations.ts
+var import_vscode20 = require("vscode");
 function codeLensLineIndexStale(doc, spec) {
   if (!spec) {
     return void 0;
@@ -1971,7 +2953,7 @@ var SemipyCodeLensProvider = class {
     this.getPortal = getPortal;
     this.enabled = enabled;
   }
-  _onDidChange = new import_vscode14.EventEmitter();
+  _onDidChange = new import_vscode20.EventEmitter();
   onDidChangeCodeLenses = this._onDidChange.event;
   refresh() {
     this._onDidChange.fire();
@@ -1996,29 +2978,43 @@ var SemipyCodeLensProvider = class {
       if (lineIdx === void 0 || lineIdx >= document.lineCount) {
         continue;
       }
-      const range = new import_vscode14.Range(lineIdx, 0, lineIdx, 0);
+      const range = new import_vscode20.Range(lineIdx, 0, lineIdx, 0);
       const commit = activeCommitFromPortalSlot(slot);
-      const idShort = commit?.commit_id?.slice(0, 8) ?? "?";
-      const decision = (commit?.decision || "?").toUpperCase();
-      const t = commit?.timestamp ? new Date(commit.timestamp * 1e3).toLocaleString() : "";
-      const locked = slot.refs?.["__locked__"];
-      const headline = locked ? `Semipy locked \xB7 ${idShort} \xB7 ${t}` : `Semipy ${decision} \xB7 ${idShort} \xB7 ${t}`;
+      const insight = computeSlotInsight(slot);
+      const locked = !!slot.refs?.["__locked__"];
+      const headline = insight ? insightChips(insight).join(" \xB7 ") : "Semipy slot";
       out.push(
-        new import_vscode14.CodeLens(range, {
+        new import_vscode20.CodeLens(range, {
           title: headline,
-          command: "semipy.noop"
-        }),
-        new import_vscode14.CodeLens(range, {
-          title: "Switch version",
-          command: "semipy.pickSlotVersion",
+          command: "semipy.inspectSlot",
           arguments: [slot.slot_id]
-        }),
-        new import_vscode14.CodeLens(range, {
+        })
+      );
+      if (Object.keys(slot.commits).length > 1) {
+        out.push(
+          new import_vscode20.CodeLens(range, {
+            title: "Versions",
+            command: "semipy.pickSlotVersion",
+            arguments: [slot.slot_id]
+          })
+        );
+      }
+      out.push(
+        new import_vscode20.CodeLens(range, {
           title: locked ? "Unlock" : "Lock",
           command: locked ? "semipy.unlockSlotVersion" : "semipy.lockSlotVersion",
           arguments: locked ? [slot.slot_id] : [slot.slot_id, commit?.commit_id ?? ""]
         })
       );
+      if (insight && insight.effect.applied > 0 && insight.effect.latestEventId) {
+        out.push(
+          new import_vscode20.CodeLens(range, {
+            title: "Revert effect",
+            command: "semipy.revertEffect",
+            arguments: [slot.slot_id, insight.effect.latestEventId]
+          })
+        );
+      }
     }
     return out;
   }
@@ -2028,7 +3024,7 @@ var SemipyInlayHintsProvider = class {
     this.getPortal = getPortal;
     this.enabled = enabled;
   }
-  _onDidChange = new import_vscode14.EventEmitter();
+  _onDidChange = new import_vscode20.EventEmitter();
   onDidChangeInlayHints = this._onDidChange.event;
   refresh() {
     this._onDidChange.fire();
@@ -2065,12 +3061,12 @@ var SemipyInlayHintsProvider = class {
       const commit = activeCommitFromPortalSlot(slot);
       const decision = (commit?.decision || "?").toUpperCase();
       const idShort = commit?.commit_id?.slice(0, 8) ?? "?";
-      const label = ` semipy \xB7 ${decision} \xB7 ${idShort} `;
+      const label = ` ${decisionGlyph(commit?.decision || "")} ${decision} \xB7 ${idShort} `;
       hints.push(
-        new import_vscode14.InlayHint(
-          new import_vscode14.Position(lineNo, line.text.length),
+        new import_vscode20.InlayHint(
+          new import_vscode20.Position(lineNo, line.text.length),
           label,
-          import_vscode14.InlayHintKind.Type
+          import_vscode20.InlayHintKind.Type
         )
       );
     }
@@ -2079,26 +3075,36 @@ var SemipyInlayHintsProvider = class {
 };
 
 // src/features/specCommentSyntax/specCommentSyntaxDecorations.ts
-var import_vscode15 = require("vscode");
+var import_vscode21 = require("vscode");
 function createSpecCommentSyntaxTypes() {
   return {
-    specMarker: import_vscode15.window.createTextEditorDecorationType({
+    specMarker: import_vscode21.window.createTextEditorDecorationType({
       fontWeight: "600",
       light: { color: "#008f84" },
       dark: { color: "#4ec9b0" }
     }),
-    specBody: import_vscode15.window.createTextEditorDecorationType({
+    specBody: import_vscode21.window.createTextEditorDecorationType({
       light: { color: "#007a8a" },
       dark: { color: "#9cdcfe" }
     }),
-    reasoningMarker: import_vscode15.window.createTextEditorDecorationType({
+    reasoningMarker: import_vscode21.window.createTextEditorDecorationType({
       fontWeight: "600",
       light: { color: "#5a8a3d" },
       dark: { color: "#6a9955" }
     }),
-    reasoningBody: import_vscode15.window.createTextEditorDecorationType({
+    reasoningBody: import_vscode21.window.createTextEditorDecorationType({
       light: { color: "#3d6b2e" },
       dark: { color: "#b5cea8" }
+    }),
+    reasoningKeyProvenance: import_vscode21.window.createTextEditorDecorationType({
+      fontWeight: "600",
+      light: { color: "#4a6fa5" },
+      dark: { color: "#7fa6d8" }
+    }),
+    reasoningKeyEffect: import_vscode21.window.createTextEditorDecorationType({
+      fontWeight: "600",
+      light: { color: "#8a6a2a" },
+      dark: { color: "#d7a65f" }
     })
   };
 }
@@ -2119,8 +3125,8 @@ function rangesOnLine(line, lineIdx) {
       const markerEnd = gt + mGt[0].length;
       const bodyEnd = line.length;
       spec.push({
-        marker: new import_vscode15.Range(new import_vscode15.Position(lineIdx, markerStart), new import_vscode15.Position(lineIdx, markerEnd)),
-        body: new import_vscode15.Range(new import_vscode15.Position(lineIdx, markerEnd), new import_vscode15.Position(lineIdx, bodyEnd))
+        marker: new import_vscode21.Range(new import_vscode21.Position(lineIdx, markerStart), new import_vscode21.Position(lineIdx, markerEnd)),
+        body: new import_vscode21.Range(new import_vscode21.Position(lineIdx, markerEnd), new import_vscode21.Position(lineIdx, bodyEnd))
       });
       pos = markerEnd;
       continue;
@@ -2130,8 +3136,8 @@ function rangesOnLine(line, lineIdx) {
       const markerEnd = gt + mLt[0].length;
       const bodyEnd = line.length;
       reasoning.push({
-        marker: new import_vscode15.Range(new import_vscode15.Position(lineIdx, markerStart), new import_vscode15.Position(lineIdx, markerEnd)),
-        body: new import_vscode15.Range(new import_vscode15.Position(lineIdx, markerEnd), new import_vscode15.Position(lineIdx, bodyEnd))
+        marker: new import_vscode21.Range(new import_vscode21.Position(lineIdx, markerStart), new import_vscode21.Position(lineIdx, markerEnd)),
+        body: new import_vscode21.Range(new import_vscode21.Position(lineIdx, markerEnd), new import_vscode21.Position(lineIdx, bodyEnd))
       });
       pos = markerEnd;
       continue;
@@ -2146,12 +3152,16 @@ function refreshSpecCommentSyntaxDecorations(editor, types) {
     editor.setDecorations(types.specBody, []);
     editor.setDecorations(types.reasoningMarker, []);
     editor.setDecorations(types.reasoningBody, []);
+    editor.setDecorations(types.reasoningKeyProvenance, []);
+    editor.setDecorations(types.reasoningKeyEffect, []);
     return;
   }
   const specM = [];
   const specB = [];
   const reasM = [];
   const reasB = [];
+  const keyProv = [];
+  const keyEff = [];
   const n = editor.document.lineCount;
   for (let lineIdx = 0; lineIdx < n; lineIdx++) {
     const line = editor.document.lineAt(lineIdx).text;
@@ -2164,17 +3174,29 @@ function refreshSpecCommentSyntaxDecorations(editor, types) {
       reasM.push(r.marker);
       reasB.push(r.body);
     }
+    const steer = parseSteeringLine(line);
+    if (steer) {
+      const r = new import_vscode21.Range(
+        new import_vscode21.Position(lineIdx, steer.keyStart),
+        new import_vscode21.Position(lineIdx, steer.keyEnd)
+      );
+      (steer.zone === "provenance" ? keyProv : keyEff).push(r);
+    }
   }
   editor.setDecorations(types.specMarker, specM);
   editor.setDecorations(types.specBody, specB);
   editor.setDecorations(types.reasoningMarker, reasM);
   editor.setDecorations(types.reasoningBody, reasB);
+  editor.setDecorations(types.reasoningKeyProvenance, keyProv);
+  editor.setDecorations(types.reasoningKeyEffect, keyEff);
 }
 function disposeSpecCommentSyntaxTypes(types) {
   types.specMarker.dispose();
   types.specBody.dispose();
   types.reasoningMarker.dispose();
   types.reasoningBody.dispose();
+  types.reasoningKeyProvenance.dispose();
+  types.reasoningKeyEffect.dispose();
 }
 
 // src/extension.ts
@@ -2211,9 +3233,9 @@ async function rewindSpecIfSnapshot(editor, slot, slotId, commitId, portalRel, w
   );
 }
 function sessionSourceOpts() {
-  let raw = import_vscode16.workspace.getConfiguration("semipy").get("sessionSource")?.trim();
+  let raw = import_vscode22.workspace.getConfiguration("semipy").get("sessionSource")?.trim();
   if (raw?.includes("${workspaceFolder}")) {
-    const folder = import_vscode16.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const folder = import_vscode22.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (folder) {
       raw = raw.replace(/\$\{workspaceFolder\}/g, folder);
     }
@@ -2239,9 +3261,9 @@ function refreshPortalForUri(fsPath, state) {
   }
   state.portalPath = found;
   state.portal = portal;
-  state.portalCacheDir = path8.dirname(found);
-  const wf = import_vscode16.workspace.getWorkspaceFolder(import_vscode16.Uri.file(found));
-  state.workspaceRoot = wf?.uri.fsPath ?? path8.dirname(state.portalCacheDir);
+  state.portalCacheDir = path10.dirname(found);
+  const wf = import_vscode22.workspace.getWorkspaceFolder(import_vscode22.Uri.file(found));
+  state.workspaceRoot = wf?.uri.fsPath ?? path10.dirname(state.portalCacheDir);
 }
 function activate(context) {
   const portalState = {
@@ -2250,11 +3272,16 @@ function activate(context) {
     portalCacheDir: void 0,
     workspaceRoot: void 0
   };
-  const cfg = () => import_vscode16.workspace.getConfiguration("semipy");
+  const cfg = () => import_vscode22.workspace.getConfiguration("semipy");
   const opacityTypes = createOpacityDecorationTypes();
+  const dispatchDimType = createDispatchOpacityType();
   const phraseTypes = createPhraseDecorationTypes();
   const specSyntaxTypes = createSpecCommentSyntaxTypes();
+  const gutterTypes = createGutterHealthTypes(context.extensionPath);
+  const regressionDiag = new RegressionDiagnosticManager();
   const debounceMs = () => cfg().get("debounceMs") ?? 200;
+  const lastHeads = /* @__PURE__ */ new Map();
+  let headsSeeded = false;
   const signFlip = new SignFlipCoordinator(
     () => cfg().get("signFlipOnSkeletonEdit") ?? false,
     () => cfg().get("signFlipSkipApiEdits") ?? true
@@ -2272,12 +3299,17 @@ function activate(context) {
   );
   const diag = new SemipyDiagnosticManager(() => portalState.portalCacheDir);
   const tree = new SlotHistoryProvider(() => portalState.portal);
-  const treeView = import_vscode16.window.createTreeView("semipy.slotHistory", {
+  const treeView = import_vscode22.window.createTreeView("semipy.slotHistory", {
     treeDataProvider: tree,
     showCollapseAll: true
   });
-  const status = import_vscode16.window.createStatusBarItem(import_vscode16.StatusBarAlignment.Left, 100);
+  const status = import_vscode22.window.createStatusBarItem(import_vscode22.StatusBarAlignment.Left, 100);
   status.command = "semipy.refreshHistory";
+  const modes = import_vscode22.window.createStatusBarItem(import_vscode22.StatusBarAlignment.Left, 99);
+  modes.text = "$(settings) Semipy";
+  modes.tooltip = "Semipy steering \u2014 enable contract / effect gates (scaffolds configure(...))";
+  modes.command = "semipy.steeringModes";
+  modes.show();
   function refreshAllDecorations(editor) {
     if (!editor) {
       return;
@@ -2292,13 +3324,25 @@ function activate(context) {
       editor.setDecorations(specSyntaxTypes.specBody, []);
       editor.setDecorations(specSyntaxTypes.reasoningMarker, []);
       editor.setDecorations(specSyntaxTypes.reasoningBody, []);
+      editor.setDecorations(specSyntaxTypes.reasoningKeyProvenance, []);
+      editor.setDecorations(specSyntaxTypes.reasoningKeyEffect, []);
+    }
+    if (cfg().get("enableGutterHealth") ?? true) {
+      refreshGutterHealth(editor, portalState.portal, gutterTypes);
+    } else {
+      refreshGutterHealth(editor, void 0, gutterTypes);
+    }
+    if (cfg().get("dimGeneratedCode") ?? true) {
+      refreshDispatchOpacity(editor, dispatchDimType);
+    } else {
+      editor.setDecorations(dispatchDimType, []);
     }
     refreshPhraseDecorations(
       editor,
       portalState.portal,
       cacheDir,
       phraseTypes,
-      import_vscode16.workspace.workspaceFolders?.map((w) => w.uri.fsPath) ?? []
+      import_vscode22.workspace.workspaceFolders?.map((w) => w.uri.fsPath) ?? []
     );
     const n = portalState.portal ? Object.keys(portalState.portal.slots).length : 0;
     status.text = `Semipy: ${n} slot(s)`;
@@ -2308,69 +3352,296 @@ function activate(context) {
     codeLensProvider.refresh();
     inlayProvider.refresh();
     linked.onSelectionOrPortal(editor, portalState.portal, cacheDir);
+    if (cfg().get("notifyOnResolution") ?? true) {
+      regressionDiag.refresh(editor, portalState.portal);
+    } else {
+      regressionDiag.clear();
+    }
+  }
+  async function revealSlot(slotId) {
+    const ed = import_vscode22.window.activeTextEditor;
+    if (ed) {
+      refreshPortalForUri(ed.document.uri.fsPath, portalState);
+    }
+    tree.refresh();
+    const el = tree.slotElement(slotId);
+    if (!el) {
+      void import_vscode22.window.showWarningMessage("Semipy: that slot is not in the current portal.");
+      return;
+    }
+    try {
+      await treeView.reveal(el, { select: true, focus: true, expand: 2 });
+    } catch {
+    }
+  }
+  function notifyResolutionChanges(portal) {
+    if (!portal || !(cfg().get("notifyOnResolution") ?? true)) {
+      return;
+    }
+    const seenNow = /* @__PURE__ */ new Map();
+    const changed = [];
+    for (const slot of Object.values(portal.slots)) {
+      const commit = activeCommitFromPortalSlot(slot);
+      if (!commit) {
+        continue;
+      }
+      seenNow.set(slot.slot_id, commit.commit_id);
+      const prev = lastHeads.get(slot.slot_id);
+      if (headsSeeded && prev !== void 0 && prev !== commit.commit_id) {
+        changed.push(slot);
+      }
+    }
+    lastHeads.clear();
+    for (const [k, v] of seenNow) {
+      lastHeads.set(k, v);
+    }
+    headsSeeded = true;
+    for (const slot of changed) {
+      const insight = computeSlotInsight(slot);
+      if (!insight) {
+        continue;
+      }
+      const fn = slot.slot_spec?.enclosing_function_qualname || slot.function_name_base || "slot";
+      if (insight.health === "danger") {
+        const n = insight.change?.unintended ?? 0;
+        void import_vscode22.window.showWarningMessage(
+          `Semipy ${insight.decision} ${fn} \u2014 ${n} unintended regression${n === 1 ? "" : "s"}.`,
+          "Inspect"
+        ).then((pick) => {
+          if (pick === "Inspect") {
+            void revealSlot(slot.slot_id);
+          }
+        });
+      } else {
+        const guarantee = insight.contract.active ? ` \xB7 ${insight.contract.active} guarantee(s) hold` : "";
+        import_vscode22.window.setStatusBarMessage(
+          `$(sparkle) Semipy ${insight.glyph} ${insight.decision} ${fn}${guarantee}`,
+          6e3
+        );
+      }
+    }
   }
   const opacitySub = subscribeOpacityWrapper(opacityTypes, debounceMs, refreshAllDecorations);
   context.subscriptions.push(
     getSemipyOutputChannel(),
     treeView,
     status,
+    modes,
+    { dispose: () => disposeGutterHealthTypes(gutterTypes) },
+    { dispose: () => dispatchDimType.dispose() },
+    regressionDiag,
     { dispose: () => disposeSpecCommentSyntaxTypes(specSyntaxTypes) },
     opacitySub,
     signFlip.attach(),
     { dispose: () => linked.dispose() },
     diag,
-    import_vscode16.languages.registerCodeLensProvider({ language: "python", scheme: "file" }, codeLensProvider),
-    import_vscode16.languages.registerInlayHintsProvider({ language: "python", scheme: "file" }, inlayProvider),
-    import_vscode16.workspace.onDidChangeConfiguration((e) => {
+    import_vscode22.languages.registerCodeLensProvider({ language: "python", scheme: "file" }, codeLensProvider),
+    import_vscode22.languages.registerInlayHintsProvider({ language: "python", scheme: "file" }, inlayProvider),
+    import_vscode22.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("semipy")) {
         codeLensProvider.refresh();
         inlayProvider.refresh();
-        refreshAllDecorations(import_vscode16.window.activeTextEditor);
+        refreshAllDecorations(import_vscode22.window.activeTextEditor);
       }
     }),
-    import_vscode16.window.onDidChangeTextEditorSelection((e) => {
+    import_vscode22.window.onDidChangeTextEditorSelection((e) => {
       refreshPortalForUri(e.textEditor.document.uri.fsPath, portalState);
       linked.onSelectionOrPortal(e.textEditor, portalState.portal, portalState.portalCacheDir);
     }),
-    import_vscode16.window.onDidChangeActiveTextEditor((ed) => {
+    import_vscode22.window.onDidChangeActiveTextEditor((ed) => {
       if (ed) {
         signFlip.seedDocument(ed.document);
       }
       refreshAllDecorations(ed);
     }),
-    import_vscode16.languages.registerHoverProvider(
+    import_vscode22.languages.registerHoverProvider(
       { language: "python", scheme: "file" },
       createPhraseHoverProvider(
         () => portalState.portal,
         () => portalState.portalCacheDir,
-        () => import_vscode16.workspace.workspaceFolders?.map((w) => w.uri.fsPath) ?? []
+        () => import_vscode22.workspace.workspaceFolders?.map((w) => w.uri.fsPath) ?? []
       )
     ),
-    registerCommitTextProvider(),
-    import_vscode16.commands.registerCommand("semipy.noop", () => {
+    import_vscode22.languages.registerHoverProvider(
+      { language: "python", scheme: "file" },
+      createSlotInsightHoverProvider(
+        () => portalState.portal,
+        () => cfg().get("enableInsightHover") ?? true
+      )
+    ),
+    import_vscode22.languages.registerHoverProvider(
+      { language: "python", scheme: "file" },
+      createSteeringHoverProvider()
+    ),
+    import_vscode22.languages.registerCodeActionsProvider(
+      { language: "python", scheme: "file" },
+      createSteeringCodeActionProvider()
+    ),
+    import_vscode22.commands.registerCommand("semipy.steeringModes", () => runSteeringModesQuickPick()),
+    import_vscode22.commands.registerCommand("semipy.inspectSlot", (slotId) => {
+      if (slotId) {
+        void revealSlot(slotId);
+      }
     }),
-    import_vscode16.commands.registerCommand("semipy.showOutput", () => {
-      getSemipyOutputChannel().show(true);
-    }),
-    import_vscode16.commands.registerCommand("semipy.openSplitView", async () => {
-      const ed = import_vscode16.window.activeTextEditor;
-      if (!ed) {
+    import_vscode22.commands.registerCommand(
+      "semipy.relaxGuarantee",
+      async (item) => {
+        const slotId = item?.slot?.slot_id;
+        const caseIds = item?.guarantee?.caseIds ?? [];
+        if (!slotId || caseIds.length === 0) {
+          void import_vscode22.window.showWarningMessage("Semipy: nothing to relax for this guarantee.");
+          return;
+        }
+        const ed = import_vscode22.window.activeTextEditor;
+        if (ed) {
+          refreshPortalForUri(ed.document.uri.fsPath, portalState);
+        }
+        const root = portalState.workspaceRoot;
+        const portalPath = portalState.portalPath;
+        if (!root || !portalPath) {
+          void import_vscode22.window.showErrorMessage("Semipy: no portal for relax.");
+          return;
+        }
+        const ok = await import_vscode22.window.showWarningMessage(
+          `Relax guarantee "${item.guarantee?.label}"? It will be quarantined (kept for audit, no longer enforced) across ${caseIds.length} input pattern(s).`,
+          { modal: true },
+          "Relax"
+        );
+        if (ok !== "Relax") {
+          return;
+        }
+        const rel = path10.relative(root, portalPath);
+        const r = await runSemipyCli(
+          ["quarantine-cases", "--portal", rel, "--slot-id", slotId, "--case-ids", caseIds.join(",")],
+          root
+        );
+        if (r.code !== 0 && r.code !== null) {
+          void import_vscode22.window.showErrorMessage(
+            `Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "relax failed")}`
+          );
+          return;
+        }
+        void import_vscode22.window.showInformationMessage((r.stdout || r.stderr || "Guarantee relaxed.").trim().slice(0, 200));
+        refreshAllDecorations(import_vscode22.window.activeTextEditor);
+      }
+    ),
+    import_vscode22.commands.registerCommand("semipy.viewActiveCode", async (slotId) => {
+      const ed = import_vscode22.window.activeTextEditor;
+      const fsPath = ed?.document.uri.fsPath;
+      const portalPath = fsPath && findPortalJsonPathForEditor(fsPath, sessionSourceOpts()) || portalState.portalPath;
+      const portal = portalPath ? loadPortalJson(portalPath) : portalState.portal;
+      const slot = portal?.slots[slotId];
+      const commit = slot ? activeCommitFromPortalSlot(slot) : void 0;
+      const src = commit?.generated_source;
+      if (!slot || !commit || !src) {
+        void import_vscode22.window.showWarningMessage("Semipy: no active implementation found for this slot.");
         return;
       }
-      refreshPortalForUri(ed.document.uri.fsPath, portalState);
+      await viewGeneratedCode(slotId, commit.commit_id, src);
+    }),
+    import_vscode22.commands.registerCommand("semipy.revertEffectTreeItem", (item) => {
+      if (item?.slot?.slot_id && item.event?.event_id) {
+        return import_vscode22.commands.executeCommand("semipy.revertEffect", item.slot.slot_id, item.event.event_id);
+      }
+      return void 0;
+    }),
+    import_vscode22.commands.registerCommand("semipy.revertEffect", async (slotId, eventId) => {
+      const ed = import_vscode22.window.activeTextEditor;
+      if (ed) {
+        refreshPortalForUri(ed.document.uri.fsPath, portalState);
+      }
+      const root = portalState.workspaceRoot;
+      const portalPath = portalState.portalPath;
+      if (!root || !portalPath || !slotId || !eventId) {
+        void import_vscode22.window.showErrorMessage("Semipy: no portal / event for revert.");
+        return;
+      }
+      const ok = await import_vscode22.window.showWarningMessage(
+        `Revert this applied effect? semipy will replay its stored compensations (exact inverse of what was done).`,
+        { modal: true },
+        "Revert"
+      );
+      if (ok !== "Revert") {
+        return;
+      }
+      const rel = path10.relative(root, portalPath);
+      const r = await runSemipyCli(
+        ["revert-effect", "--portal", rel, "--slot-id", slotId, "--event-id", eventId],
+        root
+      );
+      if (r.code !== 0 && r.code !== null) {
+        void import_vscode22.window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "revert failed")}`);
+        return;
+      }
+      void import_vscode22.window.showInformationMessage((r.stdout || r.stderr || "Effect reverted.").trim().slice(0, 300));
+      refreshAllDecorations(import_vscode22.window.activeTextEditor);
+    }),
+    import_vscode22.commands.registerCommand("semipy.promoteReasoningLine", async (uriArg, line0) => {
+      const uri = typeof uriArg === "string" ? import_vscode22.Uri.parse(uriArg) : uriArg;
+      const doc = await import_vscode22.workspace.openTextDocument(uri);
+      if (line0 < 0 || line0 >= doc.lineCount) {
+        return;
+      }
+      const line = doc.lineAt(line0);
+      const fixed = rewriteReasoningPrefixToSpec(line.text);
+      if (fixed === null || fixed === line.text) {
+        void import_vscode22.window.showInformationMessage("Semipy: that line is not an inferred (#<) note.");
+        return;
+      }
+      const edit = new import_vscode22.WorkspaceEdit();
+      edit.replace(uri, line.range, fixed);
+      await import_vscode22.workspace.applyEdit(edit);
+      import_vscode22.window.setStatusBarMessage("$(pin) Semipy: pinned as contract (#>) \u2014 re-run to honour it.", 5e3);
+    }),
+    import_vscode22.commands.registerCommand("semipy.dismissReasoningLine", async (uriArg, line0) => {
+      const uri = typeof uriArg === "string" ? import_vscode22.Uri.parse(uriArg) : uriArg;
+      const doc = await import_vscode22.workspace.openTextDocument(uri);
+      if (line0 < 0 || line0 >= doc.lineCount) {
+        return;
+      }
+      const start = new import_vscode22.Position(line0, 0);
+      const end = line0 + 1 < doc.lineCount ? new import_vscode22.Position(line0 + 1, 0) : doc.lineAt(line0).range.end;
+      const edit = new import_vscode22.WorkspaceEdit();
+      edit.delete(uri, new import_vscode22.Range(start, end));
+      await import_vscode22.workspace.applyEdit(edit);
+    }),
+    registerCommitTextProvider(),
+    import_vscode22.commands.registerCommand("semipy.noop", () => {
+    }),
+    import_vscode22.commands.registerCommand("semipy.showOutput", () => {
+      getSemipyOutputChannel().show(true);
+    }),
+    import_vscode22.commands.registerCommand("semipy.openSplitView", async () => {
+      const ed = import_vscode22.window.activeTextEditor;
+      if (ed) {
+        refreshPortalForUri(ed.document.uri.fsPath, portalState);
+      }
       if (!portalState.portal || !portalState.portalCacheDir) {
-        void import_vscode16.window.showWarningMessage("Semipy: no portal for this file.");
+        for (const v of import_vscode22.window.visibleTextEditors) {
+          if (v.document.languageId !== "python") {
+            continue;
+          }
+          refreshPortalForUri(v.document.uri.fsPath, portalState);
+          if (portalState.portal) {
+            break;
+          }
+        }
+      }
+      if (!portalState.portal || !portalState.portalCacheDir) {
+        void import_vscode22.window.showWarningMessage(
+          "Semipy: no portal resolved. Focus the Python file that owns this slot, then try again."
+        );
         return;
       }
       await openDispatchSplitView(portalState.portalCacheDir, portalState.portal.module_name);
     }),
-    import_vscode16.commands.registerCommand("semipy.refreshHistory", () => {
-      const ed = import_vscode16.window.activeTextEditor;
+    import_vscode22.commands.registerCommand("semipy.refreshHistory", () => {
+      const ed = import_vscode22.window.activeTextEditor;
       refreshAllDecorations(ed);
       tree.refresh();
     }),
-    import_vscode16.commands.registerCommand("semipy.pickSlotVersion", async (slotId) => {
-      const ed = import_vscode16.window.activeTextEditor;
+    import_vscode22.commands.registerCommand("semipy.pickSlotVersion", async (slotId) => {
+      const ed = import_vscode22.window.activeTextEditor;
       if (!ed) {
         return;
       }
@@ -2379,7 +3650,7 @@ function activate(context) {
       const root = portalState.workspaceRoot;
       const portalPath = portalState.portalPath;
       if (!portal || !root || !portalPath) {
-        void import_vscode16.window.showWarningMessage("Semipy: no portal for this file.");
+        void import_vscode22.window.showWarningMessage("Semipy: no portal for this file.");
         return;
       }
       const slot = portal.slots[slotId];
@@ -2387,7 +3658,7 @@ function activate(context) {
         return;
       }
       const commits = Object.values(slot.commits).sort((a, b) => b.timestamp - a.timestamp);
-      const picked = await import_vscode16.window.showQuickPick(
+      const picked = await import_vscode22.window.showQuickPick(
         commits.map((c) => ({
           label: c.commit_id.slice(0, 8),
           description: `${c.decision} ${(c.message || "").slice(0, 48)}`,
@@ -2399,13 +3670,13 @@ function activate(context) {
       if (!picked || !("cid" in picked)) {
         return;
       }
-      const rel = path8.relative(root, portalPath);
+      const rel = path10.relative(root, portalPath);
       const r = await runSemipyCli(
         ["rollback", "--portal", rel, "--slot-id", slotId, "--commit-id", picked.cid],
         root
       );
       if (r.code !== 0 && r.code !== null) {
-        void import_vscode16.window.showErrorMessage(
+        void import_vscode22.window.showErrorMessage(
           `Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "rollback failed")}`
         );
         return;
@@ -2414,52 +3685,52 @@ function activate(context) {
       if (chosen?.source_snapshot?.slot_region_text) {
         await rewindSpecIfSnapshot(ed, slot, slotId, picked.cid, rel, root);
       } else {
-        void import_vscode16.window.showInformationMessage(
+        void import_vscode22.window.showInformationMessage(
           "Semipy: rollback complete (legacy commit has no spec snapshot; source file unchanged)."
         );
       }
       refreshAllDecorations(ed);
     }),
-    import_vscode16.commands.registerCommand("semipy.lockSlotVersion", async (slotId, commitId) => {
-      const ed = import_vscode16.window.activeTextEditor;
+    import_vscode22.commands.registerCommand("semipy.lockSlotVersion", async (slotId, commitId) => {
+      const ed = import_vscode22.window.activeTextEditor;
       if (ed) {
         refreshPortalForUri(ed.document.uri.fsPath, portalState);
       }
       const root = portalState.workspaceRoot;
       const portalPath = portalState.portalPath;
       if (!root || !portalPath || !commitId) {
-        void import_vscode16.window.showErrorMessage("Semipy: no portal or commit for lock.");
+        void import_vscode22.window.showErrorMessage("Semipy: no portal or commit for lock.");
         return;
       }
-      const rel = path8.relative(root, portalPath);
+      const rel = path10.relative(root, portalPath);
       const r = await runSemipyCli(
         ["lock", "--portal", rel, "--slot-id", slotId, "--commit-id", commitId],
         root
       );
       if (r.code !== 0 && r.code !== null) {
-        void import_vscode16.window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "lock failed")}`);
+        void import_vscode22.window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "lock failed")}`);
         return;
       }
       const lockedSlot = portalState.portal?.slots[slotId];
       await rewindSpecIfSnapshot(ed, lockedSlot, slotId, commitId, rel, root);
-      void import_vscode16.window.showInformationMessage((r.stderr || r.stdout || "Lock saved.").trim().slice(0, 400));
-      refreshAllDecorations(import_vscode16.window.activeTextEditor);
+      void import_vscode22.window.showInformationMessage((r.stderr || r.stdout || "Lock saved.").trim().slice(0, 400));
+      refreshAllDecorations(import_vscode22.window.activeTextEditor);
     }),
-    import_vscode16.commands.registerCommand("semipy.unlockSlotVersion", async (slotId) => {
-      const ed = import_vscode16.window.activeTextEditor;
+    import_vscode22.commands.registerCommand("semipy.unlockSlotVersion", async (slotId) => {
+      const ed = import_vscode22.window.activeTextEditor;
       if (ed) {
         refreshPortalForUri(ed.document.uri.fsPath, portalState);
       }
       const root = portalState.workspaceRoot;
       const portalPath = portalState.portalPath;
       if (!root || !portalPath) {
-        void import_vscode16.window.showWarningMessage("Semipy: no portal for this file.");
+        void import_vscode22.window.showWarningMessage("Semipy: no portal for this file.");
         return;
       }
-      const rel = path8.relative(root, portalPath);
+      const rel = path10.relative(root, portalPath);
       const r = await runSemipyCli(["unlock", "--portal", rel, "--slot-id", slotId], root);
       if (r.code !== 0 && r.code !== null) {
-        void import_vscode16.window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "unlock failed")}`);
+        void import_vscode22.window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "unlock failed")}`);
         return;
       }
       refreshPortalForUri(ed?.document.uri.fsPath ?? "", portalState);
@@ -2468,20 +3739,20 @@ function activate(context) {
       if (activeHead) {
         await rewindSpecIfSnapshot(ed, unlockedSlot, slotId, activeHead, rel, root);
       }
-      void import_vscode16.window.showInformationMessage((r.stderr || r.stdout || "Unlocked.").trim().slice(0, 400));
-      refreshAllDecorations(import_vscode16.window.activeTextEditor);
+      void import_vscode22.window.showInformationMessage((r.stderr || r.stdout || "Unlocked.").trim().slice(0, 400));
+      refreshAllDecorations(import_vscode22.window.activeTextEditor);
     }),
-    import_vscode16.commands.registerCommand(
+    import_vscode22.commands.registerCommand(
       "semipy.viewGeneratedCode",
       async (slotId, commitId) => {
-        const ed = import_vscode16.window.activeTextEditor;
+        const ed = import_vscode22.window.activeTextEditor;
         const fsPath = ed?.document.uri.fsPath;
         const portalPath = fsPath && findPortalJsonPathForEditor(fsPath, sessionSourceOpts()) || portalState.portalPath;
         const portal = portalPath ? loadPortalJson(portalPath) : portalState.portal;
         const slot = portal?.slots[slotId];
         const src = slot?.commits[commitId]?.generated_source;
         if (!src) {
-          void import_vscode16.window.showWarningMessage(
+          void import_vscode22.window.showWarningMessage(
             "Semipy: commit source not loaded. Refresh history or open the source file that owns this portal."
           );
           return;
@@ -2489,7 +3760,7 @@ function activate(context) {
         await viewGeneratedCode(slotId, commitId, src);
       }
     ),
-    import_vscode16.commands.registerCommand(
+    import_vscode22.commands.registerCommand(
       "semipy.regenerateSlotDiagnostic",
       async (ws, portalRel, slotId) => {
         const r = await runSemipyCli(
@@ -2497,30 +3768,31 @@ function activate(context) {
           ws
         );
         if (r.code !== 0 && r.code !== null) {
-          void import_vscode16.window.showErrorMessage(
+          void import_vscode22.window.showErrorMessage(
             `Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "regenerate failed")}`
           );
           return;
         }
-        void import_vscode16.window.showInformationMessage(r.stderr || r.stdout || "semipy regenerate finished.");
+        void import_vscode22.window.showInformationMessage(r.stderr || r.stdout || "semipy regenerate finished.");
         diag.refresh();
       }
     ),
-    import_vscode16.languages.registerCodeActionsProvider(
+    import_vscode22.languages.registerCodeActionsProvider(
       { language: "python", scheme: "file" },
       createRegenerateCodeActionProvider(
         () => portalState.workspaceRoot,
-        () => portalState.portalPath && portalState.workspaceRoot ? path8.relative(portalState.workspaceRoot, portalState.portalPath) : void 0
+        () => portalState.portalPath && portalState.workspaceRoot ? path10.relative(portalState.workspaceRoot, portalState.portalPath) : void 0
       )
     )
   );
-  const ed0 = import_vscode16.window.activeTextEditor;
+  const ed0 = import_vscode22.window.activeTextEditor;
   if (ed0) {
     signFlip.seedDocument(ed0.document);
   }
   refreshAllDecorations(ed0);
-  if (import_vscode16.workspace.workspaceFolders?.length) {
-    const wf = import_vscode16.workspace.workspaceFolders[0].uri.fsPath;
+  notifyResolutionChanges(portalState.portal);
+  if (import_vscode22.workspace.workspaceFolders?.length) {
+    const wf = import_vscode22.workspace.workspaceFolders[0].uri.fsPath;
     let timer;
     const fire = () => {
       if (timer) {
@@ -2528,11 +3800,12 @@ function activate(context) {
       }
       timer = setTimeout(() => {
         timer = void 0;
-        refreshAllDecorations(import_vscode16.window.activeTextEditor);
+        refreshAllDecorations(import_vscode22.window.activeTextEditor);
+        notifyResolutionChanges(portalState.portal);
       }, debounceMs());
     };
-    const wPortal = import_vscode16.workspace.createFileSystemWatcher(new import_vscode16.RelativePattern(wf, "**/*.portal.json"));
-    const wSemi = import_vscode16.workspace.createFileSystemWatcher(new import_vscode16.RelativePattern(wf, "**/*.semi.py"));
+    const wPortal = import_vscode22.workspace.createFileSystemWatcher(new import_vscode22.RelativePattern(wf, "**/*.portal.json"));
+    const wSemi = import_vscode22.workspace.createFileSystemWatcher(new import_vscode22.RelativePattern(wf, "**/*.semi.py"));
     wPortal.onDidChange(fire);
     wPortal.onDidCreate(fire);
     wPortal.onDidDelete(fire);
@@ -2545,13 +3818,13 @@ function activate(context) {
 function subscribeOpacityWrapper(types, debounceMs, onRefresh) {
   let timer;
   const tick = () => {
-    onRefresh(import_vscode16.window.activeTextEditor);
+    onRefresh(import_vscode22.window.activeTextEditor);
   };
-  const sub1 = import_vscode16.window.onDidChangeActiveTextEditor(() => {
+  const sub1 = import_vscode22.window.onDidChangeActiveTextEditor(() => {
     tick();
   });
-  const sub2 = import_vscode16.workspace.onDidChangeTextDocument((ev) => {
-    const ed = import_vscode16.window.activeTextEditor;
+  const sub2 = import_vscode22.workspace.onDidChangeTextDocument((ev) => {
+    const ed = import_vscode22.window.activeTextEditor;
     if (!ed || ev.document !== ed.document) {
       return;
     }

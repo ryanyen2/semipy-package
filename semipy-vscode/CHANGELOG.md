@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.3.0] - 2026-06-02
+
+The authoring-experience release: make everything semipy does under the hood
+legible, workable, and steerable — without a wall of commands. One visual
+language throughout: opacity = durability (inferred/dry-run is dim; durable/
+applied/yours is full-weight); one accent per concept (teal = spec/contract,
+soft-green = intended, amber = effect/caution, red = regression/destructive);
+and a minimum-set rule — every chip/glyph appears only when it carries
+information, mirroring semipy's own `_should_skip_key`.
+
+### Added
+
+- **CodeLens health sentence.** The lens above each `@semiformal` function is now a one-line status — `◐ ADAPT · ✓3 hold · ⚡ db://customers applied` — with decision glyph, contract count, regression flag, and effect target. Action lenses (Versions / Lock / Revert effect) appear only when actionable.
+- **Explanation Card (hover).** Hovering a slot shows *why* it last changed (`change_record.reason`), *what* changed (`+N changed · M unintended`, with before→after diffs), *what it guarantees* (grouped contract cases + the reason each exists), *what it checks against* (the formal constraint: return type, output names, control context), and *what it touched* (effect targets, reversibility, applied/reverted counts) — with inline Inspect / View code / Switch version / Revert links.
+- **Grouped guarantees.** Contract invariants are seeded *per observed input pattern*, so a slot that saw 7 input formats accumulates ~21 cases. The UI now collapses them by assertion — `non_empty (across 7 patterns)` — and the CodeLens counts distinct guarantees (`✓3 hold`), each with a plain-language meaning.
+- **Gutter health glyph + overview ruler.** One ambient marker per slot: clean (teal dot), touches-the-world (amber ring), needs-attention (amber dot), regression/blocked (red triangle).
+- **Inspect → tree reveal.** `Inspect` focuses and expands the slot in the slot-history tree (the persistent, native inspector). Each slot expands into **Guarantees** (grouped, with status icons, reasons, and example input on hover; inline **Relax** to quarantine) and **Effects** (ledger events with inline **Revert**). No custom webview — the editor's native surfaces carry it.
+- **Regressions → Problems panel.** An unintended regression now raises a persistent Warning diagnostic (squiggle + Problems entry) on the slot line, not just a transient toast.
+- **Opacity = authorship in the dispatch file.** The generated `.semi.py` is dimmed as machine-authored; any line you edit returns to full opacity (computed by diffing the buffer against the committed source — no edit-range tracking needed).
+- **Interactive `#<` steering.** Inferred reasoning notes are zone-tinted (provenance: goal/because/alt/given vs effect: commits/verified/yields) and carry a discoverable lightbulb + hover action **Pin as contract (#>)** (and Dismiss).
+- **Steering modes control.** A `$(settings) Semipy` status-bar item (`Semipy: Steering modes…`) explains each gate and scaffolds the matching `configure(...)` call.
+- New CLI subcommands: `semipy revert-effect …` (replays stored compensations, appends a `reverted` event) and `semipy quarantine-cases …` (relaxes contract cases — backs the Relax action).
+- The CLI generation receipt now points to the editor (e.g. "Generated. Hover the spec in your editor for why, guarantees, and effects"), reinforcing the split: the CLI narrates the transient process, the editor owns the persistent record.
+- New settings: `semipy.enableGutterHealth`, `semipy.enableInsightHover`, `semipy.notifyOnResolution`, `semipy.dimGeneratedCode`.
+
 ## [0.2.0] - 2026-04-24
 
 ### Fixed

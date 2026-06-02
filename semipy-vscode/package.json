@@ -2,7 +2,7 @@
   "name": "semipy-vscode",
   "displayName": "Semipy",
   "description": "Editor support for semipy semiformal specs (#> / #<), portal history, and dispatch navigation.",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "publisher": "semipy",
   "author": "Ryan Yen",
   "keywords": [
@@ -75,8 +75,70 @@
       {
         "command": "semipy.unlockSlotVersion",
         "title": "Semipy: Unlock slot"
+      },
+      {
+        "command": "semipy.inspectSlot",
+        "title": "Semipy: Inspect slot"
+      },
+      {
+        "command": "semipy.viewActiveCode",
+        "title": "Semipy: View active implementation"
+      },
+      {
+        "command": "semipy.revertEffect",
+        "title": "Semipy: Revert effect"
+      },
+      {
+        "command": "semipy.revertEffectTreeItem",
+        "title": "Semipy: Revert this effect",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "semipy.promoteReasoningLine",
+        "title": "Semipy: Pin reasoning as contract (#>)"
+      },
+      {
+        "command": "semipy.dismissReasoningLine",
+        "title": "Semipy: Dismiss reasoning note"
+      },
+      {
+        "command": "semipy.steeringModes",
+        "title": "Semipy: Steering modes…"
+      },
+      {
+        "command": "semipy.relaxGuarantee",
+        "title": "Semipy: Relax this guarantee",
+        "icon": "$(circle-slash)"
       }
     ],
+    "menus": {
+      "view/item/context": [
+        {
+          "command": "semipy.revertEffectTreeItem",
+          "when": "view == semipy.slotHistory && viewItem == semipy.ledgerEvent",
+          "group": "inline"
+        },
+        {
+          "command": "semipy.relaxGuarantee",
+          "when": "view == semipy.slotHistory && viewItem == semipy.guarantee",
+          "group": "inline"
+        }
+      ],
+      "commandPalette": [
+        { "command": "semipy.inspectSlot", "when": "false" },
+        { "command": "semipy.viewActiveCode", "when": "false" },
+        { "command": "semipy.revertEffect", "when": "false" },
+        { "command": "semipy.revertEffectTreeItem", "when": "false" },
+        { "command": "semipy.relaxGuarantee", "when": "false" },
+        { "command": "semipy.promoteReasoningLine", "when": "false" },
+        { "command": "semipy.dismissReasoningLine", "when": "false" },
+        { "command": "semipy.viewGeneratedCode", "when": "false" },
+        { "command": "semipy.pickSlotVersion", "when": "false" },
+        { "command": "semipy.lockSlotVersion", "when": "false" },
+        { "command": "semipy.unlockSlotVersion", "when": "false" },
+        { "command": "semipy.regenerateSlotDiagnostic", "when": "false" }
+      ]
+    },
     "views": {
       "explorer": [
         {
@@ -117,6 +179,26 @@
           "type": "boolean",
           "default": true,
           "description": "Show last resolution (decision, commit id) as inlay hints on spec lines."
+        },
+        "semipy.enableGutterHealth": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a per-slot health glyph in the gutter (clean / touches-the-world / needs-attention) and overview ruler."
+        },
+        "semipy.enableInsightHover": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the Explanation Card on hover over a slot: why it changed, what it guarantees, what it touched."
+        },
+        "semipy.notifyOnResolution": {
+          "type": "boolean",
+          "default": true,
+          "description": "When semipy regenerates a slot, surface a brief status message and a Problems-panel warning when a regression is detected."
+        },
+        "semipy.dimGeneratedCode": {
+          "type": "boolean",
+          "default": true,
+          "description": "In the generated dispatch (.semi.py) file, dim machine-authored lines; lines you edit return to full opacity."
         },
         "semipy.enableSpecLineSyntax": {
           "type": "boolean",

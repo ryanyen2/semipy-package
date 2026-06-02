@@ -71,6 +71,9 @@ def format_tool_call_line(tool_name: str, args: Any, *, debug: bool = False) -> 
                 base += f" | last line: {tail}"
         return base
 
+    if tool_name == "execute_action_program":
+        return "Draft the function"
+
     if tool_name == "validate_output":
         exp = args.get("expected_type_name") or "?"
         return f"Check return value against type {exp}"
@@ -266,6 +269,9 @@ def format_tool_result_line(
         return _upstream_outcome(coerced)
     if isinstance(coerced, RuntimeDataContextResult):
         return _runtime_outcome(coerced)
+
+    if tool_name == "execute_action_program":
+        return ("function drafted", True)
 
     if tool_name == "list_library_primitives":
         s = content if isinstance(content, str) else str(content)
