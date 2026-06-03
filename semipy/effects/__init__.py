@@ -6,9 +6,10 @@ in a shadow (per a pluggable :class:`ArtifactBackend`), verifies and gates it,
 then commits and ledgers it -- so the program's *effect* becomes a first-class,
 provenance-tracked, revertable artifact.
 
-Stage 0 surface: the data model, the ``fx`` capability, and the backend Protocol
-plus the in-memory backend. Verification, ledger, provenance, and revert land in
-later stages.
+The subsystem spans: the data model + ``fx`` capability, the backend Protocol
+(memory / SQLite / external backends), static verification and gating, an
+append-only effect ledger with provenance, and compensating revert. It is
+opt-in via ``configure(effects_enabled=True)`` and the ``effect_*`` flags.
 """
 from __future__ import annotations
 
@@ -29,17 +30,13 @@ from semipy.effects.compensate import revert, revert_ledger_event
 from semipy.effects.provenance import ProvenanceChain, provenance_for
 from semipy.effects.models import (
     DESTRUCTIVE_OPS,
-    EFFECT_INVARIANT_NAMES,
     READ_OPS,
     Effect,
-    EffectCase,
-    EffectInvariant,
     EffectOp,
     EffectRefused,
     EffectResult,
     EffectScript,
     LedgerEvent,
-    SlotEffectContract,
 )
 
 __all__ = [
@@ -47,12 +44,8 @@ __all__ = [
     "EffectOp",
     "EffectScript",
     "EffectResult",
-    "EffectInvariant",
-    "EffectCase",
     "EffectRefused",
-    "SlotEffectContract",
     "LedgerEvent",
-    "EFFECT_INVARIANT_NAMES",
     "READ_OPS",
     "DESTRUCTIVE_OPS",
     "EffectRecorder",

@@ -7,9 +7,9 @@ export type SpecCommentSyntaxTypes = {
   specBody: TextEditorDecorationType;
   reasoningMarker: TextEditorDecorationType;
   reasoningBody: TextEditorDecorationType;
-  /** Tint for the `key:` token on a #< provenance line (goal/because/alt/given). */
+  /** Tint for the `key:` token on a #< provenance line (intent/given/by/unless). */
   reasoningKeyProvenance: TextEditorDecorationType;
-  /** Tint for the `key:` token on a #< effect line (commits/verified/yields). */
+  /** Tint for the `key:` token on a #< effect line (yields/verified). */
   reasoningKeyEffect: TextEditorDecorationType;
 };
 

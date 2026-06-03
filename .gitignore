@@ -48,3 +48,9 @@ node_modules/
 
 dist/
 build/
+
+
+.ruff_cache/
+
+# VS Code extension test scratch (the .vsix is committed as the delivery artifact)
+semipy-vscode/.test-emit/

@@ -18,14 +18,8 @@ def decision_description(decision: Decision) -> str:
         return "Reuse cached implementation"
     if decision == Decision.ADAPT:
         return "Adapt from previous implementation"
-    if decision == Decision.COMPOSE:
-        return "Compose from library primitive"
-    if decision == Decision.FORK:
-        return "New branch (structure changed)"
     if decision == Decision.GENERATE:
         return "Generate new implementation"
-    if decision == Decision.MERGE:
-        return "Merge branches"
     if decision == Decision.INSTANTIATE:
         return "Instantiate from learned pattern"
     return str(decision.value)
@@ -37,14 +31,8 @@ def pipeline_resolution_message(decision: Decision) -> str:
         return "Using a matching cached implementation."
     if decision == Decision.ADAPT:
         return "No exact reuse; adapting from a previous version and generating code."
-    if decision == Decision.COMPOSE:
-        return "Composing from a library primitive; generating code."
-    if decision == Decision.FORK:
-        return "Structure changed; generating on a new branch."
     if decision == Decision.GENERATE:
         return "No reusable implementation; creating a new one."
-    if decision == Decision.MERGE:
-        return "Merging branches; generating code."
     if decision == Decision.INSTANTIATE:
         return "Matching a learned pattern; substituting parameters without generation."
     return decision_description(decision)

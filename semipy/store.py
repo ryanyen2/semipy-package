@@ -310,19 +310,20 @@ def write_dispatch_module(
                 from semipy.models import SteeringBlock
 
                 sb = SteeringBlock.model_validate(raw_steering)
-                if sb.goal.value:
-                    lines.append(f"# goal: {sb.goal.value}")
+                if sb.intent.value:
+                    lines.append(f"# intent: {sb.intent.value}")
                 for g in sb.given:
                     if g.value:
                         lines.append(f"# given: {g.value}")
+                if sb.by.value:
+                    lines.append(f"# by: {sb.by.value}")
+                for u in sb.unless:
+                    if u.value:
+                        lines.append(f"# unless: {u.value}")
                 if sb.yields.value:
                     lines.append(f"# yields: {sb.yields.value}")
-                if sb.commits.value:
-                    lines.append(f"# commits: {sb.commits.value}")
-                if sb.because.value:
-                    lines.append(f"# because: {sb.because.value}")
-                if sb.alt.value:
-                    lines.append(f"# alt: {sb.alt.value}")
+                if sb.verified.value:
+                    lines.append(f"# verified: {sb.verified.value}")
             except Exception:
                 pass
         bid = getattr(active, "binding_id", "") or ""

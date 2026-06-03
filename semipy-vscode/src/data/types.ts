@@ -33,15 +33,15 @@ export interface SteeringValueJson {
   user_frozen?: boolean;
 }
 
-/** Structured #< surface: provenance (goal/because/alt/given) + effect (commits/verified/yields). */
+/** Structured #< surface: provenance (intent/given/by/unless) + effect (yields/verified).
+ *  Mirrors semipy.models.SteeringBlock. */
 export interface SteeringJson {
-  goal?: SteeringValueJson;
-  because?: SteeringValueJson;
-  alt?: SteeringValueJson;
+  intent?: SteeringValueJson;
   given?: SteeringValueJson | SteeringValueJson[];
-  commits?: SteeringValueJson;
-  verified?: SteeringValueJson;
+  by?: SteeringValueJson;
+  unless?: SteeringValueJson | SteeringValueJson[];
   yields?: SteeringValueJson;
+  verified?: SteeringValueJson;
   [key: string]: SteeringValueJson | SteeringValueJson[] | undefined;
 }
 

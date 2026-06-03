@@ -1,26 +1,11 @@
-"""DreamCoder-style abstraction discovery: pattern mining, compression, library injection."""
+"""Sketch library: learn parametric NL->code patterns and INSTANTIATE them.
+
+After a GENERATE/ADAPT, binding extraction (``binding.py``) records a
+``CodeSketch`` keyed by a semantic template; a later slot whose spec matches
+the template (``sketch.find_sketch_match``) can be satisfied by substitution
+instead of a fresh LLM generation.
+
+Submodules are imported directly (``semipy.library.sketch`` /
+``.sketch_store`` / ``.binding``); this package exposes no eager symbols.
+"""
 from __future__ import annotations
-
-from semipy.library.abstractions import (
-    ASTPattern,
-    AbstractionLibrary,
-    LibraryPrimitive,
-    PatternOccurrence,
-)
-from semipy.library.store import (
-    load_library,
-    save_library,
-    write_library_runtime_module,
-)
-from semipy.library.sleep import run_sleep_phase
-
-__all__ = [
-    "ASTPattern",
-    "AbstractionLibrary",
-    "LibraryPrimitive",
-    "PatternOccurrence",
-    "load_library",
-    "save_library",
-    "write_library_runtime_module",
-    "run_sleep_phase",
-]

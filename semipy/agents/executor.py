@@ -111,7 +111,7 @@ class GistExecutor:
         return await self._execute_subprocess(gist_source, cwd=cwd)
 
     async def execute_action_program_async(self, composed_code: str) -> str:
-        """Run a composed action program; returns a JSON string with ObservationBundle keys."""
+        """Run a composed action program; returns a JSON string of observation keys."""
         import json as _json
 
         if self._use_e2b:

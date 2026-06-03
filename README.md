@@ -25,22 +25,32 @@ specification stays informal and only commits to an implementation when it is fi
 used — and how the pieces fit together, see
 [docs/semi-formal-programming.md](docs/semi-formal-programming.md).
 
+## Documentation
+
+- [docs/semi-formal-programming.md](docs/semi-formal-programming.md) — the idea: semi-formal programming.
+- [docs/architecture.md](docs/architecture.md) — runtime architecture: call-site/slot identity, the spec-equivalence key, the REUSE/ADAPT/GENERATE/INSTANTIATE decision, and the DAG cache, with math and a worked trace.
+- [docs/behavioral-contract.md](docs/behavioral-contract.md) — the contract subsystem that records *why* each regeneration happened and *what its effect was*.
+- [docs/effects.md](docs/effects.md) — reified, verifiable, revertable real-world effects (the `fx` capability, shadow worlds, the blast-radius proof, the effect ledger).
+- [docs/sketch-library.md](docs/sketch-library.md) — pattern learning and the INSTANTIATE decision (satisfy a new slot by substitution, no LLM call).
+
 ## Install
 
+The distribution is named `semiformal-py`; you import it as `semipy`.
+
 ```bash
-pip install semipy
+pip install semiformal-py
 ```
 
 For Jupyter notebook display:
 
 ```bash
-pip install "semipy[jupyter]"
+pip install "semiformal-py[jupyter]"
 ```
 
 For PDF input materialization:
 
 ```bash
-pip install "semipy[pdf]"
+pip install "semiformal-py[pdf]"
 ```
 
 ## API key
@@ -73,7 +83,7 @@ from semipy import configure
 
 configure(
     openai_api_key="sk-...",       # defaults to OPENAI_API_KEY env var
-    openai_model="gpt-4o",         # generation model (default: gpt-5.4)
+    openai_model="gpt-4o",         # generation model (default: gpt-5.5)
     verbose=True,                  # rich terminal output during generation (default: True)
     cache_dir=".semiformal",       # where portal JSON and dispatch modules are stored
     max_retries=3,                 # agent retry limit on validation failure
@@ -93,7 +103,7 @@ When `verbose=True` (the default), semipy prints a live Rich panel showing the a
   Reasoning  The function needs to parse a standard Apache
              Combined Log Format line...
  ─────────────────────────────────────────────────
-  Tool  build_and_run_gist  passed
+  Draft the function  function drafted
  ─────────────────────────────────────────────────
   Reusing cached implementation; runtime verify passed.
   parse_log_line  GENERATE  a1b2c3d4  examples/logs.py:12

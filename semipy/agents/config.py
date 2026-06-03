@@ -33,10 +33,8 @@ class SemiConfig:
     verbose: bool = True
     cocoindex_enabled: bool = False
     cocoindex_db_url: str = ""
-    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     session_source: Optional[str] = None
     semantic_verify: bool = True
-    semantic_verify_threshold: int = 10
     #: Cap on semantic-recheck-driven ADAPTs per slot. An inherently-semantic slot
     #: (e.g. triage, preference judgment, summarization) compiles to a *static*
     #: function the intent judge can keep rejecting on every fresh free-text input,
@@ -94,11 +92,9 @@ class SemiConfig:
     effect_gate_max_retries: int = 1
     #: When True, an unintended artifact-state diff vs the parent fails the gate. (Stage 2)
     effect_block_regressions: bool = True
-    #: Run Z3 + CrossHair proofs over the EffectScript (else static + shadow checks only). (Stage 3)
+    #: Prove blast-radius bounds for-all-inputs via schema superkey + AST-structural
+    #: checks (dependency-free; no Z3/CrossHair). Else static + shadow checks only. (Stage 3)
     effect_smt: bool = False
-    #: Per-invariant solver/exploration budget for the SMT/concolic pass.
-    effect_smt_timeout_s: float = 5.0
-    effect_smt_max_paths: int = 64
     #: Commit the verified shadow to the REAL artifact. REQUIRES effect_gate on + passed. (Stage 4)
     effect_auto_apply: bool = False
     #: Externalized/irreversible targets (APIs, email) require approval before commit. (Stage 5)
@@ -108,11 +104,6 @@ class SemiConfig:
     #: (default) means external effects are never auto-performed -- they stay planned (dry-run).
     #: Runtime-only (not persisted).
     effect_approval_callback: Optional[object] = None
-    #: Cap on active effect cases executed per gate (latency / portal size).
-    effect_max_cases: int = 25
-    #: Run the LLM effect-case proposal pass (deterministic seeding always runs when staging). (Stage 4)
-    effect_maintainer: bool = False
-    effect_maintainer_async: bool = False
     #: Default per-effect blast-radius bound when none is declared.
     effect_default_blast_radius: int = 1
 

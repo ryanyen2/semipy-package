@@ -259,7 +259,7 @@ def _run_batch_gist(gist_source: str, timeout: int = 15) -> list[dict[str, Any]]
         if not stdout:
             return []
         return json.loads(stdout)
-    except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception):
+    except Exception:
         return []
     finally:
         if path:

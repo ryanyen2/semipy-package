@@ -7,7 +7,7 @@ logic; purely structural introspection.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 VALUE_BUDGET = 3000
 
@@ -37,8 +37,6 @@ def _profile_dataframe(name: str, value: Any, budget: int) -> str:
                 pass
         if hasattr(value, "shape"):
             lines.append(f"  shape: {value.shape}")
-        n_cols = len(cols)
-        col_budget = max(80, (budget - len("\n".join(lines)) - 200) // max(1, min(n_cols, 25)))
         for c in cols[:25]:
             try:
                 s = value[c]

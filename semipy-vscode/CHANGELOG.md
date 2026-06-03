@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.1] - 2026-06-03
+
+Maintenance release aligning the extension with the semipy `0.2.2` runtime cleanup.
+
+- Fix the `#<` steering vocabulary drift: the runtime writes `intent / given / by /
+  unless` (provenance) and `yields / verified` (effect), but the extension still
+  recognised the older `goal / because / alt / commits` keys — so zone tinting and
+  the hover glossary silently failed for `intent`, `by`, and `unless`. The key sets,
+  glossary (`KEY_HELP`), and `SteeringJson` type now mirror `semipy.models.SteeringBlock`.
+- Remove dead code: the unused `data/fileWatcher.ts` module, the unused `semipy.noop`
+  command, and a stale "webview" comment (the extension has been native-surfaces-only).
+
 ## [0.3.0] - 2026-06-02
 
 The authoring-experience release: make everything semipy does under the hood

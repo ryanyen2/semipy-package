@@ -2,8 +2,8 @@
  * The #< reasoning surface, made steerable.
  *
  * semipy writes #< lines that explain *why* it generated what it did, split into
- * two zones: PROVENANCE (goal / because / alt / given) above the slot anchor, and
- * EFFECT (commits / verified / yields) below it. These are inferred notes -- kept
+ * two zones: PROVENANCE (intent / given / by / unless) above the slot anchor, and
+ * EFFECT (yields / verified) below it. These are inferred notes -- kept
  * dim (opacity = ephemerality). The user steers the slot by *promoting* a note to
  * a #> contract line: that edits spec_text, so the next resolution honours it.
  *
@@ -31,17 +31,16 @@ import {
 
 export type SteeringZone = "provenance" | "effect";
 
-const PROVENANCE_KEYS = new Set(["goal", "because", "alt", "given"]);
-const EFFECT_KEYS = new Set(["commits", "verified", "yields"]);
+const PROVENANCE_KEYS = new Set(["intent", "given", "by", "unless"]);
+const EFFECT_KEYS = new Set(["yields", "verified"]);
 
 const KEY_HELP: Record<string, string> = {
-  goal: "what this slot is meant to achieve",
-  because: "why semipy chose this implementation (decision rationale)",
-  alt: "an alternative the model considered but did not take",
+  intent: "what this slot is meant to achieve",
   given: "the inputs / assumptions it was generated under",
-  commits: "what behaviour this implementation locks in",
-  verified: "what was checked to hold (derived, not synthesised)",
+  by: "how semipy chose to implement it (the approach taken)",
+  unless: "an edge case or exception the implementation guards against",
   yields: "the shape of the value it returns",
+  verified: "what was checked to hold (derived, not synthesised)",
 };
 
 export interface ParsedSteering {

@@ -74,6 +74,6 @@ async def classify_with_llm(
         raw = await asyncio.wait_for(asyncio.to_thread(_sync_call), timeout=timeout)
         if raw:
             return parse_fn(raw.strip())
-    except (asyncio.TimeoutError, Exception):
+    except Exception:
         pass
     return default

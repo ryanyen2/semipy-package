@@ -13,7 +13,6 @@ import inspect
 from typing import Any, Callable, Optional
 
 from semipy.effects.capability import EffectRecorder
-from semipy.effects.models import EffectResult
 
 
 def fn_is_effectful(fn: Callable[..., Any]) -> bool:
@@ -31,12 +30,3 @@ def make_recorder(
     return EffectRecorder(provenance=provenance, world=world)
 
 
-def wrap_effect_result(recorder: EffectRecorder, value: Any, *, applied: bool = False,
-                       event_id: str = "") -> EffectResult:
-    """Build the :class:`EffectResult` an effectful slot returns to the caller."""
-    return EffectResult(
-        effect_script=recorder.script,
-        value=value,
-        applied=applied,
-        event_id=event_id,
-    )

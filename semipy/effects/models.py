@@ -27,15 +27,6 @@ READ_OPS: tuple[str, ...] = ("read",)
 #: Ops that remove existing state (used by the ``append_only`` static check).
 DESTRUCTIVE_OPS: tuple[str, ...] = ("delete",)
 
-# --- Fixed effect-invariant vocabulary (mirrors INVARIANT_NAMES) -----------
-EFFECT_INVARIANT_NAMES: tuple[str, ...] = (
-    "append_only",            # no delete / destructive update ops
-    "bounded_blast_radius",   # affected targets and records bounded
-    "target_whitelist",       # every target in a declared allowlist
-    "reversible",             # every effect carries a compensation
-    "idempotent_effect",      # re-applying the script is a no-op
-)
-
 EventStatus = Literal["applied", "reverted", "shadow", "approval_pending"]
 
 
@@ -194,88 +185,6 @@ class EffectResult:
         from semipy.effects.compensate import revert as _revert
 
         return _revert(self)
-
-
-@dataclass
-class EffectInvariant:
-    """A declared effect invariant plus its parameter (bound / whitelist)."""
-
-    name: str  # one of EFFECT_INVARIANT_NAMES
-    param: dict[str, Any] = field(default_factory=dict)
-
-
-# --- Effect-contract cases (parallel to contract.ContractCase) -------------
-EffectCaseStatus = Literal["active", "superseded", "quarantined"]
-
-
-def compute_effect_case_id(*, invariant: str, param: dict[str, Any], input_fingerprint: str) -> str:
-    raw = f"{invariant}\0{_canonical_repr(param)}\0{input_fingerprint}"
-    return _stable_hash(raw)
-
-
-@dataclass
-class EffectCase:
-    """One carried-forward effect-invariant assertion over an input pattern.
-
-    Reuses the *shape* of :class:`semipy.contract.models.ContractCase`
-    (content-addressed, status lifecycle, provenance) but asserts over an
-    EffectScript / artifact state rather than a return value.
-    """
-
-    case_id: str
-    invariant: str  # one of EFFECT_INVARIANT_NAMES
-    param: dict[str, Any] = field(default_factory=dict)
-    input_sample: dict[str, Any] = field(default_factory=dict)
-    input_fingerprint: str = ""
-
-    reason: str = ""
-    effect: str = ""
-    decision: str = ""
-    origin_commit_id: str = ""
-    created_ts: float = field(default_factory=time.time)
-    updated_ts: float = field(default_factory=time.time)
-
-    status: EffectCaseStatus = "active"
-    superseded_by: str = ""
-    supersede_reason: str = ""
-
-    def is_active(self) -> bool:
-        return self.status == "active"
-
-
-@dataclass
-class SlotEffectContract:
-    """All effect-invariant cases for one slot, plus a monotonic version."""
-
-    version: int = 1
-    cases: dict[str, EffectCase] = field(default_factory=dict)
-
-    def active(self) -> list[EffectCase]:
-        return [c for c in self.cases.values() if c.status == "active"]
-
-    def superseded(self) -> list[EffectCase]:
-        return [c for c in self.cases.values() if c.status == "superseded"]
-
-    def quarantined(self) -> list[EffectCase]:
-        return [c for c in self.cases.values() if c.status == "quarantined"]
-
-    def add(self, case: EffectCase) -> EffectCase:
-        existing = self.cases.get(case.case_id)
-        if existing is not None and existing.status == "active":
-            existing.reason = case.reason or existing.reason
-            existing.effect = case.effect or existing.effect
-            existing.updated_ts = case.updated_ts
-            return existing
-        self.cases[case.case_id] = case
-        self.version += 1
-        return case
-
-    def quarantine(self, case_id: str, why: str) -> None:
-        c = self.cases.get(case_id)
-        if c is not None:
-            c.status = "quarantined"
-            c.supersede_reason = why
-            self.version += 1
 
 
 @dataclass

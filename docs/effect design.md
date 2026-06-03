@@ -1,5 +1,9 @@
 # Semipy Effect System — Design Analysis & Proposal
 
+> **Historical design document.** This is the original design rationale for the
+> effects subsystem. For how the *shipped* implementation works, see the
+> authoritative [effects.md](effects.md).
+
 > **讀者提示**：本文件原為對話式技術回應，此版本加入了背景說明、術語解釋與設計理由，以便研究與實作參考。
 
 ---

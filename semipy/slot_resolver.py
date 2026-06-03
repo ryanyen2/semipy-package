@@ -1097,7 +1097,6 @@ def execute_slot(
     - call the resulting implementation with runtime_values
     - attach DataFlow to result for downstream inference
     """
-    _t0 = time.monotonic()
     config = get_config()
     runtime_values = materialize_runtime_document_inputs(dict(runtime_values))
 
@@ -1233,7 +1232,7 @@ def execute_slot(
                     generated_path=str(dispatch_path),
                     cache_dir=cache_dir,
                     slot=slot,
-                    commit=commit,
+                    commit=None,  # INSTANTIATE: no commit exists yet (created after a successful call)
                     portal=portal,
                 )
             except SemiCallError as e:
@@ -1708,19 +1707,6 @@ def execute_slot(
 
     write_dispatch_module(cache_dir, portal, sketch_library=sketch_library)
     save_portal(cache_dir, portal)
-
-    try:
-        from semipy.memory.trace import TraceStore
-        TraceStore(cache_dir).record_run(
-            slot_id=slot_spec.slot_id,
-            decision=resolution.decision,
-            attempt=1,
-            commitment_record=getattr(entry, "commitment_record", None),
-            elapsed_s=time.monotonic() - _t0,
-            source_file=slot_spec.source_span[0],
-        )
-    except Exception:
-        pass
 
     if resolution.decision in (Decision.GENERATE, Decision.ADAPT):
         from semipy.agents.skeleton_writer import (

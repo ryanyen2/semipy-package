@@ -10,7 +10,7 @@ semipy-package/
   semipy-vscode/       VS Code extension source
   tests/               pytest tests
   examples/            usage examples (excluded from wheel)
-  semipy_testbed/      developer sandbox (excluded from wheel)
+  docs/                architecture and concept documentation
   pyproject.toml       Python package metadata and deps
   CONTRIBUTING.md      this file
 ```
@@ -48,7 +48,7 @@ ruff check semipy/
 
 ```toml
 [project]
-version = "0.2.1"
+version = "0.2.2"
 ```
 
 **2. Build:**
@@ -57,7 +57,7 @@ version = "0.2.1"
 python -m build
 ```
 
-Outputs `dist/semipy-<version>-py3-none-any.whl` and `dist/semipy-<version>.tar.gz`.
+Outputs `dist/semiformal_py-<version>-py3-none-any.whl` and `dist/semiformal_py-<version>.tar.gz`.
 
 **3. Verify:**
 
@@ -70,7 +70,7 @@ twine check dist/*
 ```bash
 # Test PyPI first
 twine upload --repository testpypi dist/*
-pip install --index-url https://test.pypi.org/simple/ semipy
+pip install --index-url https://test.pypi.org/simple/ semiformal-py
 
 # Production
 twine upload dist/*
@@ -81,8 +81,8 @@ Requires a `~/.pypirc` with a PyPI API token, or set `TWINE_USERNAME=__token__` 
 **5. Tag the release:**
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.2.2
+git push origin v0.2.2
 ```
 
 ## VS Code extension release (Marketplace)
@@ -98,7 +98,7 @@ The extension lives in `semipy-vscode/`. It is built and published with `@vscode
 **1. Bump version** in `semipy-vscode/package.json`:
 
 ```json
-"version": "0.2.1"
+"version": "0.3.1"
 ```
 
 **2. Install deps:**
@@ -163,6 +163,7 @@ Core package deps (in `pyproject.toml [project] dependencies`) must be the minim
 |---|---|
 | `python-dotenv` | `.env` file loading in `agents/config.py` |
 | `pydantic-ai` | agent framework in `agents/generator.py` |
+| `openai` | OpenAI Responses API client in `agents/llm_utils.py` and the steering/contract LLM passes |
 | `rich` | terminal and Jupyter output in `agents/console_*.py` |
 
 Everything else is an optional extra. Before adding a core dep, confirm it cannot be a lazy optional import.

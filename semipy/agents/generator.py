@@ -256,8 +256,8 @@ def _create_agent() -> Agent[SemiAgentDeps, CommitmentRecord]:
           build_and_run_gist(source, invoc)     -> dict  test a function (success, result, error)
 
         The program MUST end with: print(_json.dumps(result_dict))
-        where result_dict is a JSON-serializable dict (matching ObservationBundle fields:
-        data_profile, upstream_summary, gist_result, action_errors).
+        where result_dict is a JSON-serializable dict with the observation fields:
+        data_profile, upstream_summary, gist_result, action_errors.
 
         Returns the JSON string from the program's stdout.
         """

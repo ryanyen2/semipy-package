@@ -2,7 +2,7 @@
   "name": "semipy-vscode",
   "displayName": "Semipy",
   "description": "Editor support for semipy semiformal specs (#> / #<), portal history, and dispatch navigation.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publisher": "semipy",
   "author": "Ryan Yen",
   "keywords": [

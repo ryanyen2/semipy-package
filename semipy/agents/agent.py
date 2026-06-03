@@ -109,7 +109,6 @@ from semipy.agents.console_io import (
     pipeline_resolution_message,
 )
 from semipy.agents.generator import get_semi_agent
-from semipy.agents.gist import GistBuilder
 from semipy.agents.executor import GistExecutor
 from semipy.models import CommitmentRecord, SemiAgentDeps
 from semipy.types import (
@@ -663,7 +662,6 @@ class SemiAgent:
         )
         deps = SemiAgentDeps(
             spec=spec,
-            gist_builder=GistBuilder(spec),
             executor=executor,
         )
         prompt = user_prompt_override if user_prompt_override is not None else self._build_user_prompt(spec)

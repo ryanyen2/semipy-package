@@ -208,7 +208,6 @@ in a fixed priority order and returns a `Decision`:
   contract changed; modify it (the old commit is the parent of the new one).
 - **INSTANTIATE** — a learned pattern matches; fill in its blanks instead of
   generating (Section 10).
-- **FORK / MERGE / COMPOSE** — less common branch operations.
 
 The decision uses the identities from Section 4 plus two runtime fingerprints:
 

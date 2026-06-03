@@ -5,8 +5,10 @@ import inspect as _inspect
 from typing import Any
 
 from semipy.agents.profiler import _is_collection_like
-from semipy.memory.observation import _MAX_OBS_PER_KEY as _OBSERVATION_MAX_PER_KEY
 from semipy.types import SlotSpec
+
+#: Cap on retained per-key input-observation samples for a slot.
+_OBSERVATION_MAX_PER_KEY = 100
 
 _REUSE_VERIFY_MAX_SAMPLES = 50
 _REUSE_VERIFY_MAX_PER_KEY = 40

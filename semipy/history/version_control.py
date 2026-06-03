@@ -39,12 +39,6 @@ def message_for_decision(decision: str) -> str:
         return "initial implementation"
     if decision == "ADAPT":
         return "adapt for new parameters"
-    if decision == "COMPOSE":
-        return "compose from library primitive"
-    if decision == "FORK":
-        return "new branch, structure changed"
-    if decision == "MERGE":
-        return "merge branches"
     if decision == "INSTANTIATE":
         return "instantiate from learned pattern"
     return decision.lower()

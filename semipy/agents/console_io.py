@@ -15,8 +15,6 @@ from typing import Any, Callable, Optional
 
 from rich.console import Console
 from rich.panel import Panel
-from rich.syntax import Syntax
-from rich.table import Table
 from rich.markdown import Markdown
 
 from semipy.types import (
@@ -32,9 +30,7 @@ from semipy.agents.console_core import (
     jupyter_capture_console,  # noqa: F401
 )
 from semipy.agents.console_format import (
-    _format_location,
     _call_site_file_url,
-    _relative_path_for_display,
     _format_cache_path,
     _relative_display_path,
     _file_link_url,
@@ -268,33 +264,6 @@ def _print_semipy_line_once(
         console.print(line1, no_wrap=True)
 
 
-def print_cache_hit_from_semi(
-    spec: GenerationSpec,
-    entry: CacheEntry,
-    cache_dir: Optional[Path] = None,
-    entry_script_path: Optional[str] = None,
-    entry_script_lineno: Optional[int] = None,
-) -> None:
-    """One line: call file, package file, reused, code path. Paths relative to cwd."""
-    cs = spec.call_site
-    source = _relative_display_path(cs.filename, cs.lineno, max_len=72)
-    if cs.func_qualname:
-        source = f"{source} ({cs.func_qualname})"
-    path = _format_cache_path(cache_dir, entry)
-    call_file = None
-    call_file_link = None
-    if entry_script_path:
-        call_file = _relative_path_for_display(entry_script_path, entry_script_lineno) if (entry_script_lineno is not None and entry_script_lineno > 0) else _relative_path_for_display(entry_script_path)
-        call_file_link = _relative_link_path(entry_script_path, entry_script_lineno if (entry_script_lineno is not None and entry_script_lineno > 0) else None)
-    _print_semipy_line_once(
-        source, "Reused cached implementation.", path or "", "green",
-        source_link=_call_site_file_url(cs.filename, cs.lineno),
-        path_link=_file_link_url(path),
-        call_file=call_file,
-        call_file_link=call_file_link,
-    )
-
-
 def _relative_link_path(path: str, lineno: Optional[int] = None) -> str:
     """Relative path (and optional line) for command-click link."""
     try:
@@ -307,126 +276,6 @@ def _relative_link_path(path: str, lineno: Optional[int] = None) -> str:
     if lineno is not None and lineno > 0:
         return f"{rel}:{lineno}"
     return rel
-
-
-def print_dag_reuse(
-    call_site: SemiCallSite,
-    commit_id: str,
-    code_path: str,
-    source_link: Optional[str] = None,
-    path_link: Optional[str] = None,
-    code_line_range: Optional[tuple[int, int]] = None,
-    entry_script_path: Optional[str] = None,
-    entry_script_lineno: Optional[int] = None,
-) -> None:
-    """Log REUSE: call file, package file, reused implementation, transpiled path (optional line range). All paths relative."""
-    source = _relative_display_path(call_site.filename, call_site.lineno, max_len=72)
-    generation = f"Reused existing implementation (commit {commit_id[:8]})"
-    call_file = None
-    call_file_link = None
-    if entry_script_path:
-        call_file = _relative_path_for_display(entry_script_path, entry_script_lineno) if (entry_script_lineno is not None and entry_script_lineno > 0) else _relative_path_for_display(entry_script_path)
-        call_file_link = _relative_link_path(entry_script_path, entry_script_lineno if (entry_script_lineno is not None and entry_script_lineno > 0) else None)
-    _print_semipy_line_once(
-        source, generation, code_path, "green", source_link, path_link, code_line_range,
-        call_file=call_file,
-        call_file_link=call_file_link,
-    )
-
-
-def print_dag_adapt(
-    call_site: SemiCallSite,
-    commit_id: str,
-    parent_commit_id: str,
-    code_path: str,
-    source_link: Optional[str] = None,
-    path_link: Optional[str] = None,
-    code_line_range: Optional[tuple[int, int]] = None,
-    entry_script_path: Optional[str] = None,
-    entry_script_lineno: Optional[int] = None,
-) -> None:
-    """Log ADAPT: call file, package file, adapted from parent, transpiled path. All paths relative."""
-    source = _relative_display_path(call_site.filename, call_site.lineno, max_len=72)
-    generation = f"Adapted from previous (commit {parent_commit_id[:8]} -> {commit_id[:8]})"
-    call_file = None
-    call_file_link = None
-    if entry_script_path:
-        call_file = _relative_path_for_display(entry_script_path, entry_script_lineno) if (entry_script_lineno is not None and entry_script_lineno > 0) else _relative_path_for_display(entry_script_path)
-        call_file_link = _relative_link_path(entry_script_path, entry_script_lineno if (entry_script_lineno is not None and entry_script_lineno > 0) else None)
-    _print_semipy_line_once(
-        source, generation, code_path, "cyan", source_link, path_link, code_line_range,
-        call_file=call_file,
-        call_file_link=call_file_link,
-    )
-
-
-def print_dag_compose(
-    call_site: SemiCallSite,
-    commit_id: str,
-    code_path: str,
-    source_link: Optional[str] = None,
-    path_link: Optional[str] = None,
-    code_line_range: Optional[tuple[int, int]] = None,
-    entry_script_path: Optional[str] = None,
-    entry_script_lineno: Optional[int] = None,
-) -> None:
-    """Log COMPOSE: composed from library primitive, new commit."""
-    source = _relative_display_path(call_site.filename, call_site.lineno, max_len=72)
-    generation = f"Compose from library (commit {commit_id[:8]})"
-    call_file = None
-    call_file_link = None
-    if entry_script_path:
-        call_file = _relative_path_for_display(entry_script_path, entry_script_lineno) if (entry_script_lineno is not None and entry_script_lineno > 0) else _relative_path_for_display(entry_script_path)
-        call_file_link = _relative_link_path(entry_script_path, entry_script_lineno if (entry_script_lineno is not None and entry_script_lineno > 0) else None)
-    _print_semipy_line_once(
-        source, generation, code_path, "cyan", source_link, path_link, code_line_range,
-        call_file=call_file,
-        call_file_link=call_file_link,
-    )
-
-
-def print_dag_generate(
-    call_site: SemiCallSite,
-    commit_id: str,
-    code_path: str,
-    source_link: Optional[str] = None,
-    path_link: Optional[str] = None,
-    code_line_range: Optional[tuple[int, int]] = None,
-    entry_script_path: Optional[str] = None,
-    entry_script_lineno: Optional[int] = None,
-) -> None:
-    """Log GENERATE: call file, package file, new implementation, transpiled path. All paths relative."""
-    source = _relative_display_path(call_site.filename, call_site.lineno, max_len=72)
-    generation = f"New implementation (commit {commit_id[:8]})"
-    call_file = None
-    call_file_link = None
-    if entry_script_path:
-        call_file = _relative_path_for_display(entry_script_path, entry_script_lineno) if (entry_script_lineno is not None and entry_script_lineno > 0) else _relative_path_for_display(entry_script_path)
-        call_file_link = _relative_link_path(entry_script_path, entry_script_lineno if (entry_script_lineno is not None and entry_script_lineno > 0) else None)
-    _print_semipy_line_once(
-        source, generation, code_path, "yellow", source_link, path_link, code_line_range,
-        call_file=call_file,
-        call_file_link=call_file_link,
-    )
-
-
-def print_reactive_stale(call_site: SemiCallSite, slot_id: str, reason: str) -> None:
-    """Log when a stale slot is detected and will be regenerated."""
-    console = get_console()
-    loc = _format_location(call_site.filename, call_site.lineno, call_site.func_qualname)
-    console.print(f"[yellow]Reactive:[/] slot [cyan]{slot_id[:8]}[/] at {loc} is stale ({reason}); regenerating.")
-
-
-def print_reactive_cascade(upstream_slot_id: str, affected_count: int) -> None:
-    """Log cascade invalidation: upstream change marked N downstream slots stale."""
-    console = get_console()
-    console.print(f"[yellow]Reactive:[/] upstream [cyan]{upstream_slot_id[:8]}[/] changed; [cyan]{affected_count}[/] downstream slot(s) marked stale.")
-
-
-def print_reactive_mismatch(slot_id: str, requirement: Any, actual: Any) -> None:
-    """Log when downstream requirement triggers upstream ADAPT (output missing required shape)."""
-    console = get_console()
-    console.print(f"[yellow]Reactive:[/] slot [cyan]{slot_id[:8]}[/] output does not satisfy downstream requirement: required {requirement}, actual {actual}")
 
 
 def print_reasoning_block(content: str) -> None:
@@ -443,19 +292,6 @@ def print_response_block(content: str) -> None:
         return
     console = get_console()
     console.print(Panel(Markdown(content.strip()), title="Response", border_style="blue"))
-
-
-def print_tool_call(tool_name: str, args_preview: str = "") -> None:
-    """Legacy one-line log (raw preview). Prefer print_tool_intent_line."""
-    console = get_console()
-    console.print(f"[dim][Tools][/] [cyan]{tool_name}[/] called {args_preview}")
-
-
-def print_tool_result(tool_name: str, result_preview: str, success: bool = True) -> None:
-    """Legacy one-line log. Prefer print_tool_outcome_line."""
-    console = get_console()
-    style = "green" if success else "red"
-    console.print(f"[dim][Tools][/] [cyan]{tool_name}[/] => [{style}]{result_preview}[/]")
 
 
 def print_tool_intent_line(
@@ -483,79 +319,6 @@ def print_tool_outcome_line(
     c = console or get_console()
     style = "green" if ok else "red"
     c.print(f"[dim]semipy[/]  [{style}]{outcome}[/]")
-
-
-def print_gist_execution(success: bool, stdout: str, stderr: str) -> None:
-    """Display gist execution result (stdout/stderr)."""
-    console = get_console()
-    if success:
-        if stdout.strip():
-            console.print(Panel(stdout.strip(), title="Gist stdout", border_style="dim"))
-    else:
-        if stderr.strip():
-            console.print(Panel(stderr.strip(), title="Gist stderr", border_style="red"))
-
-
-def print_decision_explanation(decision: Any, explanation: str) -> None:
-    """Log resolution decision and short explanation."""
-    console = get_console()
-    console.print(f"[dim][semipy][/] Decision: [cyan]{decision}[/] {explanation}")
-
-
-def print_slot_history(slot: Any, max_entries: int = 20) -> None:
-    """Print git-log-style history for a slot (commit id, message, branch)."""
-    from semipy.history import Slot
-    if not isinstance(slot, Slot):
-        return
-    console = get_console()
-    commits = sorted(slot.commits.values(), key=lambda c: c.timestamp, reverse=True)
-    if not commits:
-        return
-    branch_heads = {b.name: b.head for b in slot.branches.values()}
-    lines = [f"  [dim]slot: {slot.function_name_base}[/]"]
-    for c in commits[:max_entries]:
-        branch_label = ""
-        for bname, head in branch_heads.items():
-            if head == c.commit_id:
-                branch_label = f" [{bname}]"
-                break
-        lines.append(f"  [cyan]{c.commit_id[:8]}[/] [dim]{c.message}[/] [green]{c.decision}[/]{branch_label}")
-    if len(commits) > max_entries:
-        lines.append(f"  [dim]... {len(commits) - max_entries} more[/]")
-    console.print("\n".join(lines))
-
-
-def cache_hit_panel(
-    spec: GenerationSpec,
-    entry: CacheEntry,
-    cache_dir: Optional[Path] = None,
-) -> None:
-    """Print a panel for cache hit: call site, file path, and syntax-highlighted source skeleton."""
-    console = get_console()
-    cs = spec.call_site
-    type_name = getattr(entry.expected_type, "__name__", str(entry.expected_type))
-    if type_name == "NoneType":
-        type_name = "any"
-
-    grid = Table.grid(padding=(0, 2))
-    grid.add_column(style="cyan", justify="right")
-    grid.add_column(style="white")
-    grid.add_row("File:", cs.filename)
-    grid.add_row("Line:", str(cs.lineno))
-    grid.add_row("Function:", cs.func_qualname or "(top-level)")
-    grid.add_row("Return type:", type_name)
-    if entry.cache_display_path:
-        grid.add_row("Cache file:", entry.cache_display_path)
-
-    body = grid
-    src = entry.generated_source.strip()
-    lines = src.splitlines()
-    max_lines = 25
-    if len(lines) > max_lines:
-        src = "\n".join(lines[:max_lines]) + "\n  ..."
-    syntax = Syntax(src, "python", theme="monokai", line_numbers=True)
-    console.print(Panel(body, title="Using cached implementation", border_style="green"))
-    console.print(Panel(syntax, title="Cached source", border_style="dim"))
 
 
 def print_friendly_exception(exc: BaseException, *, title: str = "Traceback") -> None:

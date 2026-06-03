@@ -18,14 +18,11 @@ from semipy.lowering_ast import (
     INLINE_EXPR,
     INLINE_RETURN,
     _is_hash_arrow,
-    _is_skeleton_placeholder_line,
-    _is_slot_anchor_line,
     _collect_hash_arrow_block_ranges,
     _inline_hash_arrow_spec,
     _is_ellipsis_constant,
     _ellipsis_assign_targets,
     _find_stmt_at_rel_line,
-    _find_stmt_at_rel_line_in_list,
     _replace_if_test_at_line,
     _replace_expr_value_at_line,
     _replace_return_value_at_line,
@@ -38,13 +35,11 @@ from semipy.lowering_ast import (
     _function_def_from_source,
     _ordered_vars_from_fn,
     _bound_names_before,
-    _infer_expected_type_from_if_tests,
     _infer_expected_type_for_output_names,
     _control_context_for_line,
     _extract_formal_constraint_lines,
-    _call_target_names_in_stmts,
     _infer_output_names_for_statement_block,
-    strip_skeleton_lines,
+    strip_skeleton_lines,  # noqa: F401  (re-exported for decorator.py / skeleton_writer.py)
     _BUILTIN_NAMES,
 )
 
@@ -142,7 +137,7 @@ def scan_informal_specs(
     dedented = textwrap.dedent(source)
     source_lines = dedented.splitlines()
     try:
-        tree = ast.parse(dedented)
+        ast.parse(dedented)  # validate syntax; result unused
     except SyntaxError:
         # Let the decorator compilation decide what to do; returning empty keeps errors localized.
         return []
@@ -242,7 +237,7 @@ def scan_informal_specs(
     for block_start_idx, block_end_idx in _collect_hash_arrow_block_ranges(source_lines):
         indent = source_lines[block_start_idx][: len(source_lines[block_start_idx]) - len(source_lines[block_start_idx].lstrip())]
         block_lines = [source_lines[k] for k in range(block_start_idx, block_end_idx + 1) if _is_hash_arrow(source_lines[k])]
-        spec_text = "\n".join(_strip_hash_arrow(l) for l in block_lines).strip()
+        spec_text = "\n".join(_strip_hash_arrow(line) for line in block_lines).strip()
 
         start_abs = first_lineno + block_start_idx
         end_abs = first_lineno + block_end_idx

@@ -149,10 +149,7 @@ class Decision(Enum):
 
     REUSE = "reuse"
     ADAPT = "adapt"
-    COMPOSE = "compose"
-    FORK = "fork"
     GENERATE = "generate"
-    MERGE = "merge"
     INSTANTIATE = "instantiate"
 
 

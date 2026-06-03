@@ -182,7 +182,6 @@ export function activate(context: ExtensionContext): void {
   const lastHeads = new Map<string, string>();
   let headsSeeded = false;
 
-  // const signFlip = false;
   const signFlip = new SignFlipCoordinator(
     () => cfg().get<boolean>("signFlipOnSkeletonEdit") ?? false,
     () => cfg().get<boolean>("signFlipSkipApiEdits") ?? true,
@@ -553,13 +552,12 @@ export function activate(context: ExtensionContext): void {
       await workspace.applyEdit(edit);
     }),
     registerCommitTextProvider(),
-    commands.registerCommand("semipy.noop", () => { }),
     commands.registerCommand("semipy.showOutput", () => {
       getSemipyOutputChannel().show(true);
     }),
     commands.registerCommand("semipy.openSplitView", async () => {
       // Resolve a portal even when no text editor is focused -- e.g. when invoked
-      // from the Slot Inspector webview, window.activeTextEditor is undefined.
+      // from the Slot Inspector tree view, window.activeTextEditor is undefined.
       const ed = window.activeTextEditor;
       if (ed) {
         refreshPortalForUri(ed.document.uri.fsPath, portalState);

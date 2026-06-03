@@ -1732,16 +1732,15 @@ var RegressionDiagnosticManager = class {
 
 // src/features/steering/reasoningSteering.ts
 var import_vscode7 = require("vscode");
-var PROVENANCE_KEYS = /* @__PURE__ */ new Set(["goal", "because", "alt", "given"]);
-var EFFECT_KEYS = /* @__PURE__ */ new Set(["commits", "verified", "yields"]);
+var PROVENANCE_KEYS = /* @__PURE__ */ new Set(["intent", "given", "by", "unless"]);
+var EFFECT_KEYS = /* @__PURE__ */ new Set(["yields", "verified"]);
 var KEY_HELP = {
-  goal: "what this slot is meant to achieve",
-  because: "why semipy chose this implementation (decision rationale)",
-  alt: "an alternative the model considered but did not take",
+  intent: "what this slot is meant to achieve",
   given: "the inputs / assumptions it was generated under",
-  commits: "what behaviour this implementation locks in",
-  verified: "what was checked to hold (derived, not synthesised)",
-  yields: "the shape of the value it returns"
+  by: "how semipy chose to implement it (the approach taken)",
+  unless: "an edge case or exception the implementation guards against",
+  yields: "the shape of the value it returns",
+  verified: "what was checked to hold (derived, not synthesised)"
 };
 function parseSteeringLine(lineText) {
   const m = lineText.match(/^(\s*)#\s*<\s*([a-zA-Z_]+)\s*:/);
@@ -3670,8 +3669,6 @@ function activate(context) {
       await import_vscode22.workspace.applyEdit(edit);
     }),
     registerCommitTextProvider(),
-    import_vscode22.commands.registerCommand("semipy.noop", () => {
-    }),
     import_vscode22.commands.registerCommand("semipy.showOutput", () => {
       getSemipyOutputChannel().show(true);
     }),
