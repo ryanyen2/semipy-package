@@ -164,6 +164,15 @@ def scan_informal_specs(
     except Exception:
         pass
 
+    # The method receiver (``self``/``cls``) is not slot data: it is the instance,
+    # not an input the spec consumes. Excluding it keeps it out of the generated
+    # signature, the runtime data profile, and the reuse fingerprint. (If a slot
+    # needs instance state, the spec interpolates the attribute value, not ``self``.)
+    receiver_names: set[str] = set()
+    _params = [a.arg for a in (fn_def.args.posonlyargs + fn_def.args.args)]
+    if "." in func_qualname and _params and _params[0] in ("self", "cls"):
+        receiver_names.add(_params[0])
+
     # Map of semi call lineno (abs) -> SlotSpec
     semi_slots: list[tuple[int, SlotSpec]] = []
 
@@ -202,7 +211,7 @@ def scan_informal_specs(
             # bloating signatures and gist invocations. Keywords like expected_type=str
             # are outside prompt_expr and must not add spurious parameters.
             loaded_in_prompt = _loaded_names(prompt_expr)
-            free_var_set = loaded_in_prompt - {"semi"} - _BUILTIN_NAMES
+            free_var_set = loaded_in_prompt - {"semi"} - _BUILTIN_NAMES - receiver_names
             free_vars = _ordered_vars_from_fn(fn_def, free_var_set)
 
             control_context = _control_context_for_line(fn_def, rel_lineno, func_qualname)
@@ -259,7 +268,7 @@ def scan_informal_specs(
                 if stmt_lineno > block_end_rel + 20:
                     break
                 assigned_in_region |= _assigned_names(stmt)
-        free_var_set = bound_before - assigned_in_region - set(output_names) - _BUILTIN_NAMES
+        free_var_set = bound_before - assigned_in_region - set(output_names) - _BUILTIN_NAMES - receiver_names
         free_vars = _ordered_vars_from_fn(fn_def, free_var_set)
 
         control_context = _control_context_for_line(fn_def, block_end_rel, func_qualname)
@@ -327,7 +336,7 @@ def scan_informal_specs(
                 if st_ln > block_end_rel + 20:
                     break
                 assigned_in_region |= _assigned_names(st)
-        free_var_set = bound_before - assigned_in_region - set(output_names) - _BUILTIN_NAMES
+        free_var_set = bound_before - assigned_in_region - set(output_names) - _BUILTIN_NAMES - receiver_names
         free_vars = _ordered_vars_from_fn(fn_def, free_var_set)
 
         control_context = _control_context_for_line(fn_def, block_end_rel, func_qualname)
@@ -388,7 +397,7 @@ def scan_informal_specs(
             start_abs_lineno=start_abs,
             end_abs_lineno=end_abs,
             spec_text=spec_text,
-            free_variables=_ordered_vars_from_fn(fn_def, bound_before),
+            free_variables=_ordered_vars_from_fn(fn_def, bound_before - receiver_names),
             control_context=control_context,
             expected_category=SlotCategory.FUNCTION_BODY,
             expected_type=expected_type,

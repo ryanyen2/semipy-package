@@ -51,16 +51,38 @@ def _ensure_async_loop() -> asyncio.AbstractEventLoop:
         return loop
 
 
+def _reset_async_loop() -> None:
+    """Drop the cached background loop so the next call rebuilds a fresh one."""
+    global _async_loop, _async_loop_thread
+    with _async_loop_lock:
+        _async_loop = None
+        _async_loop_thread = None
+
+
 def _run_async(coro: Any) -> Any:
     """Run a coroutine on a persistent background event loop.
 
     Using a long-lived loop avoids teardown races from creating/closing event loops
     for every slot invocation, which can surface as ``RuntimeError: Event loop is closed``
     during streamed HTTP client shutdown.
+
+    Under heavy concurrency the shared loop can still be observed closed at submit
+    time (a race between threads). ``run_coroutine_threadsafe`` raises *before* the
+    coroutine starts in that case, so the coroutine is unstarted and safe to submit
+    to a freshly rebuilt loop. Retry once rather than surfacing the race as a hard
+    ``RuntimeError: Event loop is closed`` to the caller.
     """
-    loop = _ensure_async_loop()
-    fut = asyncio.run_coroutine_threadsafe(coro, loop)
-    return fut.result()
+    try:
+        loop = _ensure_async_loop()
+        fut = asyncio.run_coroutine_threadsafe(coro, loop)
+        return fut.result()
+    except RuntimeError as e:
+        if "Event loop is closed" not in str(e):
+            raise
+        _reset_async_loop()
+        loop = _ensure_async_loop()
+        fut = asyncio.run_coroutine_threadsafe(coro, loop)
+        return fut.result()
 
 from semipy.agents.compiler import _compile_source
 from semipy.agents.config import (

@@ -244,11 +244,14 @@ def _run_batch_gist(gist_source: str, timeout: int = 15) -> list[dict[str, Any]]
         ) as f:
             f.write(gist_source)
             path = f.name
+        from semipy.agents.executor import subprocess_env_with_user_path
+
         result = subprocess.run(
             [sys.executable, path],
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=subprocess_env_with_user_path(),
         )
         if result.returncode != 0:
             return []

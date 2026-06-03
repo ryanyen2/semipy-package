@@ -203,6 +203,45 @@ def test_scan_side_effect_block_stays_empty():
     assert specs[0].output_names == []
 
 
+def test_scan_method_excludes_self_from_free_variables():
+    # The method receiver is not slot data: it must not become a generated-function
+    # parameter, a profiled input, or part of the reuse fingerprint.
+    source = textwrap.dedent("""\
+        def triage(self, ticket):
+            result = None
+            #> analyze the {ticket} and produce a triage result
+            return result
+    """)
+    specs = scan_informal_specs(source, "a.py", "A.triage", 1, type_hints={"ticket": str, "return": dict})
+    assert specs[0].free_variables == ["ticket"]
+    assert specs[0].output_names == ["result"]
+
+
+def test_scan_method_excludes_cls():
+    source = textwrap.dedent("""\
+        def make(cls, spec):
+            out = None
+            #> build something from {spec}
+            return out
+    """)
+    specs = scan_informal_specs(source, "a.py", "A.make", 1, type_hints={"spec": str, "return": dict})
+    assert "cls" not in specs[0].free_variables
+    assert specs[0].free_variables == ["spec"]
+
+
+def test_scan_toplevel_function_named_self_is_not_a_receiver():
+    # A top-level function (no dot in qualname) whose param happens to be 'self' is
+    # NOT a method, so 'self' stays a real input.
+    source = textwrap.dedent("""\
+        def f(self):
+            out = None
+            #> use {self}
+            return out
+    """)
+    specs = scan_informal_specs(source, "a.py", "f", 1, type_hints={"self": str, "return": dict})
+    assert specs[0].free_variables == ["self"]
+
+
 def test_scan_returned_real_value_not_hijacked_as_output():
     # ``x`` carries a real computed value before the block: it is a genuine input the
     # block consumes, not the block's output. Do not force it to an output.

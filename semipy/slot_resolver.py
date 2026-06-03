@@ -183,6 +183,25 @@ def _capture_slot_source_snapshot(slot_spec: SlotSpec) -> dict[str, Any]:
 _semantic_reuse_counters: dict[str, int] = {}
 _semantic_last_fingerprints: dict[str, str] = {}
 
+# Single-flight: one lock per slot_id so concurrent callers of the SAME slot do not
+# each invoke the LLM (a thundering herd of redundant generations) and do not race on
+# the portal / dispatch-module writes. The first caller generates; the rest block,
+# then re-enter and REUSE the just-created implementation. Different slots use
+# different locks, so unrelated slots still run concurrently. For the common case --
+# a CPU-bound generated function -- this adds ~nothing over the GIL, which already
+# serializes pure-Python execution across threads.
+_slot_singleflight_locks: dict[str, threading.Lock] = {}
+_slot_singleflight_guard = threading.Lock()
+
+
+def _slot_singleflight_lock(slot_id: str) -> threading.Lock:
+    with _slot_singleflight_guard:
+        lk = _slot_singleflight_locks.get(slot_id)
+        if lk is None:
+            lk = threading.Lock()
+            _slot_singleflight_locks[slot_id] = lk
+        return lk
+
 
 def _should_semantic_check(
     slot: Any,
@@ -218,6 +237,14 @@ def _should_semantic_check(
     adv = getattr(slot, "advisor_state", None) or {}
     if not isinstance(adv, dict):
         adv = {}
+
+    # Convergence cap: once a slot has been adapted by the semantic recheck this many
+    # times, stop re-checking. An inherently-semantic slot compiles to a static
+    # function the judge can reject on every new free-text input; without this cap the
+    # slot regenerates on essentially every call (unbounded cost/latency at scale).
+    cap = int(getattr(config, "semantic_verify_max_adapts", 2) or 0)
+    if cap and int(adv.get("semantic_adapt_count", 0) or 0) >= cap:
+        return False
 
     last_commit = adv.get("semantic_last_commit_id")
     if last_commit != commit_id:
@@ -1462,12 +1489,29 @@ def execute_slot(
                                         f"{_batch_summary.get('n_unique_outputs',0)} unique outputs."
                                     )
                                 _post_reuse_semantic = sem
+                                # Count semantic-driven adapts so the convergence cap
+                                # in _should_semantic_check can stop perpetual churn.
+                                _adv_sc = getattr(slot, "advisor_state", None) or {}
+                                if not isinstance(_adv_sc, dict):
+                                    _adv_sc = {}
+                                _sc_n = int(_adv_sc.get("semantic_adapt_count", 0) or 0) + 1
+                                _adv_sc["semantic_adapt_count"] = _sc_n
+                                slot.advisor_state = _adv_sc
+                                _sc_cap = int(getattr(config, "semantic_verify_max_adapts", 2) or 0)
                                 if config.verbose:
                                     print_pipeline_log(
                                         call_site,
                                         "semantic_check",
                                         f"Implementation does not satisfy intent; adapting. {sem.reasoning}",
                                     )
+                                    if _sc_cap and _sc_n >= _sc_cap:
+                                        print_pipeline_log(
+                                            call_site,
+                                            "semantic_check",
+                                            f"Intent rechecks capped at {_sc_cap} for this slot; "
+                                            "trusting the implementation hereafter to avoid "
+                                            "regenerating on every new input.",
+                                        )
                                 force_regenerate = True
                             else:
                                 if _adaptive and config.verbose and getattr(sem, "ambiguous_inputs", None):
@@ -1846,12 +1890,17 @@ def _make_slot_proxy(slot_spec: SlotSpec, source_file: str, cache_dir: Path | No
         # Cache dir is read dynamically from config so users can call
         # `semipy.configure(cache_dir=...)` after importing this module.
         effective_cache_dir = cache_dir_path if cache_dir_path is not None else Path(get_config().cache_dir)
-        result = execute_slot(
-            slot_spec=slot_spec,
-            runtime_values=kwargs,
-            source_file=source_file,
-            cache_dir=effective_cache_dir,
-        )
+        # Single-flight per slot: under concurrent access (a threaded pipeline or a
+        # server handling parallel requests) this ensures only one thread generates a
+        # given slot while the rest wait and then REUSE it, instead of all firing the
+        # LLM at once and racing the portal writes.
+        with _slot_singleflight_lock(slot_spec.slot_id):
+            result = execute_slot(
+                slot_spec=slot_spec,
+                runtime_values=kwargs,
+                source_file=source_file,
+                cache_dir=effective_cache_dir,
+            )
         if slot_spec.expected_category == SlotCategory.STATEMENT_BLOCK:
             if len(slot_spec.output_names) == 1 and isinstance(result, dict):
                 return result.get(slot_spec.output_names[0])

@@ -37,6 +37,14 @@ class SemiConfig:
     session_source: Optional[str] = None
     semantic_verify: bool = True
     semantic_verify_threshold: int = 10
+    #: Cap on semantic-recheck-driven ADAPTs per slot. An inherently-semantic slot
+    #: (e.g. triage, preference judgment, summarization) compiles to a *static*
+    #: function the intent judge can keep rejecting on every fresh free-text input,
+    #: which would regenerate on essentially every call -- unbounded cost/latency at
+    #: scale. After this many semantic-driven adapts the slot stops re-checking and
+    #: trusts the current implementation, so it CONVERGES. Raise for more refinement,
+    #: set 0 to disable the cap (regenerate whenever the judge says so).
+    semantic_verify_max_adapts: int = 2
     #: After GENERATE/ADAPT, extract NL-to-code bindings and update ``sketch_library.json``.
     sketch_library_learning: bool = True
     #: If False, persist sketches before ``execute_slot`` returns (needed for INSTANTIATE in the same process).

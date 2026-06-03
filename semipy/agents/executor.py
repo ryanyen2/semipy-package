@@ -7,11 +7,37 @@ installed and E2B_API_KEY is set) or in a local subprocess (fallback).
 from __future__ import annotations
 
 import asyncio
+import os
 import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
 from typing import Any, Optional
+
+
+def subprocess_env_with_user_path() -> dict[str, str]:
+    """Environment for a gist subprocess that mirrors the parent's import path.
+
+    A subprocess running a temp file only gets the temp file's directory on
+    ``sys.path`` -- so a user's sibling project modules (e.g. a ``domain.py`` that
+    the ``@semiformal`` code imports for its types) are not importable, even though
+    they import fine in the user's own process. Propagating the parent interpreter's
+    ``sys.path`` via ``PYTHONPATH`` makes ``from my_module import T`` resolve in the
+    gist exactly as it does where the user ran their program. This is the general
+    fix for multi-file / package projects; it does not special-case any module.
+    """
+    env = dict(os.environ)
+    paths: list[str] = []
+    for p in sys.path:
+        p = p or os.getcwd()  # '' means cwd
+        if os.path.isdir(p) and p not in paths:
+            paths.append(p)
+    existing = env.get("PYTHONPATH", "")
+    if existing:
+        paths.append(existing)
+    if paths:
+        env["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(paths))
+    return env
 
 
 @dataclass
@@ -155,6 +181,7 @@ class GistExecutor:
                 text=True,
                 timeout=self.timeout,
                 cwd=cwd,
+                env=subprocess_env_with_user_path(),
             )
             stdout, result_repr = _parse_gist_result_stdout(proc.stdout or "")
             if proc.returncode != 0:

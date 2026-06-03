@@ -64,6 +64,19 @@ def _collect_user_type_sources(expected_type: Any) -> list[tuple[str, str]]:
         if tp in seen:
             return
         seen.add(tp)
+        # Recurse into the type's own field/attribute annotations FIRST, so a
+        # dependency (an Enum or nested dataclass a field references) is emitted
+        # *before* the type that uses it -- otherwise the injected class source
+        # raises NameError when exec'd (e.g. ``priority: Priority`` before Priority
+        # is defined). This makes the injected block self-contained and ordered.
+        try:
+            import typing as _typing
+
+            hints = _typing.get_type_hints(tp)
+        except Exception:
+            hints = getattr(tp, "__annotations__", {}) or {}
+        for _h in list(hints.values()):
+            _visit(_h)
         try:
             src = inspect.getsource(tp)
             results.append((tp.__name__, textwrap.dedent(src)))
