@@ -2,7 +2,7 @@
   "name": "semipy-vscode",
   "displayName": "Semipy",
   "description": "Editor support for semipy semiformal specs (#> / #<), portal history, and dispatch navigation.",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "publisher": "semipy",
   "author": "Ryan Yen",
   "keywords": [
@@ -109,6 +109,16 @@
         "command": "semipy.relaxGuarantee",
         "title": "Semipy: Relax this guarantee",
         "icon": "$(circle-slash)"
+      },
+      {
+        "command": "semipy.resetSlot",
+        "title": "Semipy: Reset slot (regenerate fresh)",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "semipy.resetSlotVersion",
+        "title": "Semipy: Delete this version",
+        "icon": "$(trash)"
       }
     ],
     "menus": {
@@ -122,6 +132,16 @@
           "command": "semipy.relaxGuarantee",
           "when": "view == semipy.slotHistory && viewItem == semipy.guarantee",
           "group": "inline"
+        },
+        {
+          "command": "semipy.resetSlot",
+          "when": "view == semipy.slotHistory && viewItem == semipy.slot",
+          "group": "inline"
+        },
+        {
+          "command": "semipy.resetSlotVersion",
+          "when": "view == semipy.slotHistory && viewItem == semipy.commit",
+          "group": "inline"
         }
       ],
       "commandPalette": [
@@ -130,6 +150,8 @@
         { "command": "semipy.revertEffect", "when": "false" },
         { "command": "semipy.revertEffectTreeItem", "when": "false" },
         { "command": "semipy.relaxGuarantee", "when": "false" },
+        { "command": "semipy.resetSlot", "when": "false" },
+        { "command": "semipy.resetSlotVersion", "when": "false" },
         { "command": "semipy.promoteReasoningLine", "when": "false" },
         { "command": "semipy.dismissReasoningLine", "when": "false" },
         { "command": "semipy.viewGeneratedCode", "when": "false" },

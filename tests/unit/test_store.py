@@ -4,7 +4,6 @@ import ast
 
 import pytest
 
-from semipy.history.version_control import Portal
 from semipy.store import load_portal, save_portal, write_dispatch_module
 
 

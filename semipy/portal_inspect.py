@@ -4,8 +4,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from semipy.session_anchor import resolve_project
 from semipy.store import load_portal
-from semipy.types import session_id_from_filename, session_module_name_from_filename
+from semipy.types import module_name_for_project, session_id_for_project
 
 
 def _head_commit_for_slot(slot: Any) -> Any | None:
@@ -27,14 +28,18 @@ def print_portal_resolution_summary(*, cache_dir: Path, session_anchor: str) -> 
     Load the portal for a stable session anchor and print each slot's head commit,
     decision, and ``runtime_input_fingerprint`` (when present).
 
-    ``session_anchor`` should match ``configure(session_source=...)`` (or the resolved
-    path used as the portal key for that notebook session).
+    ``session_anchor`` is a source file (or directory) inside the project; the
+    project portal is resolved the same way the runtime does (one portal per
+    project = the folder rooted at the nearest ``.semiformal/``).
     """
-    anchor = str(Path(session_anchor).expanduser().resolve())
-    session_id = session_id_from_filename(anchor)
-    module_name = session_module_name_from_filename(anchor)
-    portal = load_portal(Path(cache_dir), session_id, anchor, module_name)
-    print(f"session_id={session_id} module={module_name} slots={len(portal.slots)}")
+    resolved_cache_dir, project_root = resolve_project(str(session_anchor), Path(cache_dir))
+    session_id = session_id_for_project(project_root)
+    module_name = module_name_for_project(project_root)
+    portal = load_portal(resolved_cache_dir, session_id, str(project_root), module_name)
+    print(
+        f"session_id={session_id} module={module_name} "
+        f"project={project_root} slots={len(portal.slots)}"
+    )
     for sid, sl in portal.slots.items():
         head = _head_commit_for_slot(sl)
         short = sid[:8] + "..." if len(sid) > 8 else sid

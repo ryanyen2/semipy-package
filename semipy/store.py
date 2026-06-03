@@ -220,6 +220,91 @@ def save_portal(cache_dir: Path, portal: Portal) -> None:
         json.dump(data, f, indent=2)
 
 
+def _merge_slot(base: Slot, other: Slot) -> Slot:
+    """Union two slots that share a slot_id (content-addressed, so safe).
+
+    Keep the richer slot (more commits) as the base and fold in the other's
+    commits, plus any branches/refs it does not already have (the richer slot's
+    heads win — ``setdefault``, not ``update``). Durable history (contract /
+    ledger / slot_spec) is carried over only when the kept slot lacks it, so a
+    collision never silently drops the behavioral contract or effect ledger.
+    """
+    keep, fold = (base, other) if len(base.commits) >= len(other.commits) else (other, base)
+    keep.commits.update(fold.commits)
+    for name, branch in fold.branches.items():
+        keep.branches.setdefault(name, branch)
+    for k, v in fold.refs.items():
+        keep.refs.setdefault(k, v)
+    if not keep.contract and fold.contract:
+        keep.contract = fold.contract
+    if not keep.ledger and fold.ledger:
+        keep.ledger = fold.ledger
+    if not keep.slot_spec and fold.slot_spec:
+        keep.slot_spec = fold.slot_spec
+    if not keep.spec_hash and fold.spec_hash:
+        keep.spec_hash = fold.spec_hash
+    return keep
+
+
+def migrate_legacy_portals(
+    cache_dir: Path, session_id: str, source_file: str, module_name: str
+) -> Optional[Portal]:
+    """Best-effort one-time merge of legacy per-file portals into one project portal.
+
+    Before per-project portals, each source file produced its own
+    ``{basename_hash}.portal.json``. When the new project portal does not exist yet
+    but legacy portal files do, merge all of their slots (content-addressed, so the
+    union is safe) into a single project portal, persist it, and regenerate the
+    dispatch module. Idempotent: once the project portal exists this returns ``None``.
+    Never deletes legacy files.
+
+    Assumes one project per cache directory (the default: discovery places each
+    project's ``.semiformal/`` at its own root). If several projects deliberately
+    share one explicit ``cache_dir``, the first to run also merges the others'
+    as-yet un-migrated per-file portals -- harmless over-inclusion (slots stay
+    correctly keyed by slot_id), not data loss.
+    """
+    target = _portal_path(cache_dir, session_id)
+    if target.exists():
+        return None
+    try:
+        legacy = sorted(p for p in cache_dir.glob("*.portal.json") if p != target)
+    except Exception:
+        return None
+    if not legacy:
+        return None
+
+    merged = Portal(session_id=session_id, source_file=source_file, module_name=module_name)
+    found_any = False
+    for path in legacy:
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            legacy_portal = _portal_from_dict(data)
+        except Exception:
+            continue
+        found_any = True
+        for sid, slot in legacy_portal.slots.items():
+            existing = merged.slots.get(sid)
+            merged.slots[sid] = slot if existing is None else _merge_slot(existing, slot)
+        for k, v in legacy_portal.spec_map.items():
+            merged.spec_map.setdefault(k, v)
+        for fn, sids in legacy_portal.enclosing_function_slots.items():
+            bucket = merged.enclosing_function_slots.setdefault(fn, [])
+            for s in sids:
+                if s not in bucket:
+                    bucket.append(s)
+
+    if not found_any or not merged.slots:
+        return None
+    save_portal(cache_dir, merged)
+    try:
+        write_dispatch_module(cache_dir, merged)
+    except Exception:
+        pass
+    return merged
+
+
 def function_name_for_commit(slot: Slot, commit: Commit) -> str:
     """Function name in dispatch module: base_commitid (8 chars)."""
     base = slot.function_name_base or "slot"

@@ -12,7 +12,12 @@ def _sha16(s: str) -> str:
 
 
 def session_id_from_filename(filename: str) -> str:
-    """Derive a stable session id from source file path (one session = one source file)."""
+    """Legacy (pre-0.3) per-file session id: SHA256 of the basename.
+
+    The runtime now keys portals per project (``session_id_for_project``). This is
+    retained for back-compat and to recognise legacy portal files during migration;
+    the VS Code extension also keeps a matching port for legacy portals.
+    """
     if not filename or filename == "<unknown>":
         return hashlib.sha256(b"<unknown>").hexdigest()[:16]
     normalized = filename.replace("\\", "/").strip().lower()
@@ -33,6 +38,41 @@ def session_module_name_from_filename(filename: str) -> str:
     if base.endswith(".py"):
         base = base[:-3]
     return base or "unknown"
+
+
+def session_id_for_project(project_root: Any) -> str:
+    """Stable session id for a PROJECT (one portal per project).
+
+    A project is identified by its root directory, so every source file under the
+    same root resolves to the same portal (enabling cross-file reuse) and two
+    same-named files in different projects never collide.
+    """
+    from pathlib import Path
+
+    try:
+        resolved = str(Path(str(project_root)).expanduser().resolve())
+    except Exception:
+        resolved = str(project_root)
+    if not resolved:
+        return _sha16("<unknown>")
+    return _sha16(resolved.replace("\\", "/").rstrip("/").lower())
+
+
+def module_name_for_project(project_root: Any) -> str:
+    """Dispatch-module base name for a project (sanitized folder name)."""
+    import re
+    from pathlib import Path
+
+    try:
+        name = Path(str(project_root)).expanduser().resolve().name
+    except Exception:
+        name = str(project_root).rstrip("/").split("/")[-1]
+    name = re.sub(r"[^0-9a-zA-Z_]", "_", name.strip())
+    if not name:
+        return "project"
+    if name[0].isdigit():
+        name = "_" + name
+    return name
 
 
 @dataclass(frozen=True)

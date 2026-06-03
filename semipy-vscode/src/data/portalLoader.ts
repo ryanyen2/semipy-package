@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import type { PortalJson } from "./types";
-import { sessionIdFromFilename } from "./sessionId";
+import { sessionIdForProject, sessionIdFromFilename } from "./sessionId";
 
 /** Same file on disk; handles macOS case and optional realpath match. */
 export function pathsEqualRobust(a: string, b: string): boolean {
@@ -262,6 +262,13 @@ export function findPortalJsonPathForEditor(
       } catch {
         /* ignore */
       }
+    }
+    // Per-project portal: session_id = hash(project root = parent of the cache dir).
+    // (The full-scan fallback below also finds it; this is the direct-hit fast path.)
+    try {
+      push(path.join(cacheDir, `${sessionIdForProject(path.dirname(cacheDir))}.portal.json`));
+    } catch {
+      /* ignore */
     }
   }
 

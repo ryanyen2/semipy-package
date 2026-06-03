@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.2] - 2026-06-03
+
+Aligns with the semipy `0.3.0` runtime, which scopes a portal **per project** (the
+folder rooted at the nearest `.semiformal/`) instead of per source-file.
+
+- Slot-history tree actions: **Reset slot (regenerate fresh)** on a slot and
+  **Delete this version** on a commit, both with a confirmation, wired to the new
+  `semipy reset-slot` / `reset-version` CLI.
+- Add `sessionIdForProject` / `moduleNameForProject` (byte-matching the runtime's
+  per-project identity) as a direct-hit candidate in portal discovery. The existing
+  full-scan fallback already located per-project portals, so this is an optimization.
+
 ## [0.3.1] - 2026-06-03
 
 Maintenance release aligning the extension with the semipy `0.2.2` runtime cleanup.

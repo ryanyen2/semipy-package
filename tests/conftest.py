@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from semipy.agents.config import configure, get_config
+from semipy.agents.config import configure
 
 
 @pytest.fixture

@@ -8,7 +8,13 @@ from pathlib import Path
 
 from semipy._slot_region import expand_zone
 from semipy.diagnostics_export import _diagnostics_path, _read_entries
-from semipy.history.version_lock import lock_slot_to_commit, rollback_slot, unlock_slot
+from semipy.history.version_lock import (
+    lock_slot_to_commit,
+    reset_slot,
+    reset_version,
+    rollback_slot,
+    unlock_slot,
+)
 from semipy.library.sketch_store import load_sketch_library
 from semipy.store import load_portal, save_portal, write_dispatch_module
 
@@ -179,6 +185,86 @@ def cmd_quarantine_cases(portal_path: Path, slot_id: str, case_ids: str) -> None
     sys.stdout.write(f"semipy quarantine-cases: relaxed {len(ids)} case(s) on slot {slot_id[:8]}.\n")
 
 
+def _slot_rows(portal, file_filter: str | None) -> list[dict]:
+    from semipy.store import _get_active_commit
+
+    rows: list[dict] = []
+    for sid, slot in portal.slots.items():
+        ci = slot.call_site_info or {}
+        spec = slot.slot_spec or {}
+        span = spec.get("source_span") if isinstance(spec, dict) else None
+        filename = ci.get("filename") or (span[0] if isinstance(span, (list, tuple)) and span else "")
+        lineno = ci.get("lineno")
+        if lineno is None and isinstance(span, (list, tuple)) and len(span) >= 2:
+            lineno = span[1]
+        func = ci.get("func_qualname") or ""
+        spec_text = (spec.get("spec_text") if isinstance(spec, dict) else "") or ""
+        spec_text = spec_text.replace("\n", " ").strip()
+        if len(spec_text) > 80:
+            spec_text = spec_text[:77] + "..."
+        if file_filter:
+            same_name = Path(str(filename)).name == Path(file_filter).name
+            if file_filter not in str(filename) and not same_name:
+                continue
+        active = _get_active_commit(slot)
+        rows.append(
+            {
+                "slot_id": sid,
+                "file": str(filename),
+                "line": lineno,
+                "func": func,
+                "versions": len(slot.commits),
+                "decision": getattr(active, "decision", "") if active is not None else "(none)",
+                "active_commit": (getattr(active, "commit_id", "") or "")[:8] if active is not None else "",
+                "spec": spec_text,
+            }
+        )
+    rows.sort(key=lambda r: (str(r["file"]), r["line"] or 0))
+    return rows
+
+
+def cmd_slots(portal_path: Path, file_filter: str | None, as_json: bool) -> None:
+    portal, _ = _load_portal_explicit(portal_path)
+    rows = _slot_rows(portal, file_filter)
+    if as_json:
+        json.dump(rows, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return
+    if not rows:
+        sys.stdout.write("(no slots)\n")
+        return
+    for r in rows:
+        name = Path(r["file"]).name or r["file"]
+        sys.stdout.write(
+            f"{r['slot_id'][:12]}  {name}:{r['line']}  {r['func']}  "
+            f"v{r['versions']} {r['decision']} {r['active_commit']}\n    {r['spec']}\n"
+        )
+
+
+def cmd_reset_slot(portal_path: Path, slot_id: str) -> None:
+    portal, cache_dir = _load_portal_explicit(portal_path)
+    try:
+        reset_slot(portal, slot_id)
+    except KeyError as exc:
+        raise SystemExit(str(exc))
+    save_portal(cache_dir, portal)
+    write_dispatch_module(cache_dir, portal, sketch_library=load_sketch_library(cache_dir))
+    sys.stdout.write(f"semipy reset-slot: cleared slot {slot_id[:8]}; next call regenerates.\n")
+
+
+def cmd_reset_version(portal_path: Path, slot_id: str, commit_id: str) -> None:
+    portal, cache_dir = _load_portal_explicit(portal_path)
+    try:
+        reset_version(portal, slot_id, commit_id)
+    except KeyError as exc:
+        raise SystemExit(str(exc))
+    save_portal(cache_dir, portal)
+    write_dispatch_module(cache_dir, portal, sketch_library=load_sketch_library(cache_dir))
+    sys.stdout.write(
+        f"semipy reset-version: deleted version {commit_id[:8]} from slot {slot_id[:8]}.\n"
+    )
+
+
 def cmd_diagnostics(cache_dir: Path) -> None:
     path = _diagnostics_path(cache_dir)
     entries = _read_entries(path)
@@ -226,6 +312,20 @@ def main(argv: list[str] | None = None) -> None:
     pq.add_argument("--slot-id", required=True)
     pq.add_argument("--case-ids", required=True, help="comma-separated case ids")
 
+    ps = sub.add_parser("slots", help="List slots in a portal (file:line, versions, decision)")
+    ps.add_argument("--portal", type=Path, required=True)
+    ps.add_argument("--file", default=None, help="filter to slots whose source file matches")
+    ps.add_argument("--json", action="store_true", help="emit JSON")
+
+    prs = sub.add_parser("reset-slot", help="Clear a slot so the next call regenerates fresh")
+    prs.add_argument("--portal", type=Path, required=True)
+    prs.add_argument("--slot-id", required=True)
+
+    prv = sub.add_parser("reset-version", help="Delete a single version (commit) from a slot")
+    prv.add_argument("--portal", type=Path, required=True)
+    prv.add_argument("--slot-id", required=True)
+    prv.add_argument("--commit-id", required=True)
+
     pd = sub.add_parser("diagnostics", help="Print diagnostics.json entries")
     pd.add_argument("--portal", type=Path, required=True)
 
@@ -245,6 +345,12 @@ def main(argv: list[str] | None = None) -> None:
         cmd_revert_effect(Path(args.portal), args.slot_id, args.event_id)
     elif args.cmd == "quarantine-cases":
         cmd_quarantine_cases(Path(args.portal), args.slot_id, args.case_ids)
+    elif args.cmd == "slots":
+        cmd_slots(Path(args.portal), args.file, args.json)
+    elif args.cmd == "reset-slot":
+        cmd_reset_slot(Path(args.portal), args.slot_id)
+    elif args.cmd == "reset-version":
+        cmd_reset_version(Path(args.portal), args.slot_id, args.commit_id)
     elif args.cmd == "diagnostics":
         cmd_diagnostics(Path(args.portal).parent)
     else:

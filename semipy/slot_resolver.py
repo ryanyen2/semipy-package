@@ -21,7 +21,7 @@ from semipy.history.version_control import (
     create_commit,
     freeze_constants,
 )
-from semipy.session_anchor import resolve_portal_anchor
+from semipy.session_anchor import resolve_project
 from semipy.reactivity import (
     SlotRef,
     _get_dep_graph,
@@ -55,6 +55,7 @@ from semipy.store import (
     load_function_from_dispatch_by_slot_id,
     load_function_from_dispatch,
     load_portal,
+    migrate_legacy_portals,
     save_portal,
     write_dispatch_module,
     _dispatch_module_path,
@@ -83,8 +84,8 @@ from semipy.types import (
     SlotSpec,
     ValidationResult,
     equivalence_key_from_stored_snapshot,
-    session_id_from_filename,
-    session_module_name_from_filename,
+    module_name_for_project,
+    session_id_for_project,
 )
 
 _dispatch_globals_cache: dict[str, dict[str, Any]] = {}
@@ -200,6 +201,32 @@ def _slot_singleflight_lock(slot_id: str) -> threading.Lock:
         if lk is None:
             lk = threading.Lock()
             _slot_singleflight_locks[slot_id] = lk
+        return lk
+
+
+# Per-portal lock: with one portal per PROJECT, two slots in DIFFERENT files now
+# share one portal file, so their read-modify-write (load_portal -> add slot ->
+# save_portal) would race and lose updates. One reentrant lock per (cache_dir,
+# session_id) serializes portal mutation within a project; different projects still
+# run concurrently. The per-slot single-flight lock in _make_slot_proxy is acquired
+# first (outer), this one second (inner) -- a fixed order, so no deadlock.
+#
+# This lock is held across _call_generated_fn (the generated/cached implementation
+# runs while it is held). That is safe because generated functions are pure data
+# transformations over their inputs and never call back into a semiformal slot --
+# so there is no nested slot_lock<->portal_lock acquisition that could invert the
+# order across threads. (The RLock also makes same-thread re-entry a no-op.)
+_portal_locks: dict[str, threading.RLock] = {}
+_portal_lock_guard = threading.Lock()
+
+
+def _portal_lock(cache_dir: Path, session_id: str) -> threading.RLock:
+    key = f"{cache_dir}:{session_id}"
+    with _portal_lock_guard:
+        lk = _portal_locks.get(key)
+        if lk is None:
+            lk = threading.RLock()
+            _portal_locks[key] = lk
         return lk
 
 
@@ -587,13 +614,18 @@ def _run_sketch_binding_extraction(
         )
         merge_sketch_into_library(lib, sketch, binding)
         save_sketch_library(cache_dir, lib)
-        portal = load_portal(cache_dir, session_id, portal_anchor, module_name)
-        sl = portal.slots.get(slot_id)
-        if sl and commit_id in sl.commits:
-            c = sl.commits[commit_id]
-            sl.commits[commit_id] = replace(c, binding_id=binding.binding_id)
-            save_portal(cache_dir, portal)
-            write_dispatch_module(cache_dir, portal, sketch_library=lib)
+        # Hold the per-portal lock around the portal read-modify-write: when this
+        # runs in a background thread (sketch_library_learning_async), it must not
+        # race a main-thread execute_slot writing the same project portal. The
+        # synchronous path already holds this RLock on the same thread (reentrant).
+        with _portal_lock(cache_dir, session_id):
+            portal = load_portal(cache_dir, session_id, portal_anchor, module_name)
+            sl = portal.slots.get(slot_id)
+            if sl and commit_id in sl.commits:
+                c = sl.commits[commit_id]
+                sl.commits[commit_id] = replace(c, binding_id=binding.binding_id)
+                save_portal(cache_dir, portal)
+                write_dispatch_module(cache_dir, portal, sketch_library=lib)
     except Exception as ex:
         if get_config().verbose:
             import sys
@@ -654,19 +686,24 @@ def _run_contract_maintenance(
     try:
         from semipy.contract.maintainer import maintain_contract
 
-        maintain_contract(
-            slot_spec=slot_spec,
-            runtime_values=runtime_values,
-            new_source=new_source,
-            change_record=change_record,
-            decision=decision,
-            commit_id=commit_id,
-            cache_dir=cache_dir,
-            session_id=session_id,
-            portal_anchor=portal_anchor,
-            module_name=module_name,
-            slot_id=slot_id,
-        )
+        # maintain_contract does its own portal read-modify-write; hold the
+        # per-portal lock so an async (contract_maintainer_async) run cannot race a
+        # main-thread execute_slot on the same project portal. Reentrant for the
+        # synchronous path, which already holds it on this thread.
+        with _portal_lock(cache_dir, session_id):
+            maintain_contract(
+                slot_spec=slot_spec,
+                runtime_values=runtime_values,
+                new_source=new_source,
+                change_record=change_record,
+                decision=decision,
+                commit_id=commit_id,
+                cache_dir=cache_dir,
+                session_id=session_id,
+                portal_anchor=portal_anchor,
+                module_name=module_name,
+                slot_id=slot_id,
+            )
     except Exception as ex:
         if get_config().verbose:
             import sys
@@ -1090,6 +1127,8 @@ def execute_slot(
 ) -> Any:
     """
     Execute one slot:
+    - resolve the project (one portal per project: the folder rooted at the
+      nearest ancestor ``.semiformal/``) and take the per-portal lock
     - load portal + dependency graph
     - infer/update dependency edges from runtime_values flows
     - detect spec_hash change and stale flags
@@ -1100,11 +1139,40 @@ def execute_slot(
     config = get_config()
     runtime_values = materialize_runtime_document_inputs(dict(runtime_values))
 
-    portal_anchor = resolve_portal_anchor(source_file)
-    session_id = session_id_from_filename(portal_anchor)
-    module_name = session_module_name_from_filename(portal_anchor)
+    cache_dir, project_root = resolve_project(source_file, cache_dir)
+    session_id = session_id_for_project(project_root)
+    module_name = module_name_for_project(project_root)
+    portal_anchor = str(project_root)
 
+    with _portal_lock(cache_dir, session_id):
+        return _execute_slot_locked(
+            slot_spec,
+            runtime_values,
+            config,
+            cache_dir,
+            source_file,
+            portal_anchor,
+            session_id,
+            module_name,
+        )
+
+
+def _execute_slot_locked(
+    slot_spec: SlotSpec,
+    runtime_values: dict[str, Any],
+    config: Any,
+    cache_dir: Path,
+    source_file: str,
+    portal_anchor: str,
+    session_id: str,
+    module_name: str,
+) -> Any:
+    """Body of :func:`execute_slot`, run while holding the per-portal lock."""
     portal = load_portal(cache_dir, session_id, portal_anchor, module_name)
+    if not portal.slots:
+        migrated = migrate_legacy_portals(cache_dir, session_id, portal_anchor, module_name)
+        if migrated is not None:
+            portal = migrated
     try:
         from semipy.diagnostics_export import clear_diagnostics
 

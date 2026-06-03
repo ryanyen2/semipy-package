@@ -65,9 +65,33 @@ Full detail with math and a worked trace: [`docs/architecture.md`](docs/architec
 
 ### Cache model
 
-- One portal per session: `.semiformal/{session_id}.portal.json` (full DAG).
-- Dispatch module: `.semiformal/runtime/{module}.semi.py` — one active compiled
-  implementation per slot, imported at runtime.
+- **One portal per project.** A project is the folder tree rooted at the nearest
+  ancestor `.semiformal/` directory (git-style discovery via
+  `session_anchor.resolve_project`), falling back to cwd. All source files under
+  that root share one portal — so a learned implementation can be reused across
+  files — and `session_id = hash(project_root)`, so two same-named files in
+  different projects never collide.
+- Portal: `.semiformal/{session_id}.portal.json` (full DAG, slots from every file
+  in the project). Dispatch module: `.semiformal/runtime/{module}.semi.py` — one
+  active compiled implementation per slot, imported at runtime.
+- A per-portal lock (`slot_resolver._portal_lock`) serializes the portal
+  read-modify-write within a project (different projects run concurrently); the
+  per-slot single-flight lock prevents duplicate generation of the same slot.
+- Legacy per-file portals (pre-0.3) auto-migrate: on first run their slots are
+  merged into the project portal (`store.migrate_legacy_portals`).
+
+### Portal / slot CLI (`python -m semipy`)
+
+Portal maintenance + slot lifecycle (back the VS Code editor actions; `--portal`
+points at a `.portal.json`):
+
+- `slots --portal P [--file F] [--json]` — list slots (file:line, #versions, decision).
+- `reset-slot --portal P --slot-id S` — wipe a slot (all versions + contract/ledger)
+  so the next call regenerates it fresh (`version_lock.reset_slot`).
+- `reset-version --portal P --slot-id S --commit-id C` — delete one version; the slot
+  falls back to its previous commit (`version_lock.reset_version`).
+- `regenerate` / `lock` / `unlock` / `rollback` / `rewind-spec` / `revert-effect` /
+  `quarantine-cases` / `diagnostics` — existing per-slot operations.
 
 ## Subsystems (see `docs/` for depth)
 

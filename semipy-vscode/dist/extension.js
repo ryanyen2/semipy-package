@@ -57,6 +57,10 @@ function sessionIdFromFilename(filename) {
   }
   return crypto.createHash("sha256").update(base).digest("hex").slice(0, 16);
 }
+function sessionIdForProject(projectRoot) {
+  const norm = projectRoot.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  return crypto.createHash("sha256").update(norm || "<unknown>").digest("hex").slice(0, 16);
+}
 
 // src/data/portalLoader.ts
 function pathsEqualRobust(a, b) {
@@ -258,6 +262,10 @@ function findPortalJsonPathForEditor(sourceFilePath, opts) {
         push(path.join(cacheDir, `${sid}.portal.json`));
       } catch {
       }
+    }
+    try {
+      push(path.join(cacheDir, `${sessionIdForProject(path.dirname(cacheDir))}.portal.json`));
+    } catch {
     }
   }
   for (const c of candidates) {
@@ -3639,6 +3647,71 @@ function activate(context) {
       void import_vscode22.window.showInformationMessage((r.stdout || r.stderr || "Effect reverted.").trim().slice(0, 300));
       refreshAllDecorations(import_vscode22.window.activeTextEditor);
     }),
+    import_vscode22.commands.registerCommand("semipy.resetSlot", async (item) => {
+      const slotId = item?.slot?.slot_id;
+      const ed = import_vscode22.window.activeTextEditor;
+      if (ed) {
+        refreshPortalForUri(ed.document.uri.fsPath, portalState);
+      }
+      const root = portalState.workspaceRoot;
+      const portalPath = portalState.portalPath;
+      if (!root || !portalPath || !slotId) {
+        void import_vscode22.window.showErrorMessage("Semipy: no portal / slot for reset.");
+        return;
+      }
+      const ok = await import_vscode22.window.showWarningMessage(
+        "Reset this slot? All of its versions (and its contract / effects history) are removed; the next run regenerates it from scratch.",
+        { modal: true },
+        "Reset slot"
+      );
+      if (ok !== "Reset slot") {
+        return;
+      }
+      const rel = path10.relative(root, portalPath);
+      const r = await runSemipyCli(["reset-slot", "--portal", rel, "--slot-id", slotId], root);
+      if (r.code !== 0 && r.code !== null) {
+        void import_vscode22.window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "reset failed")}`);
+        return;
+      }
+      void import_vscode22.window.showInformationMessage((r.stdout || r.stderr || "Slot reset.").trim().slice(0, 300));
+      refreshAllDecorations(import_vscode22.window.activeTextEditor);
+    }),
+    import_vscode22.commands.registerCommand(
+      "semipy.resetSlotVersion",
+      async (item) => {
+        const slotId = item?.slot?.slot_id;
+        const commitId = item?.commit?.commit_id;
+        const ed = import_vscode22.window.activeTextEditor;
+        if (ed) {
+          refreshPortalForUri(ed.document.uri.fsPath, portalState);
+        }
+        const root = portalState.workspaceRoot;
+        const portalPath = portalState.portalPath;
+        if (!root || !portalPath || !slotId || !commitId) {
+          void import_vscode22.window.showErrorMessage("Semipy: no portal / version for reset.");
+          return;
+        }
+        const ok = await import_vscode22.window.showWarningMessage(
+          "Delete this version? The commit is removed and the slot falls back to its previous version.",
+          { modal: true },
+          "Delete version"
+        );
+        if (ok !== "Delete version") {
+          return;
+        }
+        const rel = path10.relative(root, portalPath);
+        const r = await runSemipyCli(
+          ["reset-version", "--portal", rel, "--slot-id", slotId, "--commit-id", commitId],
+          root
+        );
+        if (r.code !== 0 && r.code !== null) {
+          void import_vscode22.window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "reset failed")}`);
+          return;
+        }
+        void import_vscode22.window.showInformationMessage((r.stdout || r.stderr || "Version deleted.").trim().slice(0, 300));
+        refreshAllDecorations(import_vscode22.window.activeTextEditor);
+      }
+    ),
     import_vscode22.commands.registerCommand("semipy.promoteReasoningLine", async (uriArg, line0) => {
       const uri = typeof uriArg === "string" ? import_vscode22.Uri.parse(uriArg) : uriArg;
       const doc = await import_vscode22.workspace.openTextDocument(uri);

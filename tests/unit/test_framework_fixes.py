@@ -14,7 +14,6 @@ reporting generally -- so they live in their own file:
 from __future__ import annotations
 
 import textwrap
-from pathlib import Path
 
 from semipy.semi_fn import _extract_semi_template_from_source_line, _full_call_statement
 from semipy.slot_resolver import _should_surface_skeleton

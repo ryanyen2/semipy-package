@@ -223,14 +223,34 @@ To lock an inference note into the contract permanently, flip `#<` to `#>` on th
 
 ## Caching and reuse
 
-Generated functions are stored in `.semiformal/` relative to your working directory:
+Generated functions are cached **per project** — the folder tree rooted at the
+nearest `.semiformal/` directory (found by walking up from your source file, the
+way git finds `.git`). All files under that root share one cache, so a learned
+implementation in one file can be reused in another, and same-named files in
+different projects never collide. You set project boundaries by where you place
+`.semiformal/`; if none exists, one is created in your working directory.
 
-- `.semiformal/<session>.portal.json` — versioned DAG of all commits, branches, and decisions.
+- `.semiformal/<session>.portal.json` — versioned DAG of all commits, branches, and decisions for the project.
 - `.semiformal/runtime/<module>.semi.py` — compiled Python implementations for import.
 
 On subsequent runs, semipy loads the cached implementation without calling the LLM. It re-verifies when it detects new input shapes, and runs ADAPT (re-generation from the prior commit) when verification fails.
 
-To force regeneration, delete `.semiformal/` or the relevant portal file.
+To force regeneration, delete `.semiformal/`, or use the slot CLI below.
+
+> Upgrading from 0.2.x: caches were previously per-file. On the first 0.3 run,
+> existing per-file caches are automatically merged into the project cache — you
+> keep your learned implementations.
+
+### Managing slots from the CLI
+
+```bash
+python -m semipy slots        --portal .semiformal/<session>.portal.json   # list slots (file:line, versions, decision)
+python -m semipy reset-slot   --portal <portal> --slot-id <id>             # wipe a slot; the next run regenerates it
+python -m semipy reset-version --portal <portal> --slot-id <id> --commit-id <c>   # delete one version
+```
+
+The same actions are available in the VS Code extension's slot-history tree
+(right-click a slot → **Reset slot**, or a version → **Delete this version**).
 
 ## Jupyter
 

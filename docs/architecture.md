@@ -367,8 +367,8 @@ standalone `semi()`, which has no `#>` block to annotate —
 Merkle-style DAG (`history/version_control.py`). The containment hierarchy is:
 
 ```
-Portal  (one per session)
-└── Slot  (one per durable slot_id)
+Portal  (one per PROJECT)
+└── Slot  (one per durable slot_id, across all files in the project)
     ├── commits:  commit_id → Commit
     ├── branches: name → Branch(head=commit_id)
     └── refs:     usage_id → commit_id
@@ -385,9 +385,10 @@ Portal  (one per session)
   original implementation.
 - **`Slot`** is the per-call-site DAG plus persisted metadata (its `slot_spec`
   snapshot, `advisor_state`, `contract`, `ledger`).
-- **`Portal`** (`version_control.Portal`) is the per-session container, persisted
-  as JSON at `{cache_dir}/{session_id}.portal.json`
-  (`store.py:_portal_path`, `save_portal`/`load_portal`).
+- **`Portal`** (`version_control.Portal`) is the per-**project** container holding
+  the slots of *every* source file in the project, persisted as JSON at
+  `{cache_dir}/{session_id}.portal.json` (`store.py:_portal_path`,
+  `save_portal`/`load_portal`).
 
 ### One active implementation per slot
 
@@ -413,15 +414,50 @@ by name from this module (`store.load_function_from_dispatch`, with a cached exe
 namespace seeded by the user module's globals so generated code can reference
 user types) and calls it directly — the LLM is not involved.
 
-### Session identity
+### Project identity (one portal per project)
 
-A portal is keyed by `session_id = SHA256(basename-without-.py)[:16]`
-(`types.session_id_from_filename`). For Jupyter/IPython, the source file is an
-ephemeral `ipykernel` temp path that changes every kernel restart, so
-`session_anchor.resolve_portal_anchor` (called at the top of `execute_slot`)
-remaps `ipykernel` paths to `os.getcwd()` — giving one shared portal and
-dispatch module per working directory, which is exactly what lets sibling
-notebook cells donor-REUSE each other (§3).
+A *project* is the folder tree rooted at the nearest ancestor `.semiformal/`
+directory — discovered git-style by `session_anchor.resolve_project`, which walks
+up from the source file and falls back to the current working directory if no
+`.semiformal/` exists. Every source file under that root resolves to the same
+project, and the portal is keyed by the project root:
+
+$$\texttt{session\_id} = \mathrm{SHA256}\!\big(\mathrm{normalize}(\texttt{project\_root})\big)[{:}16]
+\qquad (\texttt{types.session\_id\_for\_project})$$
+
+This has two consequences. **Cross-file reuse:** because all files in a project
+share one portal and one dispatch module, a learned implementation in `a.py` can
+donor-REUSE (§3) from `b.py`. **Collision-freeness:** two files that share a
+basename in different projects (`projA/analysis.py`, `projB/analysis.py`) hash to
+different roots, so they no longer corrupt one another — the defect of the old
+basename-keyed scheme. You control project boundaries by where you place
+`.semiformal/`: drop one in a subfolder and it becomes its own project.
+
+For Jupyter/IPython the source file is an ephemeral `ipykernel` temp path that
+changes every kernel restart; `resolve_portal_anchor` remaps it to `os.getcwd()`
+before discovery, so all cells in one working directory share one project.
+
+**Concurrency.** Because one portal now spans many files, two slots in different
+files generating at once would race the portal's read-modify-write. A per-portal
+reentrant lock (`slot_resolver._portal_lock`, keyed on `(cache_dir, session_id)`)
+serializes mutation within a project; different projects stay concurrent. It is
+the *inner* lock — the per-slot single-flight lock in `_make_slot_proxy` is
+acquired first — a fixed order, so there is no deadlock.
+
+**Migration.** A pre-0.3 cache holds per-file `{basename_hash}.portal.json`
+files. On the first run after upgrading, `store.migrate_legacy_portals` merges
+their slots (content-addressed, so the union is safe) into the new project
+portal and regenerates the dispatch module — existing learned implementations are
+preserved, not lost.
+
+### Managing slots (`python -m semipy`)
+
+The CLI surfaces the DAG for maintenance: `slots` lists every slot (file:line,
+version count, active decision); `reset-slot` removes a slot so the next call
+regenerates it from scratch (`version_lock.reset_slot`); `reset-version` deletes
+a single commit and falls the slot back to its previous version
+(`version_lock.reset_version`). These back the VS Code "Reset slot" / "Delete
+version" tree actions.
 
 ---
 

@@ -26,7 +26,7 @@ from semipy.effects import (
 )
 from semipy.effects.models import compute_effect_id
 from semipy.slot_resolver import _call_generated_fn
-from semipy.types import GenerationSpec, SemiCallError, SemiCallSite, SlotCategory, SlotSpec
+from semipy.types import GenerationSpec, SemiCallSite, SlotCategory, SlotSpec
 
 
 @pytest.fixture
@@ -628,7 +628,6 @@ def test_effect_smt_gate_requires_key_bounded_mutation(monkeypatch):
 from types import SimpleNamespace  # noqa: E402
 
 from semipy.effects.apply import execute_effectful  # noqa: E402
-from semipy.effects.compensate import revert as revert_effects  # noqa: E402
 from semipy.effects.compensate import revert_ledger_event  # noqa: E402
 from semipy.effects.ledger import (  # noqa: E402
     EffectLedger, get_ledger, ledger_from_dict, ledger_to_dict,

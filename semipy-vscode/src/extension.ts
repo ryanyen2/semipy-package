@@ -521,6 +521,71 @@ export function activate(context: ExtensionContext): void {
       void window.showInformationMessage((r.stdout || r.stderr || "Effect reverted.").trim().slice(0, 300));
       refreshAllDecorations(window.activeTextEditor);
     }),
+    commands.registerCommand("semipy.resetSlot", async (item: { slot?: SlotJson }) => {
+      const slotId = item?.slot?.slot_id;
+      const ed = window.activeTextEditor;
+      if (ed) {
+        refreshPortalForUri(ed.document.uri.fsPath, portalState);
+      }
+      const root = portalState.workspaceRoot;
+      const portalPath = portalState.portalPath;
+      if (!root || !portalPath || !slotId) {
+        void window.showErrorMessage("Semipy: no portal / slot for reset.");
+        return;
+      }
+      const ok = await window.showWarningMessage(
+        "Reset this slot? All of its versions (and its contract / effects history) are removed; the next run regenerates it from scratch.",
+        { modal: true },
+        "Reset slot",
+      );
+      if (ok !== "Reset slot") {
+        return;
+      }
+      const rel = path.relative(root, portalPath);
+      const r = await runSemipyCli(["reset-slot", "--portal", rel, "--slot-id", slotId], root);
+      if (r.code !== 0 && r.code !== null) {
+        void window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "reset failed")}`);
+        return;
+      }
+      void window.showInformationMessage((r.stdout || r.stderr || "Slot reset.").trim().slice(0, 300));
+      refreshAllDecorations(window.activeTextEditor);
+    }),
+    commands.registerCommand(
+      "semipy.resetSlotVersion",
+      async (item: { slot?: SlotJson; commit?: { commit_id?: string } }) => {
+        const slotId = item?.slot?.slot_id;
+        const commitId = item?.commit?.commit_id;
+        const ed = window.activeTextEditor;
+        if (ed) {
+          refreshPortalForUri(ed.document.uri.fsPath, portalState);
+        }
+        const root = portalState.workspaceRoot;
+        const portalPath = portalState.portalPath;
+        if (!root || !portalPath || !slotId || !commitId) {
+          void window.showErrorMessage("Semipy: no portal / version for reset.");
+          return;
+        }
+        const ok = await window.showWarningMessage(
+          "Delete this version? The commit is removed and the slot falls back to its previous version.",
+          { modal: true },
+          "Delete version",
+        );
+        if (ok !== "Delete version") {
+          return;
+        }
+        const rel = path.relative(root, portalPath);
+        const r = await runSemipyCli(
+          ["reset-version", "--portal", rel, "--slot-id", slotId, "--commit-id", commitId],
+          root,
+        );
+        if (r.code !== 0 && r.code !== null) {
+          void window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "reset failed")}`);
+          return;
+        }
+        void window.showInformationMessage((r.stdout || r.stderr || "Version deleted.").trim().slice(0, 300));
+        refreshAllDecorations(window.activeTextEditor);
+      },
+    ),
     commands.registerCommand("semipy.promoteReasoningLine", async (uriArg: Uri | string, line0: number) => {
       const uri = typeof uriArg === "string" ? Uri.parse(uriArg) : uriArg;
       const doc = await workspace.openTextDocument(uri);
