@@ -1532,6 +1532,13 @@ function cmdLink(label, command, args) {
   const q = encodeURIComponent(JSON.stringify(args));
   return `[${label}](command:${command}?${q})`;
 }
+function cleanTypeName(t) {
+  const m = t.match(/<class '([^']+)'>/);
+  let name = (m ? m[1] : t).trim();
+  name = name.replace(/^builtins\./, "");
+  return name;
+}
+var TRIVIAL_CONTEXTS = /* @__PURE__ */ new Set(["", "none", "top_level", "module", "function_body"]);
 function constraintLine(slot) {
   const s = slot.slot_spec;
   if (!s) {
@@ -1539,17 +1546,17 @@ function constraintLine(slot) {
   }
   const bits = [];
   if (s.expected_type) {
-    bits.push(`returns \`${truncate(s.expected_type, 40)}\``);
+    bits.push(`returns \`${truncate(cleanTypeName(String(s.expected_type)), 40)}\``);
   }
   const outs = s.output_names;
   if (Array.isArray(outs) && outs.length) {
-    bits.push(`as \`${outs.join(", ")}\``);
+    bits.push(`output \`${outs.join(", ")}\``);
   }
   const ctx = s.control_context;
-  if (ctx && ctx !== "none") {
-    bits.push(`in a \`${ctx}\``);
+  if (ctx && !TRIVIAL_CONTEXTS.has(ctx)) {
+    bits.push(`inside a \`${ctx}\``);
   }
-  return bits.join(" ");
+  return bits.join(" \xB7 ");
 }
 function buildHoverMarkdown(slot, insight) {
   const lines = [];

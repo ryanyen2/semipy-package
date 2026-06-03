@@ -43,6 +43,17 @@ function cmdLink(label: string, command: string, args: unknown[]): string {
   return `[${label}](command:${command}?${q})`;
 }
 
+/** Normalize a stored type to a clean name: `<class 'str'>` -> `str`, `builtins.int` -> `int`. */
+function cleanTypeName(t: string): string {
+  const m = t.match(/<class '([^']+)'>/);
+  let name = (m ? m[1] : t).trim();
+  name = name.replace(/^builtins\./, "");
+  return name;
+}
+
+// Control contexts that are unremarkable (the default) -- not worth surfacing.
+const TRIVIAL_CONTEXTS = new Set(["", "none", "top_level", "module", "function_body"]);
+
 /** A one-line "what it's checking against" from the slot spec. */
 function constraintLine(slot: SlotJson): string {
   const s = slot.slot_spec;
@@ -51,17 +62,17 @@ function constraintLine(slot: SlotJson): string {
   }
   const bits: string[] = [];
   if (s.expected_type) {
-    bits.push(`returns \`${truncate(s.expected_type, 40)}\``);
+    bits.push(`returns \`${truncate(cleanTypeName(String(s.expected_type)), 40)}\``);
   }
   const outs = s.output_names;
   if (Array.isArray(outs) && outs.length) {
-    bits.push(`as \`${outs.join(", ")}\``);
+    bits.push(`output \`${outs.join(", ")}\``);
   }
   const ctx = (s as { control_context?: string }).control_context;
-  if (ctx && ctx !== "none") {
-    bits.push(`in a \`${ctx}\``);
+  if (ctx && !TRIVIAL_CONTEXTS.has(ctx)) {
+    bits.push(`inside a \`${ctx}\``);
   }
-  return bits.join(" ");
+  return bits.join(" · ");
 }
 
 /**
