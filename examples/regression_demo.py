@@ -9,18 +9,21 @@ import os
 
 from semipy import configure, semiformal
 
-configure(verbose=True, cache_dir=os.environ.get("RD_CACHE", "examples/.semiformal"))
+# Absolute cache dir next to this file, so the portal lands where the VS Code
+# extension looks (on the path above the source file) regardless of the cwd.
+configure(
+    verbose=True,
+    cache_dir=os.environ.get("RD_CACHE")
+    or os.path.join(os.path.dirname(os.path.abspath(__file__)), ".semiformal"),
+)
 
 
 @semiformal
 def to_iso(raw: str) -> str:
     result = ''
-    #< given: raw may be None, string, or string-coercible
-    #< by: normalizing whitespace, then matching supported date patterns
-    #< unless: empty or invalid input stores empty result
+    #< by: normalizing text, then trying ISO parsing before known date patterns
+    #< unless: empty, invalid, or unmatched input yields empty result
     #> infer the date format and return an ISO-8601 date string for {raw}
-
-    return result
 
 
 if __name__ == "__main__":

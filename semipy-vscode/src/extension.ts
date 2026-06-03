@@ -252,9 +252,33 @@ export function activate(context: ExtensionContext): void {
       phraseTypes,
       workspace.workspaceFolders?.map((w) => w.uri.fsPath) ?? [],
     );
-    const n = portalState.portal ? Object.keys(portalState.portal.slots).length : 0;
-    status.text = `Semipy: ${n} slot(s)`;
-    status.show();
+    // Status bar: report the resolved portal, OR explain its absence on a file
+    // that clearly uses semipy (the silent-empty state is confusing -- portal-backed
+    // features just vanish if the portal can't be found above the file).
+    if (portalState.portal) {
+      const n = Object.keys(portalState.portal.slots).length;
+      status.text = `Semipy: ${n} slot(s)`;
+      status.tooltip = portalState.portalPath
+        ? `Portal: ${portalState.portalPath}`
+        : "Semipy portal resolved for this file.";
+      status.command = "semipy.refreshHistory";
+      status.show();
+    } else {
+      const doc = editor.document;
+      const looksSemiformal =
+        doc.languageId === "python" && /@semiformal|semi\s*\(/.test(doc.getText());
+      if (looksSemiformal) {
+        status.text = "$(warning) Semipy: no portal";
+        status.tooltip =
+          "This file uses @semiformal / semi() but no .semiformal portal was found on the path above it.\n" +
+          "Run the file once to generate it (its cache_dir must resolve to a folder at or above this file -- " +
+          "prefer an absolute path), or set semipy.sessionSource. Click to retry.";
+        status.command = "semipy.refreshHistory";
+        status.show();
+      } else {
+        status.hide();
+      }
+    }
     tree.refresh();
     diag.refresh();
     codeLensProvider.refresh();
