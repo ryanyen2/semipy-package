@@ -1451,6 +1451,49 @@ function disposeGutterHealthTypes(types) {
   types.danger.dispose();
 }
 
+// src/features/versionTree/versionModel.ts
+var LOCK_REF3 = "__locked__";
+function compareCommits(a, b) {
+  if (a.timestamp !== b.timestamp) {
+    return a.timestamp - b.timestamp;
+  }
+  return a.commit_id < b.commit_id ? -1 : a.commit_id > b.commit_id ? 1 : 0;
+}
+function orderedVersions(slot) {
+  const commits = Object.values(slot.commits || {});
+  if (commits.length === 0) {
+    return [];
+  }
+  const sorted = [...commits].sort(compareCommits);
+  const activeId = activeCommitFromPortalSlot(slot)?.commit_id;
+  const lockedId = slot.refs?.[LOCK_REF3];
+  return sorted.map((commit, i) => ({
+    commit,
+    version: i + 1,
+    isActive: commit.commit_id === activeId,
+    isLocked: !!lockedId && commit.commit_id === lockedId
+  }));
+}
+function activeVersion(slot) {
+  const versions = orderedVersions(slot);
+  if (versions.length === 0) {
+    return void 0;
+  }
+  return versions.find((v) => v.isActive) ?? versions[versions.length - 1];
+}
+function versionLensLabel(slot) {
+  const versions = orderedVersions(slot);
+  if (versions.length === 0) {
+    return void 0;
+  }
+  const active = activeVersion(slot);
+  if (!active) {
+    return void 0;
+  }
+  const pinned = versions.some((v) => v.isLocked) ? " \xB7 pinned" : "";
+  return `v${active.version}/${versions.length}${pinned}`;
+}
+
 // src/features/intelligence/slotInsightHoverProvider.ts
 var import_vscode5 = require("vscode");
 
@@ -2433,12 +2476,6 @@ function eventLabel(e) {
   const head = targets.length ? targets.join(", ") : (e.event_id || "").slice(0, 8);
   return `${ops.join("/")} ${head}`.trim();
 }
-function formatCommitLabel(c) {
-  const id = c.commit_id.slice(0, 8);
-  const msg = (c.message || "").replace(/\s+/g, " ").slice(0, 48);
-  const ts = c.timestamp ? new Date(c.timestamp * 1e3).toLocaleString() : "";
-  return `${id} | ${c.decision || "?"} | ${msg}${ts ? ` | ${ts}` : ""}`;
-}
 function truncateSpecPreview(spec, n = 60) {
   const t = spec.replace(/\s+/g, " ").trim();
   if (t.length <= n) {
@@ -2590,7 +2627,20 @@ ${g.reason}` : ""}${sample}`
       ti2.iconPath = new import_vscode16.ThemeIcon("git-branch");
       return ti2;
     }
-    const ti = new import_vscode16.TreeItem(formatCommitLabel(element.commit), import_vscode16.TreeItemCollapsibleState.None);
+    const v = orderedVersions(element.slot).find(
+      (x) => x.commit.commit_id === element.commit.commit_id
+    );
+    const verLabel = v ? `v${v.version} \xB7 ` : "";
+    const ti = new import_vscode16.TreeItem(
+      `${verLabel}${(element.commit.decision || "?").toUpperCase()}`,
+      import_vscode16.TreeItemCollapsibleState.None
+    );
+    const flags = [v?.isActive ? "running" : "", v?.isLocked ? "pinned" : ""].filter(Boolean);
+    flags.push(element.commit.commit_id.slice(0, 8));
+    if (element.commit.timestamp) {
+      flags.push(new Date(element.commit.timestamp * 1e3).toLocaleString());
+    }
+    ti.description = flags.join(" \xB7 ");
     ti.iconPath = decisionIcon(element.commit.decision);
     ti.contextValue = "semipy.commit";
     ti.command = {
@@ -2979,9 +3029,7 @@ var SemipyCodeLensProvider = class {
         continue;
       }
       const range = new import_vscode20.Range(lineIdx, 0, lineIdx, 0);
-      const commit = activeCommitFromPortalSlot(slot);
       const insight = computeSlotInsight(slot);
-      const locked = !!slot.refs?.["__locked__"];
       const headline = insight ? insightChips(insight).join(" \xB7 ") : "Semipy slot";
       out.push(
         new import_vscode20.CodeLens(range, {
@@ -2990,22 +3038,16 @@ var SemipyCodeLensProvider = class {
           arguments: [slot.slot_id]
         })
       );
-      if (Object.keys(slot.commits).length > 1) {
+      const vlabel = versionLensLabel(slot);
+      if (vlabel) {
         out.push(
           new import_vscode20.CodeLens(range, {
-            title: "Versions",
+            title: vlabel,
             command: "semipy.pickSlotVersion",
             arguments: [slot.slot_id]
           })
         );
       }
-      out.push(
-        new import_vscode20.CodeLens(range, {
-          title: locked ? "Unlock" : "Lock",
-          command: locked ? "semipy.unlockSlotVersion" : "semipy.lockSlotVersion",
-          arguments: locked ? [slot.slot_id] : [slot.slot_id, commit?.commit_id ?? ""]
-        })
-      );
       if (insight && insight.effect.applied > 0 && insight.effect.latestEventId) {
         out.push(
           new import_vscode20.CodeLens(range, {
@@ -3642,14 +3684,11 @@ function activate(context) {
     }),
     import_vscode22.commands.registerCommand("semipy.pickSlotVersion", async (slotId) => {
       const ed = import_vscode22.window.activeTextEditor;
-      if (!ed) {
-        return;
+      if (ed) {
+        refreshPortalForUri(ed.document.uri.fsPath, portalState);
       }
-      refreshPortalForUri(ed.document.uri.fsPath, portalState);
       const portal = portalState.portal;
-      const root = portalState.workspaceRoot;
-      const portalPath = portalState.portalPath;
-      if (!portal || !root || !portalPath) {
+      if (!portal) {
         void import_vscode22.window.showWarningMessage("Semipy: no portal for this file.");
         return;
       }
@@ -3657,39 +3696,46 @@ function activate(context) {
       if (!slot) {
         return;
       }
-      const commits = Object.values(slot.commits).sort((a, b) => b.timestamp - a.timestamp);
-      const picked = await import_vscode22.window.showQuickPick(
-        commits.map((c) => ({
-          label: c.commit_id.slice(0, 8),
-          description: `${c.decision} ${(c.message || "").slice(0, 48)}`,
-          detail: new Date(c.timestamp * 1e3).toLocaleString(),
-          cid: c.commit_id
-        })),
-        { placeHolder: "Activate commit (rollback branch head to here)" }
-      );
-      if (!picked || !("cid" in picked)) {
+      const versions = orderedVersions(slot);
+      if (versions.length === 0) {
         return;
       }
-      const rel = path10.relative(root, portalPath);
-      const r = await runSemipyCli(
-        ["rollback", "--portal", rel, "--slot-id", slotId, "--commit-id", picked.cid],
-        root
-      );
-      if (r.code !== 0 && r.code !== null) {
-        void import_vscode22.window.showErrorMessage(
-          `Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "rollback failed")}`
-        );
+      const isLocked = versions.some((v) => v.isLocked);
+      const items = [];
+      if (isLocked) {
+        items.push({
+          label: "$(history) Use latest (unlock)",
+          description: "follow the newest version automatically",
+          action: "unlock"
+        });
+      }
+      for (const v of [...versions].reverse()) {
+        const c = v.commit;
+        const flags = [v.isActive ? "running" : "", v.isLocked ? "pinned" : ""].filter(Boolean).join(" \xB7 ");
+        items.push({
+          label: `${v.isActive ? "$(circle-filled)" : "$(circle-outline)"} v${v.version}  ${(c.decision || "?").toUpperCase()}`,
+          description: flags || void 0,
+          detail: `${c.commit_id.slice(0, 8)} \xB7 ${new Date(c.timestamp * 1e3).toLocaleString()}${c.message ? " \xB7 " + c.message.slice(0, 40) : ""}`,
+          action: "checkout",
+          commitId: c.commit_id,
+          isActive: v.isActive,
+          isLocked: v.isLocked
+        });
+      }
+      const picked = await import_vscode22.window.showQuickPick(items, {
+        placeHolder: "Check out a version to run \u2014 pins the chosen version; 'Use latest' follows the newest"
+      });
+      if (!picked) {
         return;
       }
-      const chosen = slot.commits[picked.cid];
-      if (chosen?.source_snapshot?.slot_region_text) {
-        await rewindSpecIfSnapshot(ed, slot, slotId, picked.cid, rel, root);
-      } else {
-        void import_vscode22.window.showInformationMessage(
-          "Semipy: rollback complete (legacy commit has no spec snapshot; source file unchanged)."
-        );
+      if (picked.action === "unlock") {
+        await import_vscode22.commands.executeCommand("semipy.unlockSlotVersion", slotId);
+        return;
       }
-      refreshAllDecorations(ed);
+      if (picked.isActive && picked.isLocked) {
+        return;
+      }
+      await import_vscode22.commands.executeCommand("semipy.lockSlotVersion", slotId, picked.commitId);
     }),
     import_vscode22.commands.registerCommand("semipy.lockSlotVersion", async (slotId, commitId) => {
       const ed = import_vscode22.window.activeTextEditor;

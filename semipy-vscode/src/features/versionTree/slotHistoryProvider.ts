@@ -8,12 +8,12 @@ import type {
   SlotJson,
 } from "../../data/types";
 import { type Guarantee, computeSlotInsight, groupGuarantees } from "../intelligence/slotInsight";
+import { orderedVersions } from "./versionModel";
 import { walkHistoryCommits } from "./walkHistory";
 import {
   decisionIcon,
   eventIcon,
   eventLabel,
-  formatCommitLabel,
   guaranteeIcon,
   healthIcon,
   truncateSpecPreview,
@@ -175,7 +175,20 @@ export class SlotHistoryProvider implements TreeDataProvider<SlotHistoryTreeItem
       ti.iconPath = new ThemeIcon("git-branch");
       return ti;
     }
-    const ti = new TreeItem(formatCommitLabel(element.commit), TreeItemCollapsibleState.None);
+    const v = orderedVersions(element.slot).find(
+      (x) => x.commit.commit_id === element.commit.commit_id,
+    );
+    const verLabel = v ? `v${v.version} · ` : "";
+    const ti = new TreeItem(
+      `${verLabel}${(element.commit.decision || "?").toUpperCase()}`,
+      TreeItemCollapsibleState.None,
+    );
+    const flags = [v?.isActive ? "running" : "", v?.isLocked ? "pinned" : ""].filter(Boolean);
+    flags.push(element.commit.commit_id.slice(0, 8));
+    if (element.commit.timestamp) {
+      flags.push(new Date(element.commit.timestamp * 1000).toLocaleString());
+    }
+    ti.description = flags.join(" · ");
     ti.iconPath = decisionIcon(element.commit.decision);
     ti.contextValue = "semipy.commit";
     ti.command = {

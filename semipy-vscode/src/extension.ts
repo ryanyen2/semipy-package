@@ -33,6 +33,7 @@ import {
   refreshGutterHealth,
 } from "./features/health/gutterHealth";
 import { computeSlotInsight } from "./features/intelligence/slotInsight";
+import { orderedVersions } from "./features/versionTree/versionModel";
 import { createSlotInsightHoverProvider } from "./features/intelligence/slotInsightHoverProvider";
 import { RegressionDiagnosticManager } from "./features/health/regressionDiagnostics";
 import {
@@ -565,14 +566,11 @@ export function activate(context: ExtensionContext): void {
     }),
     commands.registerCommand("semipy.pickSlotVersion", async (slotId: string) => {
       const ed = window.activeTextEditor;
-      if (!ed) {
-        return;
+      if (ed) {
+        refreshPortalForUri(ed.document.uri.fsPath, portalState);
       }
-      refreshPortalForUri(ed.document.uri.fsPath, portalState);
       const portal = portalState.portal;
-      const root = portalState.workspaceRoot;
-      const portalPath = portalState.portalPath;
-      if (!portal || !root || !portalPath) {
+      if (!portal) {
         void window.showWarningMessage("Semipy: no portal for this file.");
         return;
       }
@@ -580,39 +578,58 @@ export function activate(context: ExtensionContext): void {
       if (!slot) {
         return;
       }
-      const commits = Object.values(slot.commits).sort((a, b) => b.timestamp - a.timestamp);
-      const picked = await window.showQuickPick(
-        commits.map((c) => ({
-          label: c.commit_id.slice(0, 8),
-          description: `${c.decision} ${(c.message || "").slice(0, 48)}`,
-          detail: new Date(c.timestamp * 1000).toLocaleString(),
-          cid: c.commit_id,
-        })),
-        { placeHolder: "Activate commit (rollback branch head to here)" },
-      );
-      if (!picked || !("cid" in picked)) {
+      const versions = orderedVersions(slot);
+      if (versions.length === 0) {
         return;
       }
-      const rel = path.relative(root, portalPath);
-      const r = await runSemipyCli(
-        ["rollback", "--portal", rel, "--slot-id", slotId, "--commit-id", picked.cid],
-        root,
-      );
-      if (r.code !== 0 && r.code !== null) {
-        void window.showErrorMessage(
-          `Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "rollback failed")}`,
-        );
+      const isLocked = versions.some((v) => v.isLocked);
+
+      type VItem = {
+        label: string;
+        description?: string;
+        detail?: string;
+        action: "checkout" | "unlock";
+        commitId?: string;
+        isActive?: boolean;
+        isLocked?: boolean;
+      };
+      const items: VItem[] = [];
+      if (isLocked) {
+        items.push({
+          label: "$(history) Use latest (unlock)",
+          description: "follow the newest version automatically",
+          action: "unlock",
+        });
+      }
+      // Newest version first for display.
+      for (const v of [...versions].reverse()) {
+        const c = v.commit;
+        const flags = [v.isActive ? "running" : "", v.isLocked ? "pinned" : ""].filter(Boolean).join(" · ");
+        items.push({
+          label: `${v.isActive ? "$(circle-filled)" : "$(circle-outline)"} v${v.version}  ${(c.decision || "?").toUpperCase()}`,
+          description: flags || undefined,
+          detail: `${c.commit_id.slice(0, 8)} · ${new Date(c.timestamp * 1000).toLocaleString()}${c.message ? " · " + c.message.slice(0, 40) : ""}`,
+          action: "checkout",
+          commitId: c.commit_id,
+          isActive: v.isActive,
+          isLocked: v.isLocked,
+        });
+      }
+
+      const picked = await window.showQuickPick(items, {
+        placeHolder: "Check out a version to run — pins the chosen version; 'Use latest' follows the newest",
+      });
+      if (!picked) {
         return;
       }
-      const chosen = slot.commits[picked.cid];
-      if (chosen?.source_snapshot?.slot_region_text) {
-        await rewindSpecIfSnapshot(ed, slot, slotId, picked.cid, rel, root);
-      } else {
-        void window.showInformationMessage(
-          "Semipy: rollback complete (legacy commit has no spec snapshot; source file unchanged).",
-        );
+      if (picked.action === "unlock") {
+        await commands.executeCommand("semipy.unlockSlotVersion", slotId);
+        return;
       }
-      refreshAllDecorations(ed);
+      if (picked.isActive && picked.isLocked) {
+        return; // already pinned + running; nothing to do
+      }
+      await commands.executeCommand("semipy.lockSlotVersion", slotId, picked.commitId);
     }),
     commands.registerCommand("semipy.lockSlotVersion", async (slotId: string, commitId: string) => {
       const ed = window.activeTextEditor;

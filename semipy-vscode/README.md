@@ -23,7 +23,7 @@ every indicator appears only when it carries information.
 
 - **Inspect → tree reveal** — `Inspect` focuses the slot in the slot-history tree (the persistent, native inspector). Each slot expands into **Guarantees** (grouped by assertion, with reasons and an example input on hover; inline **Relax** to quarantine one) and **Effects** (ledger events with inline **Revert**).
 - **Split-view dispatch** — open the generated `.semi.py` beside your source, with linked highlighting. The generated file is dimmed as machine-authored; lines you edit return to full opacity.
-- **Version control** — switch / lock / unlock a slot's implementation; the source `#>` / `#<` is rewound to match.
+- **Versions + checkout** — the CodeLens shows `v2/3` (active / total, `· pinned` when checked out). Click it to pick a version (v1…vN); selecting one checks it out so that exact version runs (built on the package's lock primitive, so it's authoritative), with "Use latest (unlock)" to follow the newest again. The source `#>` / `#<` is rewound to match the checked-out version.
 
 ### Steer it
 

@@ -17,6 +17,7 @@ import type { PortalJson, SlotSpecJson } from "../../data/types";
 import { pathsEqualRobust } from "../../data/portalLoader";
 import { activeCommitFromPortalSlot } from "../splitEditor/portalCommit";
 import { computeSlotInsight, decisionGlyph, insightChips } from "../intelligence/slotInsight";
+import { versionLensLabel } from "../versionTree/versionModel";
 import { resolveSlotUiLines } from "./slotLineResolve";
 
 /** Fallback when spec_text / buffer resolution fails (stale portal-only lines). */
@@ -95,9 +96,7 @@ export class SemipyCodeLensProvider implements CodeLensProvider {
         continue;
       }
       const range = new Range(lineIdx, 0, lineIdx, 0);
-      const commit = activeCommitFromPortalSlot(slot);
       const insight = computeSlotInsight(slot);
-      const locked = !!slot.refs?.["__locked__"];
 
       // The one-line health sentence. Clicking it opens the Slot Inspector.
       const headline = insight ? insightChips(insight).join(" · ") : "Semipy slot";
@@ -109,23 +108,19 @@ export class SemipyCodeLensProvider implements CodeLensProvider {
         }),
       );
 
-      // Action lenses, present only when actionable (minimum-set rule).
-      if (Object.keys(slot.commits).length > 1) {
+      // Version indicator + checkout. Always shown so versions are discoverable;
+      // clicking opens the version picker (checkout = lock the chosen version).
+      const vlabel = versionLensLabel(slot);
+      if (vlabel) {
         out.push(
           new VsCodeLens(range, {
-            title: "Versions",
+            title: vlabel,
             command: "semipy.pickSlotVersion",
             arguments: [slot.slot_id],
           }),
         );
       }
-      out.push(
-        new VsCodeLens(range, {
-          title: locked ? "Unlock" : "Lock",
-          command: locked ? "semipy.unlockSlotVersion" : "semipy.lockSlotVersion",
-          arguments: locked ? [slot.slot_id] : [slot.slot_id, commit?.commit_id ?? ""],
-        }),
-      );
+
       if (insight && insight.effect.applied > 0 && insight.effect.latestEventId) {
         out.push(
           new VsCodeLens(range, {
