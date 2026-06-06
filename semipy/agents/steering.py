@@ -35,12 +35,10 @@ import asyncio
 import concurrent.futures
 import hashlib
 import json
-import os
 from typing import Any
 
 from pydantic import BaseModel, Field
 
-from semipy.agents.config import get_config
 from semipy.models import SteeringBlock, SteeringEntry
 
 
@@ -474,19 +472,15 @@ def _run_async(coro: Any) -> Any:
 
 async def _synthesise_async(prompt: str) -> _SteeringSynthOutput | None:
     """One LLM call using the same OpenAI Responses pattern as ``decision.py``."""
-    config = get_config()
-    api_key = config.openai_api_key or os.getenv("OPENAI_API_KEY")
-    if not api_key:
+    from semipy.orchestration.runtime import make_responses_model
+
+    # Steering synthesis is the surfacer role; (None, None) when no key -> heuristic fallback.
+    model, settings = make_responses_model("surfacer")
+    if model is None:
         return None
     try:
         from pydantic_ai import Agent
-        from pydantic_ai.models.openai import (
-            OpenAIResponsesModel,
-            OpenAIResponsesModelSettings,
-        )
 
-        model = OpenAIResponsesModel(config.openai_model)
-        settings = OpenAIResponsesModelSettings()
         agent: Agent[None, _SteeringSynthOutput] = Agent(
             model,
             model_settings=settings,

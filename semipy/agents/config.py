@@ -26,6 +26,17 @@ class SemiConfig:
     """Global configuration for semi() and the generation agent."""
     openai_api_key: Optional[str] = field(default_factory=lambda: os.getenv("OPENAI_API_KEY"))
     openai_model: str = "gpt-5.5"
+    #: Per-role model overrides for the multi-role orchestration pipeline. ``None`` falls
+    #: back to ``openai_model`` via ``model_for_role``, so behavior is unchanged until a
+    #: role is explicitly retargeted (e.g. a cheaper explorer, a stronger verifier).
+    orchestrator_model: Optional[str] = None
+    coder_model: Optional[str] = None
+    verifier_model: Optional[str] = None
+    explorer_model: Optional[str] = None
+    surfacer_model: Optional[str] = None
+    #: Number of LLM alignment-judge samples the verifier draws per verdict (majority vote).
+    #: Correctness-first: >1 trades tokens for a more reliable verdict. 1 = single judgment.
+    verifier_vote_samples: int = 3
     e2b_api_key: Optional[str] = field(default_factory=lambda: os.getenv("E2B_API_KEY"))
     gist_timeout: int = 30
     cache_dir: Path = field(default_factory=lambda: Path(".semiformal"))
@@ -106,6 +117,20 @@ class SemiConfig:
     effect_approval_callback: Optional[object] = None
     #: Default per-effect blast-radius bound when none is declared.
     effect_default_blast_radius: int = 1
+
+    def model_for_role(self, role: Optional[str] = None) -> str:
+        """Return the model id for an orchestration role, falling back to ``openai_model``.
+
+        ``role`` names a pipeline role (``coder``, ``verifier``, ``explorer``,
+        ``surfacer``, ``orchestrator``). When the matching ``<role>_model`` field is
+        unset (the default), the global ``openai_model`` is used, so the pipeline runs
+        on one model until a role is deliberately retargeted.
+        """
+        if role:
+            override = getattr(self, f"{role}_model", None)
+            if override:
+                return override
+        return self.openai_model
 
 
 _config: Optional[SemiConfig] = None

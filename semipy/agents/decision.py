@@ -26,7 +26,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
-from semipy.agents.config import get_config
 from semipy.types import SlotSpec
 
 
@@ -313,20 +312,12 @@ Keep "reasoning" under 3 sentences. List at most 5 problematic_inputs \
 
 
 def _create_decision_model() -> tuple[Any, Any] | tuple[None, None]:
-    config = get_config()
-    api_key = config.openai_api_key or os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        return None, None
-    try:
-        from pydantic_ai.models.openai import (
-            OpenAIResponsesModel,
-            OpenAIResponsesModelSettings,
-        )
-        model = OpenAIResponsesModel(config.openai_model)
-        settings = OpenAIResponsesModelSettings()
-        return model, settings
-    except Exception:
-        return None, None
+    # The reuse/adapt judge is the verifier role; centralized factory resolves the
+    # model id via config.model_for_role('verifier') and returns (None, None) when
+    # no key is configured (caller then defaults to REUSE).
+    from semipy.orchestration.runtime import make_responses_model
+
+    return make_responses_model("verifier")
 
 
 def _build_evidence_prompt(

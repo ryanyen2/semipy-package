@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import inspect
 import json
-import os
 import textwrap
 from typing import Any, Optional
 
@@ -21,19 +20,19 @@ from semipy.models import CommitmentRecord, SemiAgentDeps
 
 
 def _create_openai_model(config: Any) -> Any:
-    """Create OpenAI model and settings for pydantic_ai."""
-    from pydantic_ai.models.openai import OpenAIResponsesModel, OpenAIResponsesModelSettings
-    api_key = config.openai_api_key or os.getenv("OPENAI_API_KEY")
-    if not api_key:
+    """Create the coder's OpenAI Responses model + settings (reasoning enabled).
+
+    Delegates to the centralized ``make_responses_model`` factory so the model id
+    is resolved via ``config.model_for_role('coder')``. Generation requires a key,
+    so a missing key raises here rather than degrading.
+    """
+    from semipy.orchestration.runtime import make_responses_model
+
+    model, settings = make_responses_model("coder", reasoning=True)
+    if model is None:
         raise ValueError(
             "OPENAI_API_KEY must be set (env or semi.configure(openai_api_key=...))"
         )
-    model = OpenAIResponsesModel(config.openai_model)
-    settings = OpenAIResponsesModelSettings(
-        openai_reasoning_effort='medium',
-        openai_reasoning_summary='auto',
-        openai_send_reasoning_ids=True,
-    )
     return model, settings
 
 
