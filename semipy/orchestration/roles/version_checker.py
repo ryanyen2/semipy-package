@@ -14,6 +14,22 @@ from semipy.orchestration.artifacts import VersionContext
 from semipy.resolver import resolve
 
 
+def project(result: Any) -> VersionContext:
+    """Project a live ``ResolutionResult`` into the JSON-safe ``VersionContext``."""
+    decision = result.decision
+    decision_str = getattr(decision, "value", str(decision))
+    return VersionContext(
+        decision=decision_str,
+        commit_id=result.commit_id,
+        parent_commit_ids=list(result.parent_commit_ids or []),
+        parent_sources=list(result.parent_sources or []),
+        lineage_summary=result.lineage_summary,
+        reuse_dispatch_slot_id=result.reuse_dispatch_slot_id,
+        sketch_id=result.sketch_id,
+        sketch_hole_values=result.sketch_hole_values,
+    )
+
+
 def route(
     portal: Any,
     slot_spec: Any,
@@ -28,15 +44,4 @@ def route(
         force_regenerate=force_regenerate,
         sketch_library=sketch_library,
     )
-    decision = result.decision
-    decision_str = getattr(decision, "value", str(decision))
-    return VersionContext(
-        decision=decision_str,
-        commit_id=result.commit_id,
-        parent_commit_ids=list(result.parent_commit_ids or []),
-        parent_sources=list(result.parent_sources or []),
-        lineage_summary=result.lineage_summary,
-        reuse_dispatch_slot_id=result.reuse_dispatch_slot_id,
-        sketch_id=result.sketch_id,
-        sketch_hole_values=result.sketch_hole_values,
-    )
+    return project(result)
