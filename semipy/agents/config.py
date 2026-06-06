@@ -46,6 +46,10 @@ class SemiConfig:
     cocoindex_db_url: str = ""
     session_source: Optional[str] = None
     semantic_verify: bool = True
+    #: Number of reuse/adapt judge samples for the version-checker's evidence-grounded
+    #: reuse decision (majority vote, ties -> ADAPT to bias toward verification).
+    #: Default 1 = single judgment (unchanged behavior/cost); raise for correctness.
+    reuse_vote_samples: int = 1
     #: Cap on semantic-recheck-driven ADAPTs per slot. An inherently-semantic slot
     #: (e.g. triage, preference judgment, summarization) compiles to a *static*
     #: function the intent judge can keep rejecting on every fresh free-text input,

@@ -26,6 +26,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from semipy.agents.config import get_config
 from semipy.types import SlotSpec
 
 
@@ -415,6 +416,52 @@ async def _judge_async(
 
 
 # ---------------------------------------------------------------------------
+# Multi-sample voting (U7): correctness-first, evidence-grounded reuse judging
+# ---------------------------------------------------------------------------
+
+
+def aggregate_semantic_votes(decisions: list[SemanticDecision | None]) -> SemanticDecision:
+    """Combine independent reuse/adapt judgments (pure; ties -> adapt).
+
+    A reuse-router that under-verifies is the modal multi-agent failure (MAST
+    FM-3.x), so the aggregation biases toward verification: ``adapt`` wins when it
+    reaches HALF the votes (ties go to adapt); ``reuse`` requires a strict
+    majority. With a single vote this reduces to that vote's decision, so default
+    behavior is unchanged. Problematic/ambiguous inputs and reasons are merged
+    from the dissenting (adapt) judges so the regeneration has grounded feedback.
+    """
+    votes = [d for d in decisions if d is not None]
+    if not votes:
+        return SemanticDecision(decision="reuse", reasoning="No semantic votes; defaulting to reuse.")
+    adapt = [d for d in votes if d.decision == "adapt"]
+    if len(adapt) * 2 >= len(votes):  # tie -> adapt (bias toward verification)
+        problematic = sorted({p for d in adapt for p in d.problematic_inputs})[:5]
+        ambiguous = [a for d in adapt for a in d.ambiguous_inputs][:3]
+        context = sorted({c for d in adapt for c in d.context_changed})
+        reasoning = "; ".join(d.reasoning for d in adapt if d.reasoning)[:500] or (
+            f"{len(adapt)}/{len(votes)} judges found intent failures."
+        )
+        return SemanticDecision(
+            decision="adapt",
+            reasoning=reasoning,
+            problematic_inputs=problematic,
+            ambiguous_inputs=ambiguous,
+            context_changed=context,
+        )
+    return SemanticDecision(
+        decision="reuse",
+        reasoning=f"{len(votes) - len(adapt)}/{len(votes)} judges found outputs satisfy intent.",
+    )
+
+
+async def _judge_votes_async(*, samples: int, **judge_kwargs: Any) -> list[SemanticDecision | None]:
+    """Run ``samples`` independent reuse judgments concurrently and gather them."""
+    tasks = [_judge_async(**judge_kwargs) for _ in range(samples)]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    return [r if isinstance(r, SemanticDecision) else None for r in results]
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -471,19 +518,24 @@ def evaluate_reuse_semantics(
                 reasoning="Batch gist execution produced no results; defaulting to reuse.",
             )
 
+    judge_kwargs = dict(
+        spec_text=slot_spec.spec_text,
+        scaffold_source=slot_spec.enclosing_function_source,
+        implementation_source=implementation_source,
+        test_results=test_results,
+        slot_category=slot_spec.expected_category.value,
+        output_names=list(slot_spec.output_names or []),
+        batch_summary=batch_summary,
+        real_data=real_data,
+    )
+    samples = max(1, int(getattr(get_config(), "reuse_vote_samples", 1)))
     try:
-        return _run_async(
-            _judge_async(
-                spec_text=slot_spec.spec_text,
-                scaffold_source=slot_spec.enclosing_function_source,
-                implementation_source=implementation_source,
-                test_results=test_results,
-                slot_category=slot_spec.expected_category.value,
-                output_names=list(slot_spec.output_names or []),
-                batch_summary=batch_summary,
-                real_data=real_data,
-            )
-        )
+        if samples == 1:
+            # Default path: a single judgment (unchanged behavior and cost).
+            return _run_async(_judge_async(**judge_kwargs))
+        # Correctness-first: draw N independent judgments and vote (ties -> adapt).
+        decisions = _run_async(_judge_votes_async(samples=samples, **judge_kwargs))
+        return aggregate_semantic_votes(decisions)
     except Exception:
         return SemanticDecision(
             decision="reuse",
