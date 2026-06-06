@@ -19,7 +19,7 @@ The distribution is **`semiformal-py`**; the import package is **`semipy`**.
 ```bash
 uv sync
 source .venv/bin/activate
-python -m pytest tests/ -q      # 151 unit tests, run offline (no API key)
+python -m pytest tests/ -q      # 213 unit tests, run offline (no API key)
 ruff check semipy/              # lint
 ```
 
@@ -131,6 +131,16 @@ points at a `.portal.json`):
   semantic operators (summarize/judge — they never promote, interpret every row)
   and the shape-stable ones (extract/parse/classify — promote, then LLM-free).
   Detail: [`docs/interpreted-mode.md`](docs/interpreted-mode.md).
+- **Orchestration** (`semipy/orchestration/`) — the generation pipeline as named
+  roles (explorer, version-checker, coder, executor, verifier, surfacer) exchanging
+  typed artifacts, driven by a code-driven `Orchestrator` over the existing
+  `pydantic_ai` Responses stack (langroid was evaluated and dropped — too heavy a
+  dependency tree). Correctness-first: a binary, evidence-grounded **alignment
+  verifier** with multi-sample majority voting (`verifier_vote_samples`) and an
+  **evidence-grounded reuse judge** with voting that biases ties toward ADAPT
+  (`reuse_vote_samples`). Read-only roles fan out via `parallel.gather_readonly`;
+  writers stay serial. Every LLM role abstains to a deterministic default with no
+  API key. Detail: [`docs/orchestration.md`](docs/orchestration.md).
 
 ## Important runtime behaviors
 
