@@ -110,10 +110,18 @@ def aggregate_votes(verdicts: list[Optional[AlignmentVerdict]]) -> VerificationV
     a STRICT majority of ``aligned`` is required to pass; a tie fails (bias toward
     verification / ADAPT). Failing samples and reasons are collected from the
     dissenting (misaligned) verdicts for feedback to the coder.
+
+    **Quorum:** ``verdicts`` is the full requested set (failed judges appear as
+    ``None``). A shrunken electorate must not decide the gate -- if fewer than a
+    majority of the requested judges responded, abstain rather than let one or two
+    survivors block. With a single requested sample this reduces to "decide on the
+    one vote," so default single-sample behavior is unchanged.
     """
+    requested = len(verdicts)
     votes = [v for v in verdicts if v is not None]
-    if not votes:
-        return VerificationVerdict(passed=True, alignment_verdict=None, vote_count=0)
+    if not votes or len(votes) * 2 <= requested:
+        # No survivors, or no quorum -> abstain (do not block on a partial electorate).
+        return VerificationVerdict(passed=True, alignment_verdict=None, vote_count=len(votes))
 
     aligned_count = sum(1 for v in votes if v.aligned)
     passed = aligned_count * 2 > len(votes)  # strict majority; tie -> fail

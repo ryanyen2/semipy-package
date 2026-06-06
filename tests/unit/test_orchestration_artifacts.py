@@ -102,3 +102,27 @@ def test_run_gist_success_without_io_array():
     ev = executor_role.run_gist(gist)
     assert ev.success is True
     assert ev.io_pairs == []
+
+
+# --- _parse_io_pairs hardening (key validation, last-array wins) -----------
+
+def test_parse_io_pairs_rejects_array_without_io_keys():
+    # An unrelated JSON array of dicts must NOT be accepted as graded evidence.
+    assert executor_role._parse_io_pairs('[{"a": 1}, {"b": 2}]') == []
+
+
+def test_parse_io_pairs_requires_both_keys():
+    assert executor_role._parse_io_pairs('[{"input": "x"}]') == []
+    assert executor_role._parse_io_pairs('[{"input": "x", "output": "X"}]') == [
+        {"input": "x", "output": "X"}
+    ]
+
+
+def test_parse_io_pairs_prefers_last_valid_array():
+    # Output (or a decoy array) then the real io array: the LAST valid one wins.
+    stdout = (
+        '[{"unrelated": "noise"}]\n'
+        "some log line\n"
+        '[{"input": "x", "output": "X"}]\n'
+    )
+    assert executor_role._parse_io_pairs(stdout) == [{"input": "x", "output": "X"}]

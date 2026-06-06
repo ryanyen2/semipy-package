@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 ROLE_ORDER = ("explorer", "version-checker", "coder", "executor", "verifier", "surfacer")
 TAIL_LINES = 2
@@ -71,7 +71,7 @@ class RoleLanesModel:
             lines.append(f"{name} [{lane.phase}]{suffix}")
         return lines
 
-    def as_renderable(self):
+    def as_renderable(self) -> Any:
         """Rich renderable for terminal display (one row per touched lane)."""
         from rich.table import Table
 

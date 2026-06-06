@@ -203,6 +203,10 @@ points at a `.portal.json`):
 - **history/**: `version_control.py` (Commit/Branch/Slot/Portal DAG),
   `version_lock.py` (lock/rollback/unlock).
 - **contract/**, **effects/**, **library/**, **reactivity/**: see Subsystems above.
+- **orchestration/**: the multi-role pipeline (`orchestrator.py`, `runtime.py`,
+  `artifacts.py`, `parallel.py`, `console_lanes.py`, and `roles/` —
+  explorer/version_checker/coder/executor_role/verifier/surfacer). See Subsystems
+  above and [`docs/orchestration.md`](docs/orchestration.md).
 
 ## Public API
 
@@ -216,6 +220,11 @@ Exported from `semipy/__init__.py`: `semiformal`, `semi`, `interpreted`,
 `EffectResult`, `EffectRefused`, `EffectRecorder`, `ArtifactBackend`,
 `MemoryArtifactBackend`, `SqliteArtifactBackend`, `ExternalArtifactBackend`,
 `register_artifact_backend`, `resolve_backend`, `revert`, `provenance_for`).
+
+Orchestration tuning is on `SemiConfig` (via `configure`): per-role model
+overrides (`coder_model`, `verifier_model`, `explorer_model`, `surfacer_model`,
+`orchestrator_model`; resolved through `model_for_role`), `verifier_vote_samples`
+(alignment-judge majority vote), and `reuse_vote_samples` (reuse-judge vote).
 
 ## Console UX
 

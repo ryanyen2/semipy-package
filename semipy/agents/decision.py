@@ -429,10 +429,18 @@ def aggregate_semantic_votes(decisions: list[SemanticDecision | None]) -> Semant
     majority. With a single vote this reduces to that vote's decision, so default
     behavior is unchanged. Problematic/ambiguous inputs and reasons are merged
     from the dissenting (adapt) judges so the regeneration has grounded feedback.
+
+    **Quorum:** ``decisions`` is the full requested set (failed judges appear as
+    ``None``). If fewer than a majority of requested judges responded, default to
+    ``reuse`` rather than let a shrunken electorate force an ADAPT/regeneration.
     """
+    requested = len(decisions)
     votes = [d for d in decisions if d is not None]
-    if not votes:
-        return SemanticDecision(decision="reuse", reasoning="No semantic votes; defaulting to reuse.")
+    if not votes or len(votes) * 2 <= requested:
+        return SemanticDecision(
+            decision="reuse",
+            reasoning="Insufficient reuse-judge quorum; defaulting to reuse.",
+        )
     adapt = [d for d in votes if d.decision == "adapt"]
     if len(adapt) * 2 >= len(votes):  # tie -> adapt (bias toward verification)
         problematic = sorted({p for d in adapt for p in d.problematic_inputs})[:5]

@@ -35,12 +35,17 @@ def test_untouched_lanes_are_not_rendered():
 
 
 def test_push_tail_is_bounded_and_newline_split():
+    from semipy.orchestration.console_lanes import TAIL_LINES
+
     m = RoleLanesModel()
     for i in range(5):
         m.push("coder", f"line{i}\n")
     lane = m.lanes["coder"]
-    # maxlen tail keeps only the most recent lines.
-    assert len(lane.tail) <= 3
+    # Bounded to exactly TAIL_LINES, keeping the most recent lines (not a vacuous
+    # <= bound that would pass even if maxlen regressed upward).
+    assert len(lane.tail) == TAIL_LINES
+    assert list(lane.tail)[-1] == ""  # trailing newline opened a fresh empty line
+    assert "line4" in list(lane.tail)
 
 
 def test_as_renderable_builds_without_error():

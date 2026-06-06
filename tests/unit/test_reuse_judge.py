@@ -44,6 +44,17 @@ def test_no_votes_defaults_to_reuse():
     assert aggregate_semantic_votes([None, None]).decision == "reuse"
 
 
+def test_shrunken_electorate_defaults_to_reuse_no_quorum():
+    # 1 adapt survivor of 3 requested must not force a regeneration: without a
+    # quorum, default to reuse rather than let a partial electorate adapt.
+    assert aggregate_semantic_votes([_adapt(), None, None]).decision == "reuse"
+
+
+def test_quorum_met_majority_adapts():
+    # 2 adapt survivors of 3 reach quorum -> adapt.
+    assert aggregate_semantic_votes([_adapt(), _adapt(), None]).decision == "adapt"
+
+
 def test_adapt_merges_problematic_inputs_from_dissent():
     out = aggregate_semantic_votes([
         _adapt("failed A", problematic=["inA"]),

@@ -47,13 +47,16 @@ def test_model_for_role_uses_override_when_set():
 def test_configure_overrides_role_models():
     from semipy.agents.config import configure
 
-    original = get_config().verifier_model
+    original_model = get_config().verifier_model
+    original_samples = get_config().verifier_vote_samples
     try:
         configure(verifier_model="gpt-judge", verifier_vote_samples=5)
         assert get_config().model_for_role("verifier") == "gpt-judge"
         assert get_config().verifier_vote_samples == 5
     finally:
-        get_config().verifier_model = original
+        # Restore BOTH mutated fields, not just the model (the leak T1 fix).
+        get_config().verifier_model = original_model
+        get_config().verifier_vote_samples = original_samples
 
 
 def test_verifier_vote_samples_default():

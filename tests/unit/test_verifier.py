@@ -52,6 +52,27 @@ def test_no_votes_abstains():
     assert v.vote_count == 0
 
 
+def test_shrunken_electorate_abstains_no_quorum():
+    # 1 survivor of 3 requested judges must NOT decide the gate (denominator
+    # shrinkage): without a quorum, abstain rather than block on one vote.
+    v = aggregate_votes([_misaligned(), None, None])
+    assert v.passed is True
+    assert v.alignment_verdict is None
+    assert v.vote_count == 1
+
+
+def test_quorum_met_with_majority_responding():
+    # 2 survivors of 3 reach quorum; the majority among them decides.
+    v = aggregate_votes([_misaligned(), _misaligned(), None])
+    assert v.passed is False and v.alignment_verdict == "misaligned"
+
+
+def test_single_requested_sample_decides_on_one_vote():
+    # samples=1: one vote is a full electorate, so it decides (behavior unchanged).
+    assert aggregate_votes([_aligned()]).passed is True
+    assert aggregate_votes([_misaligned()]).passed is False
+
+
 def test_failing_samples_and_reasons_collected_from_dissent():
     v = aggregate_votes([
         _misaligned("wrong on empty", samples=[{"input": "", "output": ""}]),
