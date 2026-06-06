@@ -23,6 +23,7 @@ concrete worked example.
 | **[behavioral-contract.md](behavioral-contract.md)** | The contract subsystem: content-addressed cases, the digit-normalized structural input fingerprint, the executable contract runner, intended-vs-unintended effect diffing, the two acceptance gates, and spec-change retirement. |
 | **[effects.md](effects.md)** | Reified real-world effects: the `fx` capability and `EffectScript`, shadow worlds and pluggable backends, static verification, the for-all-inputs blast-radius theorem (schema superkey), and the ledger / provenance / revert spine. |
 | **[sketch-library.md](sketch-library.md)** | Pattern learning: how a generated implementation becomes a parametric `CodeSketch`, and how a later slot is satisfied by substitution (the INSTANTIATE decision) with no LLM call. |
+| **[interpreted-mode.md](interpreted-mode.md)** | Interpret-until-shape-stable slots (`interpreted=True`): keep the LLM in the hot path per call, accumulate examples, and promote to a normal cached commit once a synthesized residual reproduces held-out examples (validated in the sandbox). The bridge between residualize-on-first-call and per-row semantic systems. |
 
 ## Reference
 

@@ -209,7 +209,7 @@ def _extract_semi_template_by_embedded_scalar(
     return template, ["v0"], {"v0": v0}
 
 
-def _semi_standalone(prompt: str, *, expected_type: Any = None) -> Any:
+def _semi_standalone(prompt: str, *, expected_type: Any = None, interpreted: bool = False) -> Any:
     frame, call_site = _get_call_frame_and_site(depth=3)
     spec_text = prompt
     start_abs = call_site.lineno
@@ -278,6 +278,7 @@ def _semi_standalone(prompt: str, *, expected_type: Any = None) -> Any:
         usage_hints=[],
         enclosing_function_source="",
         enclosing_function_qualname=func_qualname,
+        interpreted=interpreted,
     )
 
     config = get_config()
@@ -336,10 +337,11 @@ class SemiProxy:
         *,
         expected_type: Optional[Any] = None,
         require_tools: bool = False,
+        interpreted: bool = False,
         **_kwargs: Any,
     ) -> Any:
         _ = require_tools  # require_tools is a future knob; standalone implementation does not branch.
-        return _semi_standalone(prompt, expected_type=expected_type)
+        return _semi_standalone(prompt, expected_type=expected_type, interpreted=interpreted)
 
 
 semi = SemiProxy()

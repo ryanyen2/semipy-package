@@ -133,6 +133,9 @@ class ApacheLogPipeline:
     def classify_body(self, body: str) -> str:
         text = "" if body is None else str(body).strip()
         lower = text.lower()
+        #< intent: Classify Apache body as snake_case family
+        #< given: Apache error log body text, optional lowercase variant
+        #< by: normalizing tokens and matching Apache error patterns to snake_case family
         family = ...  # > Classify this Apache error log body into a short snake_case event family name.
         
         return family

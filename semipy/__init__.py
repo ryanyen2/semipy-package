@@ -12,6 +12,7 @@ from typing import Any
 
 from semipy.decorator import semiformal
 from semipy.semi_fn import semi
+from semipy.interpreted import InterpretedOp, interpreted
 from semipy.agents.config import SemiConfig, configure, get_config
 from semipy.types import Decision, SemiCallError, SemiGenerationError, compute_spec_equivalence_key
 from semipy.agents.tools import register_tool, parse_tool_refs
@@ -57,6 +58,8 @@ def __getattr__(name: str) -> Any:
 __all__ = [
     "semiformal",
     "semi",
+    "interpreted",
+    "InterpretedOp",
     "SemiConfig",
     "configure",
     "get_config",

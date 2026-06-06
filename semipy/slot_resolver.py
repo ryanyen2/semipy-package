@@ -25,21 +25,22 @@ from semipy.session_anchor import resolve_project
 from semipy.reactivity import (
     SlotRef,
     _get_dep_graph,
-    add_dependency,
     attach_producer_flow,
     clear_stale,
     create_flow,
     extract_flow,
     get_downstream_requirements,
-    is_stale,
     mark_downstream_stale,
     profile_output,
+    record_consumed,
     save_dependency_graph,
+    set_incoming_edges,
+    stale_against_inputs,
     update_slot_commit,
 )
 from semipy._slot_region import expand_zone
-from semipy.resolver import resolve
 from semipy.routing import RoutingPolicy
+from semipy.orchestration.orchestrator import Orchestrator
 
 from semipy.documents import materialize_runtime_document_inputs
 from semipy.library.binding import evaluate_binding_clarity, extract_binding_async
@@ -393,6 +394,7 @@ def _slot_spec_snapshot(slot_spec: SlotSpec) -> dict[str, Any]:
         "usage_hints": slot_spec.usage_hints,
         "enclosing_function_qualname": slot_spec.enclosing_function_qualname,
         "enclosing_function_span": list(slot_spec.enclosing_function_span),
+        "interpreted": getattr(slot_spec, "interpreted", False),
     }
 
 
@@ -1119,6 +1121,152 @@ def _call_generated_fn(
         raise err from e
 
 
+_MAX_INTERP_EXAMPLES = 80
+
+
+def _promote_interpreted_commit(
+    src: str,
+    slot_spec: SlotSpec,
+    slot: Any,
+    portal: Any,
+    dep_graph: Any,
+    current_slot_ref: Any,
+    cache_dir: Path,
+    module_name: str,
+    runtime_values: dict[str, Any],
+) -> None:
+    """Mint a normal commit holding the synthesized residual so subsequent calls
+    REUSE it via the standard dispatch path (no more LLM)."""
+    commit = create_commit(
+        (),
+        src,
+        slot_spec.spec_hash,
+        freeze_constants({}),
+        slot_spec.spec_text,
+        "PROMOTE",
+        usage_id=slot_spec.slot_id,
+        runtime_input_fingerprint=compute_runtime_input_fingerprint(runtime_values),
+        source_snapshot=_capture_slot_source_snapshot(slot_spec),
+    )
+    add_commit_to_slot(slot, commit, "main", usage_id=slot_spec.slot_id)
+    slot.spec_hash = slot_spec.spec_hash
+    slot.slot_spec = _slot_spec_snapshot(slot_spec)
+    if dep_graph is not None:
+        update_slot_commit(dep_graph, current_slot_ref, commit.commit_id)
+        clear_stale(dep_graph, current_slot_ref)
+        save_dependency_graph(cache_dir, dep_graph)
+    write_dispatch_module(cache_dir, portal, sketch_library=load_sketch_library(cache_dir))
+    save_portal(cache_dir, portal)
+    _dispatch_globals_cache.pop(module_name, None)
+
+
+def _execute_interpreted_slot(
+    *,
+    slot_spec: SlotSpec,
+    runtime_values: dict[str, Any],
+    slot: Any,
+    portal: Any,
+    dep_graph: Any,
+    current_slot_ref: Any,
+    cache_dir: Path,
+    session_id: str,
+    module_name: str,
+    config: Any,
+    promote_after: int = 6,
+) -> Any:
+    """Interpret-until-shape-stable execution for one interpreted slot.
+
+    Calls the LLM per input (memoized by runtime fingerprint), accumulates
+    (args -> output) examples in ``slot.advisor_state``, and once enough have
+    accumulated tries to compile a residual that reproduces HELD-OUT examples.
+    On success the slot promotes to a normal cached commit and this branch is
+    never taken again; on failure it stays interpreted and retries later.
+    """
+    from semipy.interpreted import (
+        attempt_promotion,
+        extract_label_set,
+        interpret_call,
+    )
+
+    output_names = list(slot_spec.output_names or [])
+    labels = extract_label_set(slot_spec.expected_type)
+    call_site = _call_site_from_slot(slot_spec)
+    adv = slot.advisor_state if isinstance(slot.advisor_state, dict) else {}
+    slot.advisor_state = adv
+    examples: list[dict[str, Any]] = adv.setdefault("interpreted_examples", [])
+    memo: dict[str, Any] = adv.setdefault("interpreted_memo", {})
+
+    import json
+
+    def _jsonsafe(v: Any) -> Any:
+        try:
+            json.dumps(v)
+            return v
+        except Exception:
+            return repr(v)
+
+    fp = compute_runtime_input_fingerprint(runtime_values)
+    args = [_jsonsafe(runtime_values.get(n)) for n in slot_spec.free_variables]
+
+    if fp in memo:
+        out = memo[fp]
+    else:
+        if config.verbose:
+            print_pipeline_log(
+                call_site, "interpret",
+                "Interpreting via LLM (not yet shape-stable)...",
+            )
+        out = _jsonsafe(interpret_call(
+            slot_spec.spec_text, runtime_values,
+            expected_type=slot_spec.expected_type, output_names=output_names, labels=labels,
+        ))
+        examples.append({"args": args, "output": out})
+        if len(examples) > _MAX_INTERP_EXAMPLES:
+            del examples[: len(examples) - _MAX_INTERP_EXAMPLES]
+        memo[fp] = out
+        if len(memo) > _MAX_INTERP_EXAMPLES * 2:
+            for k in list(memo)[: len(memo) - _MAX_INTERP_EXAMPLES]:
+                memo.pop(k, None)
+    save_portal(cache_dir, portal)
+
+    n = len(examples)
+    if n >= promote_after and n >= int(adv.get("interpreted_next_attempt", promote_after)):
+        adv["interpreted_attempts"] = int(adv.get("interpreted_attempts", 0)) + 1
+        pairs = [(e["args"], e["output"]) for e in examples]
+        src, frac = attempt_promotion(
+            slot_spec.spec_text, slot_spec.free_variables, pairs,
+            output_names=output_names, labels=labels,
+            timeout=getattr(config, "gist_timeout", 30),
+            e2b_api_key=getattr(config, "e2b_api_key", None),
+        )
+        promoted = False
+        if src:
+            _promote_interpreted_commit(
+                src, slot_spec, slot, portal, dep_graph, current_slot_ref,
+                cache_dir, module_name, runtime_values,
+            )
+            adv["interpreted_promoted"] = True
+            promoted = True
+            if config.verbose:
+                print_pipeline_log(
+                    call_site, "promote",
+                    f"Promoted to LLM-free residual (held-out match {frac:.2f}); "
+                    f"future calls reuse cached code.",
+                )
+        adv["interpreted_holdout_match"] = frac
+        if not promoted:
+            adv["interpreted_next_attempt"] = n + promote_after
+            if config.verbose:
+                print_pipeline_log(
+                    call_site, "interpret",
+                    f"Staying interpreted (held-out match {frac:.2f}; "
+                    f"codegen {'failed' if not src else 'did not generalize'}).",
+                )
+        slot.advisor_state = adv
+        save_portal(cache_dir, portal)
+    return out
+
+
 def execute_slot(
     slot_spec: SlotSpec,
     runtime_values: dict[str, Any],
@@ -1188,12 +1336,20 @@ def _execute_slot_locked(
     dep_graph = _get_dep_graph(cache_dir)
     current_slot_ref = SlotRef(session_id=session_id, slot_id=slot_spec.slot_id)
 
-    # Register observed cross-slot dependency edges.
+    # Observe this call's upstreams from the flow each input value carries. Edges are
+    # refreshed to exactly these producers (so a dropped dependency leaves no ghost
+    # edge), and the producing commit ids drive pull-based input-staleness below.
+    _observed_upstreams: dict[str, str] = {}
     if dep_graph is not None:
+        _obs_refs = []
         for val in runtime_values.values():
             flow = extract_flow(val)
             if flow is not None:
-                add_dependency(dep_graph, upstream=flow.producing_slot, downstream=current_slot_ref)
+                _obs_refs.append(flow.producing_slot)
+                _pcid = getattr(flow, "producing_commit_id", "") or ""
+                if _pcid:
+                    _observed_upstreams[flow.producing_slot.key()] = _pcid
+        set_incoming_edges(dep_graph, current_slot_ref, _obs_refs)
 
     force_regenerate = False
     old_snap = slot.slot_spec if isinstance(slot.slot_spec, dict) else {}
@@ -1224,8 +1380,16 @@ def _execute_slot_locked(
                 pass
         if dep_graph is not None:
             mark_downstream_stale(dep_graph, current_slot_ref, "spec changed")
-    if dep_graph is not None and is_stale(dep_graph, current_slot_ref):
-        force_regenerate = True
+    # Pull-based input staleness: regenerate iff an upstream this slot actually
+    # consumed before now presents a different commit. Compared against the current
+    # call's inputs only, so dropped deps never over-invalidate and mutual deps are
+    # caught without a graph cycle; recording the new set lets it settle (no churn).
+    if dep_graph is not None:
+        if stale_against_inputs(dep_graph, current_slot_ref, _observed_upstreams):
+            force_regenerate = True
+            clear_stale(dep_graph, current_slot_ref)
+        record_consumed(dep_graph, current_slot_ref, _observed_upstreams)
+        save_dependency_graph(cache_dir, dep_graph)
     adv = getattr(slot, "advisor_state", None) or {}
     if isinstance(adv, dict) and adv.get("force_regenerate_next"):
         force_regenerate = True
@@ -1233,8 +1397,31 @@ def _execute_slot_locked(
         slot.advisor_state = adv
         save_portal(cache_dir, portal)
 
+    # Interpret-until-shape-stable: while the slot is interpreted and has not yet
+    # promoted, the LLM runs per call (memoized) and the slot tries to compile a
+    # residual from accumulated examples. Once promoted, a normal commit exists and
+    # we fall through to REUSE it. See semipy/interpreted.py.
+    if getattr(slot_spec, "interpreted", False) and not (
+        isinstance(adv, dict) and adv.get("interpreted_promoted")
+    ):
+        return _execute_interpreted_slot(
+            slot_spec=slot_spec,
+            runtime_values=runtime_values,
+            slot=slot,
+            portal=portal,
+            dep_graph=dep_graph,
+            current_slot_ref=current_slot_ref,
+            cache_dir=cache_dir,
+            session_id=session_id,
+            module_name=module_name,
+            config=config,
+        )
+
     sketch_library = load_sketch_library(cache_dir)
-    resolution = resolve(
+    # Routing is owned by the Orchestrator seam (KTD2: code-driven, not autonomous).
+    # Orchestrator.route delegates to resolve(), so behavior is identical.
+    _orchestrator = Orchestrator(cache_dir=cache_dir, session_id=session_id)
+    resolution = _orchestrator.route(
         portal,
         slot_spec,
         force_regenerate=force_regenerate,
@@ -1957,7 +2144,24 @@ def _make_slot_proxy(slot_spec: SlotSpec, source_file: str, cache_dir: Path | No
             )
         if slot_spec.expected_category == SlotCategory.STATEMENT_BLOCK:
             if len(slot_spec.output_names) == 1 and isinstance(result, dict):
-                return result.get(slot_spec.output_names[0])
+                inner = result.get(slot_spec.output_names[0])
+                # Carry producer flow across the single-output unwrap so reactivity
+                # wires for the canonical #> form (the dict wrapper is discarded; the
+                # flow would be lost otherwise). Re-profile against the inner value so
+                # downstream shape inference sees the real columns, not {'keys':[name]}.
+                flow = extract_flow(result)
+                if flow is not None:
+                    inner = attach_producer_flow(
+                        inner,
+                        create_flow(
+                            session_id=flow.producing_slot.session_id,
+                            slot_id=flow.producing_slot.slot_id,
+                            commit_id=flow.producing_commit_id,
+                            upstream_chain=list(flow.upstream_chain),
+                            output_profile=profile_output(inner),
+                        ),
+                    )
+                return inner
             return result
         return result
 

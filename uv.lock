@@ -3150,9 +3150,10 @@ wheels = [
 
 [[package]]
 name = "semiformal-py"
-version = "0.2.1"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
+    { name = "openai" },
     { name = "pydantic-ai" },
     { name = "python-dotenv" },
     { name = "rich" },
@@ -3194,7 +3195,8 @@ requires-dist = [
     { name = "ipywidgets", marker = "extra == 'jupyter'", specifier = ">=8.1" },
     { name = "liteparse", marker = "extra == 'pdf'", specifier = ">=1.0" },
     { name = "llama-cloud", marker = "extra == 'pdf'", specifier = ">=1.6.0" },
-    { name = "pydantic-ai", specifier = ">=0.0.54" },
+    { name = "openai", specifier = ">=1.0" },
+    { name = "pydantic-ai", specifier = ">=1.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "rich", specifier = ">=13.0" },

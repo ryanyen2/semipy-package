@@ -19,7 +19,7 @@ The distribution is **`semiformal-py`**; the import package is **`semipy`**.
 ```bash
 uv sync
 source .venv/bin/activate
-python -m pytest tests/ -q      # 127 unit tests, run offline (no API key)
+python -m pytest tests/ -q      # 151 unit tests, run offline (no API key)
 ruff check semipy/              # lint
 ```
 
@@ -113,7 +113,24 @@ points at a `.portal.json`):
   Detail: [`docs/sketch-library.md`](docs/sketch-library.md).
 - **Reactivity** (`semipy/reactivity/`) — `reactive.py` (slot dependency graph,
   staleness) and `flow.py` (attach a `DataFlow` to a producer's output for
-  downstream shape inference).
+  downstream shape inference). Producer flow rides on `list`/`dict` results
+  (`_SemiFlowList`/`_SemiFlowDict` wrappers) and dataclass instances, carrying the
+  `producing_commit_id`; the statement-block proxy carries it across the
+  single-output unwrap, so the canonical `#>` form wires producer->consumer edges
+  (scalars can't carry flow). Invalidation is **pull-based**: `execute_slot`
+  refreshes the consumer's incoming edges to the current call's inputs
+  (`set_incoming_edges`, no ghost edges) and regenerates iff a consumed upstream's
+  commit changed (`stale_against_inputs` vs `record_consumed`) — so mutual deps are
+  caught without a graph cycle and settle without churn, and dropped deps don't
+  over-invalidate. `docs/architecture.md` §8 has the detail.
+- **Interpreted mode** (`semipy/interpreted.py`) — opt-in
+  interpret-until-shape-stable slots (`semi(..., interpreted=True)` /
+  `@semiformal(interpreted=True)`): the LLM runs per call (memoized) and the slot
+  promotes itself to a normal cached commit once a synthesized residual reproduces
+  **held-out** examples (validated in `GistExecutor`). Serves the irreducibly-
+  semantic operators (summarize/judge — they never promote, interpret every row)
+  and the shape-stable ones (extract/parse/classify — promote, then LLM-free).
+  Detail: [`docs/interpreted-mode.md`](docs/interpreted-mode.md).
 
 ## Important runtime behaviors
 
@@ -149,6 +166,14 @@ points at a `.portal.json`):
 - **Concurrency.** `slot_resolver._slot_singleflight_lock(slot_id)` gives one lock
   per slot so concurrent callers of the same slot generate once then REUSE;
   different slots stay concurrent.
+- **Interpreted slots.** When `slot_spec.interpreted` and the slot has not promoted,
+  `execute_slot` branches (before `resolve()`) into `_execute_interpreted_slot`:
+  per-call LLM via `interpreted.interpret_call` (memoized; dict for multi-output
+  `#>`, snapped label for `Literal`/`Enum` `expected_type`), examples accumulate in
+  `slot.advisor_state` (JSON-safe, persisted), and `attempt_promotion` (up to 2
+  codegen draws, held-out validation in `GistExecutor`) mints a `"PROMOTE"` commit
+  via `_promote_interpreted_commit` once a residual reproduces held-out examples.
+  After promotion the standard REUSE path owns the slot.
 
 ## Package layout
 
@@ -158,7 +183,8 @@ points at a `.portal.json`):
   `execute_slot`), persistence (`store.py`), documents (`documents.py`), session
   identity (`session_anchor.py`), fingerprints (`runtime_fingerprint.py`),
   pydantic helpers (`type_adapter.py`), CLI (`cli.py`), inspection
-  (`portal_inspect.py`, `diagnostics_export.py`).
+  (`portal_inspect.py`, `diagnostics_export.py`), interpreted mode
+  (`interpreted.py`).
 - **agents/**: the agentic pipeline — `config`, `agent` (`SemiAgent.generate`),
   `generator` (the `pydantic_ai` OpenAI agent + the single `execute_action_program`
   tool), `executor` (gist/subprocess), `validator`, `profiler`, `compiler`,
@@ -170,7 +196,8 @@ points at a `.portal.json`):
 
 ## Public API
 
-Exported from `semipy/__init__.py`: `semiformal`, `semi`, `SemiConfig`,
+Exported from `semipy/__init__.py`: `semiformal`, `semi`, `interpreted`,
+`InterpretedOp`, `SemiConfig`,
 `configure`, `get_config`, `Decision`, `SemiCallError`, `SemiGenerationError`,
 `compute_spec_equivalence_key`, `register_tool`, `parse_tool_refs`,
 `GistExecutor`, `ExecutionResult`, `SemiAgentDeps`, `DependencyGraph`, `SlotRef`,

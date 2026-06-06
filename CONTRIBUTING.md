@@ -21,9 +21,11 @@ semipy-package/
 # Install uv if needed
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
+uv venv
+source .venv/bin/activate
+
 # Install all deps including dev extras
 uv sync --all-extras
-source .venv/bin/activate
 
 # Copy .env.example and fill in keys
 cp .env.example .env   # set OPENAI_API_KEY

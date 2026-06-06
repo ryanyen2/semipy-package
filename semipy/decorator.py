@@ -91,7 +91,7 @@ def _decorated_fn_source(
     return source, filename, first_lineno, func_qualname, type_hints
 
 
-def _wrap_function(fn: Callable[..., Any], description: Optional[str] = None, filename: Optional[str] = None) -> Callable[..., Any]:
+def _wrap_function(fn: Callable[..., Any], description: Optional[str] = None, filename: Optional[str] = None, interpreted: bool = False) -> Callable[..., Any]:
     source, resolved_filename, first_lineno, func_qualname, type_hints = _decorated_fn_source(fn)
     resolved_filename = filename or resolved_filename
     resolved_for_slots = _type_hints_for_lowering(fn)
@@ -109,6 +109,9 @@ def _wrap_function(fn: Callable[..., Any], description: Optional[str] = None, fi
         type_hints=resolved_for_slots or type_hints,
         globals_ns=getattr(fn, "__globals__", None) or {},
     )
+    if interpreted:
+        import dataclasses
+        slot_specs = [dataclasses.replace(s, interpreted=True) for s in slot_specs]
     scaffold_src = lower_to_scaffold(
         source, slot_specs, slot_index_offset=0, dedent_anchor_abs=first_lineno
     )
@@ -164,6 +167,7 @@ def _wrap_function(fn: Callable[..., Any], description: Optional[str] = None, fi
             enclosing_function_source=source,
             enclosing_function_qualname=func_qualname,
             enclosing_function_span=(resolved_filename, first_lineno, _end_line),
+            interpreted=interpreted,
         )
 
         proxy_fn = _make_slot_proxy(whole_slot, resolved_filename, cache_dir)
@@ -227,6 +231,7 @@ def semiformal(
     fn_or_desc: Optional[Union[Callable[..., Any], str]] = None,
     *,
     description: Optional[str] = None,
+    interpreted: bool = False,
 ) -> Any:
     """
     Decorate a function or class as semiformal.
@@ -235,19 +240,25 @@ def semiformal(
       def f(): ...
       @semiformal("description")
       def g(): ...
+      @semiformal(interpreted=True)        # interpret-until-shape-stable slots
+      def h(): ...
       @semiformal
       class C: ...
+
+    ``interpreted=True`` makes every slot in the function run in
+    interpret-until-shape-stable mode (per-call LLM, then self-promotion to
+    cached code once it generalizes; see semipy/interpreted.py).
     """
     if fn_or_desc is None and description is None:
         def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
-            return _wrap_function(f, filename=None)
+            return _wrap_function(f, filename=None, interpreted=interpreted)
 
         return decorator
 
     if isinstance(fn_or_desc, str):
         desc = fn_or_desc
         def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
-            return _wrap_function(f, description=desc, filename=None)
+            return _wrap_function(f, description=desc, filename=None, interpreted=interpreted)
 
         return decorator
 
@@ -257,12 +268,12 @@ def semiformal(
             for name in _methods_with_open_regions(class_):
                 if name in class_.__dict__ and callable(class_.__dict__[name]):
                     orig = class_.__dict__[name]
-                    setattr(class_, name, _wrap_function(orig, filename=None))
+                    setattr(class_, name, _wrap_function(orig, filename=None, interpreted=interpreted))
             return class_
-        return _wrap_function(fn_or_desc, description=description, filename=None)
+        return _wrap_function(fn_or_desc, description=description, filename=None, interpreted=interpreted)
 
     def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
-        return _wrap_function(f, description=description, filename=None)
+        return _wrap_function(f, description=description, filename=None, interpreted=interpreted)
 
     return decorator
 

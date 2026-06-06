@@ -167,6 +167,10 @@ class SlotSpec:
     enclosing_function_source: str
     enclosing_function_qualname: str
     enclosing_function_span: tuple[str, int, int] = field(default=("", 0, 0))
+    # When True, the slot runs in interpret-until-shape-stable mode: the LLM is
+    # called per call (memoized), and the slot promotes itself to a normal cached
+    # code commit once a synthesized residual reproduces held-out examples.
+    interpreted: bool = False
 
 
 @dataclass

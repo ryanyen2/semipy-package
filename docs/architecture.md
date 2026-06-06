@@ -461,7 +461,86 @@ version" tree actions.
 
 ---
 
-## 8. End-to-end worked example
+## 8. Cross-slot data flow and reactivity
+
+Slots are not islands: one slot's output is often another slot's input. `semipy`
+tracks that producer→consumer structure so it can (a) feed a downstream slot a
+profile of its upstream's shape, and (b) mark a downstream slot **stale** when its
+upstream's implementation changes. This lives in `semipy/reactivity/`
+(`flow.py`, `reactive.py`) and is wired from `slot_resolver.py:execute_slot`.
+
+### Producer flow rides on the value
+
+When a slot returns, `execute_slot` tags the result with a `DataFlow`
+(`flow.py:DataFlow` — `producing_slot`, `producing_commit_id`, `upstream_chain`,
+`output_profile`) via `flow.py:attach_producer_flow`. Plain `list`/`dict`
+instances reject arbitrary attributes, so they are wrapped in transparent
+subclasses `_SemiFlowList` / `_SemiFlowDict`; dataclass instances take the
+attribute directly; **scalars** (`int`/`str`/`bool`/`None`) cannot carry flow and
+are returned unchanged. `output_profile` is computed by `flow.py:profile_output`
+(e.g. `{"type":"list","element":"dict","columns":[...]}`) — the observed shape a
+downstream slot can reason about.
+
+The subtlety is the **canonical `#>` form**. A single-output statement-block slot's
+generated function returns a dict `{output_name: value}`, and the proxy
+(`slot_resolver._make_slot_proxy`) unwraps it to `result.get(output_name)` before
+handing it back. A naive unwrap would drop the flow attached to the wrapper. The
+proxy therefore **carries the flow across the unwrap**: it re-attaches the producer
+flow to the inner value and re-profiles against that value (so the profile reports
+the real columns, not `{"keys":[output_name]}`). The net effect: producer flow
+survives for `semi()` expressions, `#>` blocks (single- and multi-output), and
+function bodies — anything returning a `list`/`dict`/dataclass.
+
+### Consumer edges and pull-based staleness
+
+On entry, `execute_slot` reads `extract_flow` on each runtime value and collects
+the producers feeding this call, with the **commit id that produced each input**
+(`DataFlow.producing_commit_id`). Two things happen:
+
+- **Edges reflect the current call.** `set_incoming_edges(graph, consumer,
+  observed_producers)` makes the consumer's incoming edges *exactly* the producers
+  seen on this call — pruning a producer no longer feeding it and adding new ones —
+  in the per-project `DependencyGraph` (persisted to
+  `{cache_dir}/dependency_graph.json`). So a dependency removed in user code leaves
+  **no ghost edge**.
+- **Staleness is pull-based on the producing commit.** The consumer records what it
+  resolved against (`record_consumed`: `upstream → producing_commit_id`). On a later
+  call, `stale_against_inputs` returns true iff a **currently-observed** upstream now
+  presents a *different* commit than the consumer last consumed; that forces
+  `force_regenerate = True` (ADAPT from the consumer's own head). After it
+  regenerates against the new commit it records it, so the same input no longer
+  re-triggers — it **settles**.
+
+This pull model is what makes cross-slot invalidation correct in the awkward cases
+(verified by stress tests):
+
+- **Mutual dependency (A consumes B *and* B consumes A).** The graph is kept acyclic
+  (`add_dependency` rejects a cycle-closing edge), but invalidation does **not**
+  depend on graph reachability — it depends on the commit id riding each input. So a
+  change to *either* side is caught the next time the other consumes its output, with
+  no graph cycle and **no perpetual re-stale churn** (each side settles once it has
+  regenerated against the other's current commit).
+- **Dropped dependency.** Because only *currently-observed* upstreams are compared, a
+  producer the consumer no longer takes never triggers staleness — no
+  over-invalidation.
+
+Editing a slot's `#>` spec still marks its downstream stale via the push path
+(`mark_downstream_stale`), and the `update_slot_commit` push remains for graph
+bookkeeping; but the regeneration *decision* is the pull check above. Staleness is
+still lazy: a consumer re-resolves the next time it is *called*, not eagerly.
+
+### Interpreted slots branch before resolution
+
+One resolution path sits *before* `RoutingPolicy.decide`: if `slot_spec.interpreted`
+is set and the slot has not yet promoted, `execute_slot` hands off to
+`_execute_interpreted_slot` (per-call LLM, accumulate examples, promote to a normal
+commit once a residual reproduces held-out examples). After promotion the slot has
+an ordinary commit and flows through the standard §4–§7 path unchanged. Full
+detail: [`interpreted-mode.md`](interpreted-mode.md).
+
+---
+
+## 9. End-to-end worked example
 
 Trace `host = semi(f"extract the domain from {url}")` across two calls.
 
@@ -547,3 +626,12 @@ implementation going forward.
   implementation content-addressably, makes the newest branch head per slot the
   active one, and emits a flat dispatch module that subsequent calls import with
   no model invocation.
+- **Reactivity** (`reactivity/`) rides a `DataFlow` (incl. the producing commit id)
+  on each `list`/`dict`/dataclass result, carried across the `#>` unwrap. Edges are
+  refreshed to the current call's inputs, and invalidation is **pull-based** on the
+  consumed commit id — so a changed upstream forces the consumer to re-resolve,
+  mutual dependencies are caught without a graph cycle and settle without churn, and
+  a dropped dependency never over-invalidates.
+- **Interpreted mode** (`interpreted.py`) is an opt-in pre-resolution branch:
+  per-call LLM that promotes itself to a normal cached commit once a residual
+  reproduces held-out examples (see [`interpreted-mode.md`](interpreted-mode.md)).

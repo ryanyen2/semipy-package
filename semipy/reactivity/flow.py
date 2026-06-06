@@ -131,14 +131,20 @@ class _SemiFlowList(list[Any]):
     """List subclass so producer flow can be stored (built-in list rejects arbitrary attributes)."""
 
 
+class _SemiFlowDict(dict[Any, Any]):
+    """Dict subclass so producer flow can be stored (built-in dict rejects arbitrary attributes)."""
+
+
 def attach_producer_flow(result: Any, flow: DataFlow) -> Any:
     """
     Store *flow* on *result* for dependency tracking.
 
-    Plain ``list`` instances cannot take new attributes; those are wrapped in
-    ``_SemiFlowList`` and the same flow is attached to each element when
-    ``setattr`` succeeds, so downstream slots that receive a single row still
-    see upstream provenance.
+    Built-in ``list``/``dict`` instances cannot take new attributes; those are
+    wrapped in ``_SemiFlowList`` / ``_SemiFlowDict`` (transparent subclasses) so
+    the value still behaves like a list/dict downstream. For lists, the same flow
+    is attached to each element when ``setattr`` succeeds, so a downstream slot
+    that receives a single row still sees upstream provenance. Plain scalars
+    (``int``/``str``/``bool``/``None``) cannot carry flow and are returned as-is.
     """
     if result is None:
         return result
@@ -148,12 +154,16 @@ def attach_producer_flow(result: Any, flow: DataFlow) -> Any:
     except (TypeError, AttributeError):
         pass
     if isinstance(result, list):
-        wrapped = _SemiFlowList(result)
-        setattr(wrapped, FLOW_ATTR, flow)
-        for item in wrapped:
+        wrapped_list = _SemiFlowList(result)
+        setattr(wrapped_list, FLOW_ATTR, flow)
+        for item in wrapped_list:
             try:
                 setattr(item, FLOW_ATTR, flow)
             except (TypeError, AttributeError):
                 pass
-        return wrapped
+        return wrapped_list
+    if isinstance(result, dict):
+        wrapped_dict = _SemiFlowDict(result)
+        setattr(wrapped_dict, FLOW_ATTR, flow)
+        return wrapped_dict
     return result

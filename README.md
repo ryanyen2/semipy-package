@@ -32,6 +32,7 @@ used — and how the pieces fit together, see
 - [docs/behavioral-contract.md](docs/behavioral-contract.md) — the contract subsystem that records *why* each regeneration happened and *what its effect was*.
 - [docs/effects.md](docs/effects.md) — reified, verifiable, revertable real-world effects (the `fx` capability, shadow worlds, the blast-radius proof, the effect ledger).
 - [docs/sketch-library.md](docs/sketch-library.md) — pattern learning and the INSTANTIATE decision (satisfy a new slot by substitution, no LLM call).
+- [docs/interpreted-mode.md](docs/interpreted-mode.md) — interpret-until-shape-stable slots (`interpreted=True`): per-call LLM that promotes itself to cached code once a residual reproduces held-out examples.
 
 ## Install
 
@@ -168,6 +169,44 @@ def analyze(entry: str) -> dict:
 
     return {"ip": ip, "error": is_error}
 ```
+
+### Interpreted mode (interpret-until-shape-stable)
+
+By default a slot compiles to a Python function on its first call. For operations
+whose answer genuinely needs the model on every input (summarize, judge), or that
+you want to keep model-backed until they prove they generalize, mark the slot
+`interpreted=True`. It calls the LLM per call (memoized), and **promotes itself to a
+normal cached function** once a synthesized residual reproduces held-out examples;
+after that it runs with no LLM, like any other cached slot.
+
+```python
+from typing import Literal
+from semipy import semi, semiformal
+
+# extraction/parsing: interprets a few calls, then promotes to cached code
+ts = semi(f"extract the bracketed timestamp from: {line}", interpreted=True)
+
+# classification: constrain the labels with a Literal/Enum so it can promote
+Family = Literal["scoreboard_child", "worker_env_error", "other"]
+fam = semi(f"classify this log body: {body}", expected_type=Family, interpreted=True)
+
+# every #> slot in the function (incl. multi-output blocks)
+@semiformal(interpreted=True)
+def parse(line: str) -> dict:
+    #> extract the bracketed timestamp into ts and the level into level
+    ts = ...
+    level = ...
+    return {"ts": ts, "level": level}
+
+# summarize/judge: never reproduces held-out output, so it stays interpreted (correct)
+gist = semi(f"one-sentence summary of: {passage}", interpreted=True)
+```
+
+Promotion is gated by **held-out** validation run in the sandboxed gist executor, so
+a residual that only memorizes the examples — or an operation that can't be expressed
+as a deterministic function — is rejected and the slot keeps interpreting. The
+standalone `interpreted(...)` / `InterpretedOp` helper exposes the same loop without
+the cache, for experiments. Full detail: [docs/interpreted-mode.md](docs/interpreted-mode.md).
 
 ## Reasoning surface (`#<` lines)
 

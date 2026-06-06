@@ -44,6 +44,10 @@ class SlotStatus:
     stale_reason: str = ""
     downstream_requirements: dict[str, Any] = field(default_factory=dict)
     stale_usage_ids: set[str] = field(default_factory=set)
+    # upstream_key -> producing_commit_id this slot last resolved against. Drives the
+    # pull-based input-staleness check (see stale_against_inputs): a slot is stale when
+    # an upstream it actually consumed now presents a different commit.
+    consumed: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -99,6 +103,59 @@ def add_dependency(
     _ensure_status(graph, upstream)
     _ensure_status(graph, downstream)
     return True
+
+
+def _remove_edge_keys(graph: DependencyGraph, uk: str, dk: str) -> bool:
+    before = len(graph.edges)
+    graph.edges = [
+        e for e in graph.edges
+        if not (e.upstream.key() == uk and e.downstream.key() == dk)
+    ]
+    if uk in graph.forward_adj:
+        graph.forward_adj[uk].discard(dk)
+    if dk in graph.backward_adj:
+        graph.backward_adj[dk].discard(uk)
+    return len(graph.edges) < before
+
+
+def remove_dependency(graph: DependencyGraph, upstream: SlotRef, downstream: SlotRef) -> bool:
+    """Remove the upstream -> downstream edge if present. Returns True if removed."""
+    return _remove_edge_keys(graph, upstream.key(), downstream.key())
+
+
+def set_incoming_edges(graph: DependencyGraph, downstream: SlotRef, upstreams: Any) -> None:
+    """Make ``downstream``'s incoming edges exactly the observed ``upstreams``: prune
+    edges from producers no longer feeding this slot, add newly observed ones. This
+    keeps the graph an accurate record of the *current* data flow, so a dependency
+    removed in user code stops triggering invalidation (no ghost edges)."""
+    dk = downstream.key()
+    want = {u.key() for u in upstreams}
+    for uk in list(graph.backward_adj.get(dk, set())):
+        if uk not in want:
+            _remove_edge_keys(graph, uk, dk)
+    for u in upstreams:
+        add_dependency(graph, upstream=u, downstream=downstream)
+
+
+def record_consumed(graph: DependencyGraph, downstream: SlotRef, observed: dict[str, str]) -> None:
+    """Record the producing commit of each upstream ``downstream`` resolved against
+    this call, so a later call can detect whether a consumed upstream changed."""
+    st = _ensure_status(graph, downstream)
+    st.consumed = dict(observed)
+
+
+def stale_against_inputs(graph: DependencyGraph, downstream: SlotRef, observed: dict[str, str]) -> bool:
+    """Pull-based staleness: True if an upstream this slot *previously consumed* now
+    presents a different producing commit. Only currently-observed upstreams are
+    compared, so a dropped dependency never triggers staleness (fixes
+    over-invalidation), and a mutual dependency is detected via the input's commit id
+    without needing a graph cycle (fixes under-invalidation), and it settles once the
+    slot regenerates against the new commit (no churn)."""
+    st = graph.statuses.get(downstream.key())
+    if st is None:
+        return False
+    consumed = getattr(st, "consumed", None) or {}
+    return any(uk in consumed and observed.get(uk) != consumed.get(uk) for uk in observed)
 
 
 def get_transitive_downstream(graph: DependencyGraph, slot_ref: SlotRef) -> set[str]:
@@ -222,6 +279,7 @@ def _graph_to_serializable(graph: DependencyGraph) -> dict[str, Any]:
             "stale_reason": st.stale_reason,
             "downstream_requirements": st.downstream_requirements,
             "stale_usage_ids": list(getattr(st, "stale_usage_ids", set()) or set()),
+            "consumed": dict(getattr(st, "consumed", {}) or {}),
         }
         for k, st in graph.statuses.items()
     }
@@ -258,6 +316,7 @@ def _graph_from_serializable(data: dict[str, Any]) -> DependencyGraph:
             stale_reason=st_data.get("stale_reason", ""),
             downstream_requirements=dict(st_data.get("downstream_requirements", {})),
             stale_usage_ids=set(st_data.get("stale_usage_ids", [])),
+            consumed=dict(st_data.get("consumed", {})),
         )
     graph.forward_adj.update({k: set(v) for k, v in data.get("forward_adj", {}).items()})
     graph.backward_adj.update({k: set(v) for k, v in data.get("backward_adj", {}).items()})
