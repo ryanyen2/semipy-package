@@ -313,12 +313,12 @@ Keep "reasoning" under 3 sentences. List at most 5 problematic_inputs \
 
 
 def _create_decision_model() -> tuple[Any, Any] | tuple[None, None]:
-    # The reuse/adapt judge is the verifier role; centralized factory resolves the
-    # model id via config.model_for_role('verifier') and returns (None, None) when
-    # no key is configured (caller then defaults to REUSE).
+    # The reuse/adapt judge is the version-checker role; the centralized factory
+    # resolves the model id via config.model_for_role('version_checker') (falling
+    # back to openai_model) and returns (None, None) with no key (caller -> REUSE).
     from semipy.orchestration.runtime import make_responses_model
 
-    return make_responses_model("verifier")
+    return make_responses_model("version_checker")
 
 
 def _build_evidence_prompt(
@@ -411,7 +411,8 @@ async def _judge_async(
         real_data=real_data,
     )
 
-    result = await agent.run(prompt)
+    # Hard timeout so a stalled judge call cannot block the caller forever.
+    result = await asyncio.wait_for(agent.run(prompt), timeout=get_config().judge_timeout)
     return result.output
 
 

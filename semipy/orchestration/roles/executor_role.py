@@ -79,6 +79,16 @@ def run_gist(gist_source: str, *, timeout: Optional[int] = None, cwd: Optional[s
     async role already on the shared loop, use ``run_gist_async`` instead
     (``execute_sync`` owns its own loop and would clash with a running one).
     """
+    import asyncio
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass  # no running loop -> the sync path is safe
+    else:
+        raise RuntimeError(
+            "run_gist() called from within a running event loop; use run_gist_async()"
+        )
     result = _make_executor(timeout).execute_sync(gist_source, cwd=cwd)
     return _evidence_from_result(result)
 

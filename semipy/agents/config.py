@@ -32,11 +32,16 @@ class SemiConfig:
     orchestrator_model: Optional[str] = None
     coder_model: Optional[str] = None
     verifier_model: Optional[str] = None
+    version_checker_model: Optional[str] = None
     explorer_model: Optional[str] = None
     surfacer_model: Optional[str] = None
     #: Number of LLM alignment-judge samples the verifier draws per verdict (majority vote).
     #: Correctness-first: >1 trades tokens for a more reliable verdict. 1 = single judgment.
     verifier_vote_samples: int = 3
+    #: Hard per-call timeout (seconds) for an LLM judge (alignment verifier / reuse judge).
+    #: A stalled call would otherwise block the shared loop's fut.result() indefinitely;
+    #: on timeout the judge yields no verdict and the aggregator abstains (reuse/pass).
+    judge_timeout: int = 60
     e2b_api_key: Optional[str] = field(default_factory=lambda: os.getenv("E2B_API_KEY"))
     gist_timeout: int = 30
     cache_dir: Path = field(default_factory=lambda: Path(".semiformal"))

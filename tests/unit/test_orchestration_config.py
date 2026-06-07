@@ -63,6 +63,22 @@ def test_verifier_vote_samples_default():
     assert SemiConfig().verifier_vote_samples == 3
 
 
+def test_judge_timeout_default():
+    # Hard per-call judge timeout so a stalled call can't block the shared loop.
+    assert SemiConfig().judge_timeout == 60
+
+
+def test_version_checker_model_is_its_own_knob():
+    cfg = SemiConfig()
+    cfg.openai_model = "gpt-base"
+    # Falls back to the global model until set.
+    assert cfg.model_for_role("version_checker") == "gpt-base"
+    cfg.version_checker_model = "gpt-router"
+    assert cfg.model_for_role("version_checker") == "gpt-router"
+    # Independent of the verifier (alignment) model.
+    assert cfg.model_for_role("verifier") == "gpt-base"
+
+
 # --- make_responses_model -------------------------------------------------
 
 def test_make_responses_model_returns_none_without_key(fresh_config):

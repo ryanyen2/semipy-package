@@ -126,3 +126,17 @@ def test_parse_io_pairs_prefers_last_valid_array():
         '[{"input": "x", "output": "X"}]\n'
     )
     assert executor_role._parse_io_pairs(stdout) == [{"input": "x", "output": "X"}]
+
+
+def test_run_gist_refuses_to_run_inside_a_running_loop():
+    # Guard: calling the sync run_gist from within a running event loop would clash
+    # with execute_sync's own asyncio.run -- it must raise, not deadlock.
+    import asyncio
+
+    import pytest
+
+    async def _inner():
+        return executor_role.run_gist("print('x')")
+
+    with pytest.raises(RuntimeError, match="run_gist_async"):
+        asyncio.run(_inner())

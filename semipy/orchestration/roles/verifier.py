@@ -96,7 +96,9 @@ async def _alignment_judge_async(prompt: str) -> Optional[AlignmentVerdict]:
             output_type=AlignmentVerdict,
             instructions=_ALIGNMENT_SYSTEM,
         )
-        result = await agent.run(prompt)
+        # Hard timeout: a stalled judge call must not hang the gather (and thus the
+        # blocking embed_run) forever; on timeout this judge abstains (returns None).
+        result = await asyncio.wait_for(agent.run(prompt), timeout=get_config().judge_timeout)
         return result.output
     except Exception:
         return None
