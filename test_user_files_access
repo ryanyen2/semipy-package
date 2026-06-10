@@ -1,0 +1,84 @@
+from pathlib import Path
+
+from semipy import configure
+from semipy.agents.executor import GistExecutor
+
+
+csv_path = (
+    Path(__file__).resolve().parents[1]
+    / "Archive"
+    / "data"
+    / "seattle-weather.csv"
+)
+helper_path = Path(__file__).resolve().with_name("demo_weather_helper.py")
+
+helper_path.write_text(
+    """import csv
+
+
+def load_weather_csv(csv_path):
+    with open(csv_path, newline="") as f:
+        return list(csv.DictReader(f))
+
+
+def describe_first_weather(rows):
+    return rows[0].get("weather") if rows else None
+""",
+    encoding="utf-8",
+)
+
+configure(kernel_allowed_folders=[str(csv_path)])
+
+source = f"""
+import importlib
+import os
+import sys
+
+import demo_weather_helper
+
+csv_path = {str(csv_path)!r}
+demo_weather_helper = importlib.reload(demo_weather_helper)
+
+checks = {{
+    "cwd": os.getcwd(),
+    "python": sys.executable,
+    "csv_path": csv_path,
+    "csv_exists": os.path.exists(csv_path),
+    "helper_file": demo_weather_helper.__file__,
+}}
+
+rows = demo_weather_helper.load_weather_csv(csv_path)
+
+result = {{
+    **checks,
+    "row_count": len(rows),
+    "columns": list(rows[0].keys()) if rows else [],
+    "first_weather": demo_weather_helper.describe_first_weather(rows),
+}}
+
+print("__GIST_RESULT__", repr(result))
+"""
+
+print("=== GIST SOURCE SENT TO DOCKER ===")
+print(source)
+print("=== END GIST SOURCE ===")
+
+executor = GistExecutor(
+    backend="kernel",
+    kernel_port=8890,
+    kernel_container_name="semipy-kernel-container-test",
+)
+
+try:
+    result = executor.execute_sync(source)
+finally:
+    executor.close_sync()
+
+print("=== EXECUTION RESULT ===")
+print(result)
+
+if not result.success:
+    raise SystemExit(result.error)
+
+print("=== PARSED RESULT ===")
+print(result.result_repr)

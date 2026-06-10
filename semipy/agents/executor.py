@@ -1,13 +1,16 @@
 """
 Gist execution for validation during code generation.
 
-Runs generated code either in an E2B sandbox (when e2b-code-interpreter is
-installed and E2B_API_KEY is set) or in a local subprocess (fallback).
+Runs generated code in a configured backend:
+- Docker/Jupyter kernel when requested
+- E2B sandbox when available and configured
+- local subprocess fallback
 """
 from __future__ import annotations
 
 import asyncio
 import os
+from pathlib import Path
 import subprocess
 import sys
 import tempfile
@@ -38,6 +41,35 @@ def subprocess_env_with_user_path() -> dict[str, str]:
     if paths:
         env["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(paths))
     return env
+
+
+def _find_project_root(start: Path) -> Path:
+    """Find a likely project root by walking upward from a file or directory."""
+    start = start.expanduser().resolve()
+    current = start if start.is_dir() else start.parent
+    markers = (
+        ".git",
+        "pyproject.toml",
+        "setup.py",
+        "setup.cfg",
+        "requirements.txt",
+        "uv.lock",
+    )
+    for candidate in (current, *current.parents):
+        if any((candidate / marker).exists() for marker in markers):
+            return candidate
+    return current
+
+
+def _split_config_paths(*values: str) -> list[str]:
+    """Split comma-separated path config values while preserving order."""
+    paths: list[str] = []
+    for value in values:
+        for path in value.split(","):
+            path = path.strip()
+            if path and path not in paths:
+                paths.append(path)
+    return paths
 
 
 @dataclass
@@ -84,21 +116,61 @@ class GistExecutor:
         self,
         timeout: int = 30,
         e2b_api_key: Optional[str] = None,
+        backend: str = "auto",
+        kernel_image_name: str = "kernel-gateway-demo",
+        kernel_container_name: str = "semipy-kernel-container",
+        kernel_host: str = "127.0.0.1",
+        kernel_port: int = 8888,
+        kernel_required_packages: Optional[list[str]] = None,
+        kernel_extra_mounts: Optional[list[str]] = None,
+        kernel_reuse_container: bool = False,
     ) -> None:
         self.timeout = timeout
+        self.backend = (backend or "auto").lower()
         self._e2b_api_key = e2b_api_key
         self._e2b_sandbox: Any = None
-        self._use_e2b = bool(e2b_api_key) and _e2b_available()
+        self._use_e2b = self.backend in {"auto", "e2b"} and bool(e2b_api_key) and _e2b_available()
+        self._kernel_image_name = kernel_image_name
+        self._kernel_container_name = kernel_container_name
+        self._kernel_host = kernel_host
+        self._kernel_port = kernel_port
+        self._kernel_required_packages = kernel_required_packages or []
+        if kernel_extra_mounts is None:
+            try:
+                from semipy.agents.config import get_config
+
+                config = get_config()
+                kernel_extra_mounts = _split_config_paths(
+                    config.kernel_extra_mounts,
+                    config.kernel_allowed_folders,
+                )
+            except Exception:
+                kernel_extra_mounts = []
+        self._kernel_extra_mounts = kernel_extra_mounts
+        self._kernel_reuse_container = kernel_reuse_container
+        self._kernel_executor: Any = None
+        self._kernel_workspace_dir: Optional[Path] = None
+        self._kernel_mounts: tuple[Path, ...] = ()
 
     async def close_async(self) -> None:
-        """Kill the E2B sandbox if one was created."""
-        if self._e2b_sandbox is None:
-            return
-        try:
-            await self._e2b_sandbox.kill()
-        except Exception:
-            pass
-        self._e2b_sandbox = None
+        """Close any stateful execution backend resources."""
+        if self._kernel_executor is not None:
+            try:
+                self._kernel_executor.stop()
+            except Exception:
+                pass
+            self._kernel_executor = None
+
+        if self._e2b_sandbox is not None:
+            try:
+                await self._e2b_sandbox.kill()
+            except Exception:
+                pass
+            self._e2b_sandbox = None
+
+    def close_sync(self) -> None:
+        """Close stateful execution resources from synchronous callers."""
+        asyncio.run(self.close_async())
 
     async def execute_async(
         self,
@@ -106,18 +178,19 @@ class GistExecutor:
         cwd: Optional[str] = None,
         user_source_path: Optional[str] = None,
     ) -> ExecutionResult:
+        if self.backend == "kernel":
+            return await self._execute_kernel(gist_source, cwd=cwd, user_source_path=user_source_path)
+        if self.backend == "subprocess":
+            return await self._execute_subprocess(gist_source, cwd=cwd)
         if self._use_e2b:
             return await self._execute_e2b(gist_source, user_source_path=user_source_path)
         return await self._execute_subprocess(gist_source, cwd=cwd)
 
     async def execute_action_program_async(self, composed_code: str) -> str:
-        """Run a composed action program; returns a JSON string of observation keys."""
+        """Run a composed action program; returns a JSON string with ObservationBundle keys."""
         import json as _json
 
-        if self._use_e2b:
-            result = await self._execute_e2b(composed_code)
-        else:
-            result = await self._execute_subprocess(composed_code)
+        result = await self.execute_async(composed_code)
 
         if not result.success and not result.stdout:
             return _json.dumps({"action_errors": [result.error or "execution failed"]})
@@ -154,6 +227,119 @@ class GistExecutor:
     ) -> ExecutionResult:
         """Execute synchronously (blocks)."""
         return asyncio.run(self.execute_async(gist_source, cwd=cwd, user_source_path=user_source_path))
+
+    # ── Docker/Jupyter kernel backend ───────────────────────────────────────
+
+    def _resolve_kernel_workspace(
+        self,
+        cwd: Optional[str] = None,
+        user_source_path: Optional[str] = None,
+    ) -> Path:
+        """Resolve the host project folder that should be mounted into Docker."""
+        if cwd:
+            return _find_project_root(Path(cwd))
+        if user_source_path:
+            return _find_project_root(Path(user_source_path))
+        return _find_project_root(Path.cwd())
+
+    def _resolve_kernel_mounts(self) -> tuple[Path, ...]:
+        """Resolve additional host paths to mount at the same absolute paths."""
+        mounts: list[Path] = []
+        for raw_path in self._kernel_extra_mounts:
+            path = Path(raw_path).expanduser().resolve()
+            mount = path.parent if path.is_file() else path
+            if mount not in mounts:
+                mounts.append(mount)
+        return tuple(mounts)
+
+    def _get_kernel_executor(
+        self,
+        cwd: Optional[str] = None,
+        user_source_path: Optional[str] = None,
+    ) -> Any:
+        """Start and reuse the Docker/Jupyter kernel executor."""
+        workspace_dir = self._resolve_kernel_workspace(
+            cwd=cwd,
+            user_source_path=user_source_path,
+        )
+        extra_mounts = self._resolve_kernel_mounts()
+        if (
+            self._kernel_executor is not None
+            and (
+                self._kernel_workspace_dir != workspace_dir
+                or self._kernel_mounts != extra_mounts
+            )
+        ):
+            try:
+                self._kernel_executor.stop()
+            except Exception:
+                pass
+            self._kernel_executor = None
+
+        if self._kernel_executor is None:
+            from semipy.kernel_container import ContainerKernelExecutor
+
+            self._kernel_executor = ContainerKernelExecutor(
+                container_name=self._kernel_container_name,
+                image_name=self._kernel_image_name,
+                host=self._kernel_host,
+                port=self._kernel_port,
+                required_packages=self._kernel_required_packages,
+                workspace_dir=workspace_dir,
+                extra_mounts=list(extra_mounts),
+                reuse_container=self._kernel_reuse_container,
+            )
+            self._kernel_executor.start()
+            self._kernel_workspace_dir = workspace_dir
+            self._kernel_mounts = extra_mounts
+        return self._kernel_executor
+
+    async def _execute_kernel(
+        self,
+        source: str,
+        cwd: Optional[str] = None,
+        user_source_path: Optional[str] = None,
+    ) -> ExecutionResult:
+        """Run source in a persistent Docker-hosted Jupyter kernel."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None,
+            self._execute_kernel_sync,
+            source,
+            cwd,
+            user_source_path,
+        )
+
+    def _execute_kernel_sync(
+        self,
+        source: str,
+        cwd: Optional[str] = None,
+        user_source_path: Optional[str] = None,
+    ) -> ExecutionResult:
+        try:
+            result, stdout, error = self._get_kernel_executor(
+                cwd=cwd,
+                user_source_path=user_source_path,
+            ).execute(source)
+            stdout_clean, result_repr = _parse_gist_result_stdout(stdout or "")
+            if result_repr is None and result is not None:
+                result_repr = repr(result)
+            if error:
+                return ExecutionResult(
+                    success=False,
+                    stdout=stdout_clean,
+                    stderr="",
+                    result_repr=result_repr,
+                    error=error[:2000],
+                )
+            return ExecutionResult(
+                success=True,
+                stdout=stdout_clean,
+                stderr="",
+                result_repr=result_repr,
+            )
+        except Exception as exc:
+            return ExecutionResult(success=False, error=str(exc))
 
     # ── subprocess backend ──────────────────────────────────────────────────
 
