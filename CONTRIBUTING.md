@@ -100,7 +100,7 @@ The extension lives in `semipy-vscode/`. It is built and published with `@vscode
 **1. Bump version** in `semipy-vscode/package.json`:
 
 ```json
-"version": "0.3.1"
+"version": "0.3.2"
 ```
 
 **2. Install deps:**
