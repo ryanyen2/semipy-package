@@ -16,7 +16,7 @@ false-positive germ costs a probe; a missed germ hides a fork.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 # -- Germ identifiers: the reusable taxonomy --------------------------------
