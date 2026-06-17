@@ -1,7 +1,7 @@
 ---
 title: "feat: Surface the model's silent decisions as navigable forks"
 type: feat
-status: active
+status: completed
 date: 2026-06-16
 origin: docs/brainstorms/2026-06-16-surface-silent-decisions-requirements.md
 ---
