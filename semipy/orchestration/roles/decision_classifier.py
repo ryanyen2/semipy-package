@@ -43,6 +43,8 @@ def _representative_output(divergence: DivergenceResult, cluster) -> Any:
     rec = run.records[0]
     if rec.get("error"):
         return f"raises {str(rec['error']).split(':', 1)[0]}"
+    if "effects" in rec:  # effectful slot: the intended effect IS the output
+        return list(rec["effects"])
     return rec.get("repr", rec.get("json"))
 
 
@@ -56,6 +58,10 @@ def _deterministic_fate_label(divergence: DivergenceResult, cluster) -> str:
 
 def _compute_consequence(divergence: DivergenceResult) -> tuple[float, str]:
     """Classify the spread across branches into a consequence kind + score."""
+    # Effectful slots diverge on intended effects -> a structural-shape change.
+    if divergence.mode == "effectful":
+        return _KIND_SCORE["structural"], "structural"
+
     outs: list[Any] = []
     any_error = False
     for c in divergence.clusters:
