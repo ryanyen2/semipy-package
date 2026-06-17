@@ -24,6 +24,7 @@ from semipy.decisions.germs import (
 )
 from semipy.decisions.model import Branch, Decision, DecisionSet
 from semipy.decisions.persistence import attach_decision_set, decision_set_for
+from semipy.decisions.surface import format_decision_line, render_open_decisions
 
 __all__ = [
     "GERMS",
@@ -35,4 +36,6 @@ __all__ = [
     "DecisionSet",
     "attach_decision_set",
     "decision_set_for",
+    "render_open_decisions",
+    "format_decision_line",
 ]

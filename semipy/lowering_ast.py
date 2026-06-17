@@ -286,15 +286,22 @@ def _splice_assign_replacement(
 
 def strip_skeleton_lines(source: str) -> str:
     """
-    Replace each `#<` reasoning annotation line with a blank `#` line (same length budget:
-    one line per former `#<` line) so absolute line numbers stay aligned with prior runs.
+    Replace each system-managed skeleton line with a blank `#` line (same length
+    budget: one line per former skeleton line) so absolute line numbers stay
+    aligned with prior runs. Two skeleton surfaces are stripped:
+
+    - `#<` reasoning annotations (intent/given/by/unless/yields/verified)
+    - `#?` open-decision forks (the surfaced silent choices)
+
+    Both are derived, not user contract, so blanking them keeps `slot_id`, slot
+    ordinals, and line numbers stable when a fork is added, edited, or resolved.
     User `#>` spec lines are unchanged.
     """
     lines = source.splitlines(keepends=True)
     result: list[str] = []
     for line in lines:
         stripped = line.lstrip()
-        if stripped.startswith("#<"):
+        if stripped.startswith("#<") or stripped.startswith("#?"):
             indent = len(line) - len(stripped)
             rest = line.rstrip("\r\n")
             ending = line[len(rest) :]
