@@ -1305,6 +1305,93 @@ def execute_slot(
         )
 
 
+def _resolve_slot_with_decisions(
+    slot_spec: SlotSpec,
+    generation_spec: Any,
+    runtime_values: dict[str, Any],
+) -> tuple[Any, Any]:
+    """Draw N candidates and surface the model's silent fork (F0, opt-in).
+
+    Gated by ``config.decisions_enabled`` at the call site. Wraps the normal
+    single generation in a multi-candidate draw: the same ``generation_spec`` is
+    generated up to ``decision_max_candidates`` times, the candidates are
+    clustered by observed behavior, and -- when they diverge -- a ``DecisionSet``
+    is built so the fork can be surfaced and steered.
+
+    Returns ``(head_entry, decision_set)``. ``head_entry`` is the CacheEntry whose
+    source backs the heaviest runnable cluster (so its compiled fn flows through
+    the contract/effect gates unchanged). If every candidate fails generation,
+    falls back to a single ``SemiAgent().generate`` so error behavior is preserved.
+    """
+    from semipy.decisions.draw import resolve_with_decisions
+
+    cfg = get_config()
+    free_vars = [v for v in (slot_spec.free_variables or []) if v != "self"]
+
+    # Memoize by draw index so a pre-draw (for effectful detection) and the
+    # resolver's own draws share generations, and so the chosen head source maps
+    # back to its compiled CacheEntry.
+    by_index: dict[int, str | None] = {}
+    entry_by_source: dict[str, Any] = {}
+
+    def generate_candidate(i: int) -> str | None:
+        if i in by_index:
+            return by_index[i]
+        try:
+            entry = SemiAgent().generate(generation_spec)
+            src = entry.generated_source
+            by_index[i] = src
+            if src and src not in entry_by_source:
+                entry_by_source[src] = entry
+            return src
+        except Exception:
+            # A failed candidate is dropped (resolve_with_decisions filters None);
+            # never fabricate a candidate to make a fork appear.
+            by_index[i] = None
+            return None
+
+    # Detect effectfulness from the first candidate's compiled fn (conservative:
+    # pure path unless clearly effectful), so divergence is observed in the right
+    # mode -- reified EffectScript for effectful slots, return value otherwise.
+    effectful_runtime_values = None
+    first_src = generate_candidate(0)
+    if getattr(cfg, "effects_enabled", False) and first_src:
+        try:
+            from semipy.effects.inject import fn_is_effectful
+
+            first_entry = entry_by_source.get(first_src)
+            fn = getattr(first_entry, "compiled_fn", None)
+            if fn is not None and fn_is_effectful(fn):
+                effectful_runtime_values = dict(runtime_values)
+        except Exception:
+            effectful_runtime_values = None
+
+    sample_rows = (
+        None
+        if effectful_runtime_values is not None
+        else [{v: runtime_values.get(v) for v in free_vars}]
+    )
+
+    outcome = resolve_with_decisions(
+        generate_candidate=generate_candidate,
+        free_variables=free_vars,
+        sample_rows=sample_rows,
+        output_names=list(slot_spec.output_names or []) or None,
+        effectful_runtime_values=effectful_runtime_values,
+        slot_id=slot_spec.slot_id,
+        initial_candidates=getattr(cfg, "decision_initial_candidates", 3),
+        max_candidates=getattr(cfg, "decision_max_candidates", 5),
+        use_llm=True,
+    )
+
+    head_entry = entry_by_source.get(outcome.head_source or "")
+    if head_entry is None:
+        # All candidates failed, or the head source was not captured -> fall back
+        # to the unchanged single-generation path (raises as before on failure).
+        head_entry = SemiAgent().generate(generation_spec)
+    return head_entry, outcome.decision_set
+
+
 def _execute_slot_locked(
     slot_spec: SlotSpec,
     runtime_values: dict[str, Any],
@@ -1896,7 +1983,16 @@ def _execute_slot_locked(
         verify_failure_context=_verify_failure_msg,
         sketch_context=_sketch_context,
     )
-    entry = SemiAgent().generate(generation_spec)
+    # Multi-candidate draw to surface the model's silent fork (F0). Opt-in via
+    # decisions_enabled and only on a genuine generation (GENERATE/ADAPT); REUSE /
+    # INSTANTIATE never reach here. Off by default -> the single generation below.
+    _pending_decision_set = None
+    if config.decisions_enabled and resolution.decision in (Decision.GENERATE, Decision.ADAPT):
+        entry, _pending_decision_set = _resolve_slot_with_decisions(
+            slot_spec, generation_spec, runtime_values
+        )
+    else:
+        entry = SemiAgent().generate(generation_spec)
 
     # Behavioral-contract acceptance gate + effect tracing: the candidate must satisfy
     # carried-forward prior decisions before commit (enforces "don't forget"), and its
@@ -1936,6 +2032,16 @@ def _execute_slot_locked(
         change_record=_change_record,
     )
     add_commit_to_slot(slot, commit, branch_name, usage_id=slot_spec.slot_id)
+
+    # Surface the silent fork (F0): persist the DecisionSet on the slot so the #?
+    # surface + steering can render it. Empty/agreeing draws attach nothing.
+    if _pending_decision_set is not None and not _pending_decision_set.is_empty():
+        try:
+            from semipy.decisions.persistence import attach_decision_set
+
+            attach_decision_set(slot, _pending_decision_set)
+        except Exception:
+            pass
 
     # Quarantine any carried-forward cases the regeneration budget could not satisfy,
     # so the system makes forward progress and surfaces the conflict rather than livelocking.
