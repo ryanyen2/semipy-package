@@ -60,6 +60,8 @@ import {
   SemipyCodeLensProvider,
   SemipyInlayHintsProvider,
 } from "./features/slotAnnotations/slotEditorAnnotations";
+import { SemipyDecisionCodeLensProvider } from "./features/decisions/decisionCodeLens";
+import { createDecisionHoverProvider } from "./features/decisions/decisionHover";
 import { getSemipyOutputChannel } from "./logging/semipyOutputChannel";
 import {
   createSpecCommentSyntaxTypes,
@@ -195,6 +197,10 @@ export function activate(context: ExtensionContext): void {
     () => portalState.portal,
     () => cfg().get<boolean>("enableInlayHints") ?? true,
   );
+  const decisionLensProvider = new SemipyDecisionCodeLensProvider(
+    () => portalState.portal,
+    () => cfg().get<boolean>("enableDecisionSurface") ?? true,
+  );
 
   const linked = new LinkedHighlightCoordinator(
     () => cfg().get<number>("linkedHighlightFadeMs") ?? 1500,
@@ -282,6 +288,7 @@ export function activate(context: ExtensionContext): void {
     diag.refresh();
     codeLensProvider.refresh();
     inlayProvider.refresh();
+    decisionLensProvider.refresh();
     linked.onSelectionOrPortal(editor, portalState.portal, cacheDir);
     if (cfg().get<boolean>("notifyOnResolution") ?? true) {
       regressionDiag.refresh(editor, portalState.portal);
@@ -381,10 +388,19 @@ export function activate(context: ExtensionContext): void {
     diag,
     languages.registerCodeLensProvider({ language: "python", scheme: "file" }, codeLensProvider),
     languages.registerInlayHintsProvider({ language: "python", scheme: "file" }, inlayProvider),
+    languages.registerCodeLensProvider({ language: "python", scheme: "file" }, decisionLensProvider),
+    languages.registerHoverProvider(
+      { language: "python", scheme: "file" },
+      createDecisionHoverProvider(
+        () => portalState.portal,
+        () => cfg().get<boolean>("enableDecisionSurface") ?? true,
+      ),
+    ),
     workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("semipy")) {
         codeLensProvider.refresh();
         inlayProvider.refresh();
+        decisionLensProvider.refresh();
         refreshAllDecorations(window.activeTextEditor);
       }
     }),
@@ -427,6 +443,69 @@ export function activate(context: ExtensionContext): void {
         void revealSlot(slotId);
       }
     }),
+    commands.registerCommand(
+      "semipy.pickDecision",
+      async (slotId: string, decisionId: string, fate: string) => {
+        const ed = window.activeTextEditor;
+        if (ed) {
+          refreshPortalForUri(ed.document.uri.fsPath, portalState);
+        }
+        const root = portalState.workspaceRoot;
+        const portalPath = portalState.portalPath;
+        if (!root || !portalPath || !slotId || !decisionId || !fate) {
+          void window.showErrorMessage("Semipy: no portal / decision for pick.");
+          return;
+        }
+        const rel = path.relative(root, portalPath);
+        const r = await runSemipyCli(
+          ["pick-decision", "--portal", rel, "--slot-id", slotId, "--decision-id", decisionId, "--fate", fate],
+          root,
+        );
+        if (r.code !== 0 && r.code !== null) {
+          void window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "pick failed")}`);
+          return;
+        }
+        void window.showInformationMessage(
+          (r.stdout || r.stderr || `Picked "${fate}".`).trim().slice(0, 300),
+        );
+        refreshAllDecorations(window.activeTextEditor);
+      },
+    ),
+    commands.registerCommand(
+      "semipy.assertDecision",
+      async (slotId: string, decisionId: string) => {
+        const ed = window.activeTextEditor;
+        if (ed) {
+          refreshPortalForUri(ed.document.uri.fsPath, portalState);
+        }
+        const root = portalState.workspaceRoot;
+        const portalPath = portalState.portalPath;
+        if (!root || !portalPath || !slotId || !decisionId) {
+          void window.showErrorMessage("Semipy: no portal / decision for assert.");
+          return;
+        }
+        const property = await window.showInputBox({
+          prompt: "Property the result must satisfy",
+          placeHolder: "e.g. a site with all-null readings is omitted",
+        });
+        if (!property || !property.trim()) {
+          return;
+        }
+        const rel = path.relative(root, portalPath);
+        const r = await runSemipyCli(
+          ["assert-decision", "--portal", rel, "--slot-id", slotId, "--decision-id", decisionId, "--property", property.trim()],
+          root,
+        );
+        if (r.code !== 0 && r.code !== null) {
+          void window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "assert failed")}`);
+          return;
+        }
+        void window.showInformationMessage(
+          (r.stdout || r.stderr || "Property recorded; regenerates against it on next run.").trim().slice(0, 300),
+        );
+        refreshAllDecorations(window.activeTextEditor);
+      },
+    ),
     commands.registerCommand(
       "semipy.relaxGuarantee",
       async (item: { slot?: SlotJson; guarantee?: { label?: string; caseIds?: string[] } }) => {

@@ -1,0 +1,4 @@
+node_modules/
+.test-emit/
+.test-emit-decisions/
+*.vsix

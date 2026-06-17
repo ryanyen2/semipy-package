@@ -2,7 +2,7 @@
   "name": "semipy-vscode",
   "displayName": "Semipy",
   "description": "Editor support for semipy semiformal specs (#> / #<), portal history, and dispatch navigation.",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "publisher": "semipy",
   "author": "Ryan Yen",
   "keywords": [
@@ -119,6 +119,14 @@
         "command": "semipy.resetSlotVersion",
         "title": "Semipy: Delete this version",
         "icon": "$(trash)"
+      },
+      {
+        "command": "semipy.pickDecision",
+        "title": "Semipy: Pick a fate for this decision"
+      },
+      {
+        "command": "semipy.assertDecision",
+        "title": "Semipy: Assert a property for this decision"
       }
     ],
     "menus": {
@@ -158,7 +166,9 @@
         { "command": "semipy.pickSlotVersion", "when": "false" },
         { "command": "semipy.lockSlotVersion", "when": "false" },
         { "command": "semipy.unlockSlotVersion", "when": "false" },
-        { "command": "semipy.regenerateSlotDiagnostic", "when": "false" }
+        { "command": "semipy.regenerateSlotDiagnostic", "when": "false" },
+        { "command": "semipy.pickDecision", "when": "false" },
+        { "command": "semipy.assertDecision", "when": "false" }
       ]
     },
     "views": {
@@ -211,6 +221,11 @@
           "type": "boolean",
           "default": true,
           "description": "Show the Explanation Card on hover over a slot: why it changed, what it guarantees, what it touched."
+        },
+        "semipy.enableDecisionSurface": {
+          "type": "boolean",
+          "default": true,
+          "description": "Surface the model's silent forks (#? decisions) inline as a CodeLens picker + hover card, so you can steer them with one click."
         },
         "semipy.notifyOnResolution": {
           "type": "boolean",
@@ -286,6 +301,7 @@
     "watch": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --sourcemap --watch",
     "check": "tsc --noEmit",
     "test:slot-anchor": "tsc --module commonjs --target ES2022 --esModuleInterop --skipLibCheck --moduleResolution node --outDir .test-emit --rootDir src --strict false --declaration false src/features/slotAnnotations/slotLineResolve.ts src/data/portalLoader.ts src/features/splitEditor/correspondenceMap.ts && node test/slotLineResolve.test.js",
+    "test:decisions": "tsc --module commonjs --target ES2022 --esModuleInterop --skipLibCheck --moduleResolution node --outDir .test-emit-decisions --rootDir src --strict false --declaration false src/features/decisions/decisionInsight.ts && node test/decisionInsight.test.js",
     "package": "vsce package",
     "publish": "vsce publish"
   },

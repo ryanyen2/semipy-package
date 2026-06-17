@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.4.0] - 2026-06-17
+
+Surfaces the runtime's **silent decisions** (`semipy/decisions/`, runtime
+`decisions_enabled`) so the model's guesses are visible and steerable in the editor.
+
+- **`#?` decision surface** — for a slot whose generation forked (the candidates
+  disagreed), a `⎇` CodeLens picker sits on the slot anchor next to the health
+  sentence: the axis label plus one clickable chip per fate (`keep all remaining
+  60%`, `last word only 40%`) and `Assert…`. An informative hover card explains
+  the fork in plain language, shows the distribution and guard, and gives each
+  fate's concrete `input -> output`.
+- **Steer with one click** — **Pick a fate** runs `semipy pick-decision` (an
+  LLM-free head swap to the stored candidate) and reports the spec clause;
+  **Assert a property** prompts for a constraint and runs `semipy assert-decision`
+  (records a contract case + regenerates against it).
+- New setting `semipy.enableDecisionSurface` (default `true`). Render types
+  (`DecisionSetJson`) already shipped in 0.3.x; this release renders them.
+
 ## [0.3.2] - 2026-06-03
 
 Aligns with the semipy `0.3.0` runtime, which scopes a portal **per project** (the

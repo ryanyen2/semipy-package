@@ -27,6 +27,7 @@ every indicator appears only when it carries information.
 
 ### Steer it
 
+- **Silent decisions (`#?`)** — when the model had to guess (skip nulls vs count them as zero; the last word vs the whole remainder as a surname), the fork is surfaced inline: a `⎇` CodeLens picker on the slot (`⎇ multi-part last name · keep all remaining 60% · last word only 40% · Assert…`) plus an informative hover showing each fate's concrete `input -> output`. **Pick a fate** to swap the head to that candidate with one click (LLM-free); **Assert a property** to record a constraint the result must satisfy and regenerate against it. Requires `decisions_enabled=True` in the runtime.
 - **Pin as contract** — promote an inferred `#<` note to a `#>` contract line from a lightbulb or hover (zone-tinted: provenance vs effect). The next run honours it.
 - **Steering modes** — a status-bar control that explains each gate (contract gate, effect staging / gate / auto-apply, approval, pattern learning) and scaffolds the matching `configure(...)` call.
 - **Diagnostics and code actions** — quick-fix to regenerate a spec from a pipeline error.
@@ -57,6 +58,7 @@ every indicator appears only when it carries information.
 | `semipy.enableInlayHints` | `true` | Show last resolution (decision, commit id) as inlay hints on spec lines. |
 | `semipy.enableGutterHealth` | `true` | Show the per-slot health glyph in the gutter and overview ruler. |
 | `semipy.enableInsightHover` | `true` | Show the Explanation Card on hover (why / guarantees / effects). |
+| `semipy.enableDecisionSurface` | `true` | Surface the model's silent forks (`#?`) inline as a CodeLens picker + hover card. |
 | `semipy.notifyOnResolution` | `true` | Surface a brief message when semipy regenerates a slot, and a Problems-panel warning on regression. |
 | `semipy.dimGeneratedCode` | `true` | Dim machine-authored lines in the generated dispatch `.semi.py`; lines you edit return to full opacity. |
 | `semipy.enableSpecLineSyntax` | `true` | Paint `#>` / `#<` marker and body colors via editor decorations. |

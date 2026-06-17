@@ -35,7 +35,7 @@ __export(extension_exports, {
 });
 module.exports = __toCommonJS(extension_exports);
 var path10 = __toESM(require("path"));
-var import_vscode22 = require("vscode");
+var import_vscode24 = require("vscode");
 
 // src/data/portalLoader.ts
 var fs = __toESM(require("fs"));
@@ -3130,34 +3130,194 @@ var SemipyInlayHintsProvider = class {
   }
 };
 
-// src/features/specCommentSyntax/specCommentSyntaxDecorations.ts
+// src/features/decisions/decisionCodeLens.ts
 var import_vscode21 = require("vscode");
+
+// src/features/decisions/decisionInsight.ts
+var DECISION_GLYPH = "\u2387";
+function openDecisionsFor(slot) {
+  const ds = slot?.decision_set;
+  if (!ds || !Array.isArray(ds.decisions)) {
+    return [];
+  }
+  return ds.decisions.filter((d) => (d.status ?? "open") === "open" && (d.branches?.length ?? 0) > 1).sort((a, b) => (b.consequence ?? 0) - (a.consequence ?? 0));
+}
+function pct(weight) {
+  return Math.round((weight ?? 0) * 100);
+}
+function fateChip(b) {
+  return `${b.fate_label} ${pct(b.weight)}%`;
+}
+function axisLabel(d) {
+  return d.axis_label || d.germ || "decision";
+}
+function reprOf(v) {
+  if (v === void 0 || v === null) {
+    return "";
+  }
+  return typeof v === "string" ? v : JSON.stringify(v);
+}
+function trunc2(s, max) {
+  const t = s.replace(/\s+/g, " ").trim();
+  return t.length <= max ? t : t.slice(0, max - 1) + "\u2026";
+}
+function shortIO(b, max = 56) {
+  const inS = trunc2(reprOf(b.example_in), max);
+  const outS = trunc2(reprOf(b.example_out), max);
+  if (!inS && !outS) {
+    return "";
+  }
+  return `${inS} -> ${outS}`;
+}
+
+// src/features/decisions/decisionCodeLens.ts
+var SemipyDecisionCodeLensProvider = class {
+  constructor(getPortal, enabled) {
+    this.getPortal = getPortal;
+    this.enabled = enabled;
+  }
+  _onDidChange = new import_vscode21.EventEmitter();
+  onDidChangeCodeLenses = this._onDidChange.event;
+  refresh() {
+    this._onDidChange.fire();
+  }
+  provideCodeLenses(document) {
+    if (!this.enabled()) {
+      return [];
+    }
+    const portal = this.getPortal();
+    if (!portal || document.languageId !== "python") {
+      return [];
+    }
+    const out = [];
+    for (const slot of Object.values(portal.slots)) {
+      const decisions = openDecisionsFor(slot);
+      if (decisions.length === 0) {
+        continue;
+      }
+      const ui = resolveSlotUiLines(document, slot);
+      if (!ui || ui.codeLensLine0 >= document.lineCount) {
+        continue;
+      }
+      const range = new import_vscode21.Range(ui.codeLensLine0, 0, ui.codeLensLine0, 0);
+      const d = decisions[0];
+      const more = decisions.length > 1 ? `  (+${decisions.length - 1} more)` : "";
+      out.push(
+        new import_vscode21.CodeLens(range, {
+          title: `${DECISION_GLYPH} ${axisLabel(d)}${more}`,
+          command: "semipy.inspectSlot",
+          arguments: [slot.slot_id]
+        })
+      );
+      for (const b of d.branches) {
+        out.push(
+          new import_vscode21.CodeLens(range, {
+            title: fateChip(b),
+            command: "semipy.pickDecision",
+            arguments: [slot.slot_id, d.decision_id, b.fate_label]
+          })
+        );
+      }
+      out.push(
+        new import_vscode21.CodeLens(range, {
+          title: "Assert\u2026",
+          command: "semipy.assertDecision",
+          arguments: [slot.slot_id, d.decision_id]
+        })
+      );
+    }
+    return out;
+  }
+};
+
+// src/features/decisions/decisionHover.ts
+var import_vscode22 = require("vscode");
+function decisionCard(slotId, d) {
+  const lines = [];
+  lines.push(`${DECISION_GLYPH} **Silent decision** \u2014 \`${axisLabel(d)}\``);
+  lines.push("");
+  lines.push("The model had to guess here. Pick the behavior you meant, or assert a property it must satisfy.");
+  if (d.guard) {
+    lines.push("");
+    lines.push(`*Triggers when:* ${d.guard}`);
+  }
+  lines.push("");
+  for (const b of d.branches) {
+    const io = shortIO(b);
+    const tail = io ? `  \`${io}\`` : "";
+    lines.push(`- **${b.fate_label}** \xB7 ${pct(b.weight)}%${tail}`);
+  }
+  lines.push("");
+  const links = d.branches.map((b) => {
+    const q = encodeURIComponent(JSON.stringify([slotId, d.decision_id, b.fate_label]));
+    return `[$(check) ${b.fate_label}](command:semipy.pickDecision?${q})`;
+  });
+  const aq = encodeURIComponent(JSON.stringify([slotId, d.decision_id]));
+  links.push(`[$(pencil) Assert a property\u2026](command:semipy.assertDecision?${aq})`);
+  lines.push(links.join("  \xB7  "));
+  return lines.join("\n");
+}
+function createDecisionHoverProvider(getPortal, enabled) {
+  return {
+    provideHover(document, position, _token) {
+      if (!enabled()) {
+        return void 0;
+      }
+      const portal = getPortal();
+      if (!portal || document.languageId !== "python") {
+        return void 0;
+      }
+      for (const slot of Object.values(portal.slots)) {
+        const decisions = openDecisionsFor(slot);
+        if (decisions.length === 0) {
+          continue;
+        }
+        const ui = resolveSlotUiLines(document, slot);
+        if (!ui) {
+          continue;
+        }
+        if (position.line !== ui.codeLensLine0 && position.line !== ui.inlayLine0) {
+          continue;
+        }
+        const md = new import_vscode22.MarkdownString();
+        md.isTrusted = true;
+        md.supportThemeIcons = true;
+        md.appendMarkdown(decisions.map((d) => decisionCard(slot.slot_id, d)).join("\n\n---\n\n"));
+        return new import_vscode22.Hover(md);
+      }
+      return void 0;
+    }
+  };
+}
+
+// src/features/specCommentSyntax/specCommentSyntaxDecorations.ts
+var import_vscode23 = require("vscode");
 function createSpecCommentSyntaxTypes() {
   return {
-    specMarker: import_vscode21.window.createTextEditorDecorationType({
+    specMarker: import_vscode23.window.createTextEditorDecorationType({
       fontWeight: "600",
       light: { color: "#008f84" },
       dark: { color: "#4ec9b0" }
     }),
-    specBody: import_vscode21.window.createTextEditorDecorationType({
+    specBody: import_vscode23.window.createTextEditorDecorationType({
       light: { color: "#007a8a" },
       dark: { color: "#9cdcfe" }
     }),
-    reasoningMarker: import_vscode21.window.createTextEditorDecorationType({
+    reasoningMarker: import_vscode23.window.createTextEditorDecorationType({
       fontWeight: "600",
       light: { color: "#5a8a3d" },
       dark: { color: "#6a9955" }
     }),
-    reasoningBody: import_vscode21.window.createTextEditorDecorationType({
+    reasoningBody: import_vscode23.window.createTextEditorDecorationType({
       light: { color: "#3d6b2e" },
       dark: { color: "#b5cea8" }
     }),
-    reasoningKeyProvenance: import_vscode21.window.createTextEditorDecorationType({
+    reasoningKeyProvenance: import_vscode23.window.createTextEditorDecorationType({
       fontWeight: "600",
       light: { color: "#4a6fa5" },
       dark: { color: "#7fa6d8" }
     }),
-    reasoningKeyEffect: import_vscode21.window.createTextEditorDecorationType({
+    reasoningKeyEffect: import_vscode23.window.createTextEditorDecorationType({
       fontWeight: "600",
       light: { color: "#8a6a2a" },
       dark: { color: "#d7a65f" }
@@ -3181,8 +3341,8 @@ function rangesOnLine(line, lineIdx) {
       const markerEnd = gt + mGt[0].length;
       const bodyEnd = line.length;
       spec.push({
-        marker: new import_vscode21.Range(new import_vscode21.Position(lineIdx, markerStart), new import_vscode21.Position(lineIdx, markerEnd)),
-        body: new import_vscode21.Range(new import_vscode21.Position(lineIdx, markerEnd), new import_vscode21.Position(lineIdx, bodyEnd))
+        marker: new import_vscode23.Range(new import_vscode23.Position(lineIdx, markerStart), new import_vscode23.Position(lineIdx, markerEnd)),
+        body: new import_vscode23.Range(new import_vscode23.Position(lineIdx, markerEnd), new import_vscode23.Position(lineIdx, bodyEnd))
       });
       pos = markerEnd;
       continue;
@@ -3192,8 +3352,8 @@ function rangesOnLine(line, lineIdx) {
       const markerEnd = gt + mLt[0].length;
       const bodyEnd = line.length;
       reasoning.push({
-        marker: new import_vscode21.Range(new import_vscode21.Position(lineIdx, markerStart), new import_vscode21.Position(lineIdx, markerEnd)),
-        body: new import_vscode21.Range(new import_vscode21.Position(lineIdx, markerEnd), new import_vscode21.Position(lineIdx, bodyEnd))
+        marker: new import_vscode23.Range(new import_vscode23.Position(lineIdx, markerStart), new import_vscode23.Position(lineIdx, markerEnd)),
+        body: new import_vscode23.Range(new import_vscode23.Position(lineIdx, markerEnd), new import_vscode23.Position(lineIdx, bodyEnd))
       });
       pos = markerEnd;
       continue;
@@ -3232,9 +3392,9 @@ function refreshSpecCommentSyntaxDecorations(editor, types) {
     }
     const steer = parseSteeringLine(line);
     if (steer) {
-      const r = new import_vscode21.Range(
-        new import_vscode21.Position(lineIdx, steer.keyStart),
-        new import_vscode21.Position(lineIdx, steer.keyEnd)
+      const r = new import_vscode23.Range(
+        new import_vscode23.Position(lineIdx, steer.keyStart),
+        new import_vscode23.Position(lineIdx, steer.keyEnd)
       );
       (steer.zone === "provenance" ? keyProv : keyEff).push(r);
     }
@@ -3289,9 +3449,9 @@ async function rewindSpecIfSnapshot(editor, slot, slotId, commitId, portalRel, w
   );
 }
 function sessionSourceOpts() {
-  let raw = import_vscode22.workspace.getConfiguration("semipy").get("sessionSource")?.trim();
+  let raw = import_vscode24.workspace.getConfiguration("semipy").get("sessionSource")?.trim();
   if (raw?.includes("${workspaceFolder}")) {
-    const folder = import_vscode22.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const folder = import_vscode24.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (folder) {
       raw = raw.replace(/\$\{workspaceFolder\}/g, folder);
     }
@@ -3318,7 +3478,7 @@ function refreshPortalForUri(fsPath, state) {
   state.portalPath = found;
   state.portal = portal;
   state.portalCacheDir = path10.dirname(found);
-  const wf = import_vscode22.workspace.getWorkspaceFolder(import_vscode22.Uri.file(found));
+  const wf = import_vscode24.workspace.getWorkspaceFolder(import_vscode24.Uri.file(found));
   state.workspaceRoot = wf?.uri.fsPath ?? path10.dirname(state.portalCacheDir);
 }
 function activate(context) {
@@ -3328,7 +3488,7 @@ function activate(context) {
     portalCacheDir: void 0,
     workspaceRoot: void 0
   };
-  const cfg = () => import_vscode22.workspace.getConfiguration("semipy");
+  const cfg = () => import_vscode24.workspace.getConfiguration("semipy");
   const opacityTypes = createOpacityDecorationTypes();
   const dispatchDimType = createDispatchOpacityType();
   const phraseTypes = createPhraseDecorationTypes();
@@ -3350,18 +3510,22 @@ function activate(context) {
     () => portalState.portal,
     () => cfg().get("enableInlayHints") ?? true
   );
+  const decisionLensProvider = new SemipyDecisionCodeLensProvider(
+    () => portalState.portal,
+    () => cfg().get("enableDecisionSurface") ?? true
+  );
   const linked = new LinkedHighlightCoordinator(
     () => cfg().get("linkedHighlightFadeMs") ?? 1500
   );
   const diag = new SemipyDiagnosticManager(() => portalState.portalCacheDir);
   const tree = new SlotHistoryProvider(() => portalState.portal);
-  const treeView = import_vscode22.window.createTreeView("semipy.slotHistory", {
+  const treeView = import_vscode24.window.createTreeView("semipy.slotHistory", {
     treeDataProvider: tree,
     showCollapseAll: true
   });
-  const status = import_vscode22.window.createStatusBarItem(import_vscode22.StatusBarAlignment.Left, 100);
+  const status = import_vscode24.window.createStatusBarItem(import_vscode24.StatusBarAlignment.Left, 100);
   status.command = "semipy.refreshHistory";
-  const modes = import_vscode22.window.createStatusBarItem(import_vscode22.StatusBarAlignment.Left, 99);
+  const modes = import_vscode24.window.createStatusBarItem(import_vscode24.StatusBarAlignment.Left, 99);
   modes.text = "$(settings) Semipy";
   modes.tooltip = "Semipy steering \u2014 enable contract / effect gates (scaffolds configure(...))";
   modes.command = "semipy.steeringModes";
@@ -3398,7 +3562,7 @@ function activate(context) {
       portalState.portal,
       cacheDir,
       phraseTypes,
-      import_vscode22.workspace.workspaceFolders?.map((w) => w.uri.fsPath) ?? []
+      import_vscode24.workspace.workspaceFolders?.map((w) => w.uri.fsPath) ?? []
     );
     if (portalState.portal) {
       const n = Object.keys(portalState.portal.slots).length;
@@ -3422,6 +3586,7 @@ function activate(context) {
     diag.refresh();
     codeLensProvider.refresh();
     inlayProvider.refresh();
+    decisionLensProvider.refresh();
     linked.onSelectionOrPortal(editor, portalState.portal, cacheDir);
     if (cfg().get("notifyOnResolution") ?? true) {
       regressionDiag.refresh(editor, portalState.portal);
@@ -3430,14 +3595,14 @@ function activate(context) {
     }
   }
   async function revealSlot(slotId) {
-    const ed = import_vscode22.window.activeTextEditor;
+    const ed = import_vscode24.window.activeTextEditor;
     if (ed) {
       refreshPortalForUri(ed.document.uri.fsPath, portalState);
     }
     tree.refresh();
     const el = tree.slotElement(slotId);
     if (!el) {
-      void import_vscode22.window.showWarningMessage("Semipy: that slot is not in the current portal.");
+      void import_vscode24.window.showWarningMessage("Semipy: that slot is not in the current portal.");
       return;
     }
     try {
@@ -3475,7 +3640,7 @@ function activate(context) {
       const fn = slot.slot_spec?.enclosing_function_qualname || slot.function_name_base || "slot";
       if (insight.health === "danger") {
         const n = insight.change?.unintended ?? 0;
-        void import_vscode22.window.showWarningMessage(
+        void import_vscode24.window.showWarningMessage(
           `Semipy ${insight.decision} ${fn} \u2014 ${n} unintended regression${n === 1 ? "" : "s"}.`,
           "Inspect"
         ).then((pick) => {
@@ -3485,7 +3650,7 @@ function activate(context) {
         });
       } else {
         const guarantee = insight.contract.active ? ` \xB7 ${insight.contract.active} guarantee(s) hold` : "";
-        import_vscode22.window.setStatusBarMessage(
+        import_vscode24.window.setStatusBarMessage(
           `$(sparkle) Semipy ${insight.glyph} ${insight.decision} ${fn}${guarantee}`,
           6e3
         );
@@ -3506,74 +3671,146 @@ function activate(context) {
     signFlip.attach(),
     { dispose: () => linked.dispose() },
     diag,
-    import_vscode22.languages.registerCodeLensProvider({ language: "python", scheme: "file" }, codeLensProvider),
-    import_vscode22.languages.registerInlayHintsProvider({ language: "python", scheme: "file" }, inlayProvider),
-    import_vscode22.workspace.onDidChangeConfiguration((e) => {
+    import_vscode24.languages.registerCodeLensProvider({ language: "python", scheme: "file" }, codeLensProvider),
+    import_vscode24.languages.registerInlayHintsProvider({ language: "python", scheme: "file" }, inlayProvider),
+    import_vscode24.languages.registerCodeLensProvider({ language: "python", scheme: "file" }, decisionLensProvider),
+    import_vscode24.languages.registerHoverProvider(
+      { language: "python", scheme: "file" },
+      createDecisionHoverProvider(
+        () => portalState.portal,
+        () => cfg().get("enableDecisionSurface") ?? true
+      )
+    ),
+    import_vscode24.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("semipy")) {
         codeLensProvider.refresh();
         inlayProvider.refresh();
-        refreshAllDecorations(import_vscode22.window.activeTextEditor);
+        decisionLensProvider.refresh();
+        refreshAllDecorations(import_vscode24.window.activeTextEditor);
       }
     }),
-    import_vscode22.window.onDidChangeTextEditorSelection((e) => {
+    import_vscode24.window.onDidChangeTextEditorSelection((e) => {
       refreshPortalForUri(e.textEditor.document.uri.fsPath, portalState);
       linked.onSelectionOrPortal(e.textEditor, portalState.portal, portalState.portalCacheDir);
     }),
-    import_vscode22.window.onDidChangeActiveTextEditor((ed) => {
+    import_vscode24.window.onDidChangeActiveTextEditor((ed) => {
       if (ed) {
         signFlip.seedDocument(ed.document);
       }
       refreshAllDecorations(ed);
     }),
-    import_vscode22.languages.registerHoverProvider(
+    import_vscode24.languages.registerHoverProvider(
       { language: "python", scheme: "file" },
       createPhraseHoverProvider(
         () => portalState.portal,
         () => portalState.portalCacheDir,
-        () => import_vscode22.workspace.workspaceFolders?.map((w) => w.uri.fsPath) ?? []
+        () => import_vscode24.workspace.workspaceFolders?.map((w) => w.uri.fsPath) ?? []
       )
     ),
-    import_vscode22.languages.registerHoverProvider(
+    import_vscode24.languages.registerHoverProvider(
       { language: "python", scheme: "file" },
       createSlotInsightHoverProvider(
         () => portalState.portal,
         () => cfg().get("enableInsightHover") ?? true
       )
     ),
-    import_vscode22.languages.registerHoverProvider(
+    import_vscode24.languages.registerHoverProvider(
       { language: "python", scheme: "file" },
       createSteeringHoverProvider()
     ),
-    import_vscode22.languages.registerCodeActionsProvider(
+    import_vscode24.languages.registerCodeActionsProvider(
       { language: "python", scheme: "file" },
       createSteeringCodeActionProvider()
     ),
-    import_vscode22.commands.registerCommand("semipy.steeringModes", () => runSteeringModesQuickPick()),
-    import_vscode22.commands.registerCommand("semipy.inspectSlot", (slotId) => {
+    import_vscode24.commands.registerCommand("semipy.steeringModes", () => runSteeringModesQuickPick()),
+    import_vscode24.commands.registerCommand("semipy.inspectSlot", (slotId) => {
       if (slotId) {
         void revealSlot(slotId);
       }
     }),
-    import_vscode22.commands.registerCommand(
+    import_vscode24.commands.registerCommand(
+      "semipy.pickDecision",
+      async (slotId, decisionId, fate) => {
+        const ed = import_vscode24.window.activeTextEditor;
+        if (ed) {
+          refreshPortalForUri(ed.document.uri.fsPath, portalState);
+        }
+        const root = portalState.workspaceRoot;
+        const portalPath = portalState.portalPath;
+        if (!root || !portalPath || !slotId || !decisionId || !fate) {
+          void import_vscode24.window.showErrorMessage("Semipy: no portal / decision for pick.");
+          return;
+        }
+        const rel = path10.relative(root, portalPath);
+        const r = await runSemipyCli(
+          ["pick-decision", "--portal", rel, "--slot-id", slotId, "--decision-id", decisionId, "--fate", fate],
+          root
+        );
+        if (r.code !== 0 && r.code !== null) {
+          void import_vscode24.window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "pick failed")}`);
+          return;
+        }
+        void import_vscode24.window.showInformationMessage(
+          (r.stdout || r.stderr || `Picked "${fate}".`).trim().slice(0, 300)
+        );
+        refreshAllDecorations(import_vscode24.window.activeTextEditor);
+      }
+    ),
+    import_vscode24.commands.registerCommand(
+      "semipy.assertDecision",
+      async (slotId, decisionId) => {
+        const ed = import_vscode24.window.activeTextEditor;
+        if (ed) {
+          refreshPortalForUri(ed.document.uri.fsPath, portalState);
+        }
+        const root = portalState.workspaceRoot;
+        const portalPath = portalState.portalPath;
+        if (!root || !portalPath || !slotId || !decisionId) {
+          void import_vscode24.window.showErrorMessage("Semipy: no portal / decision for assert.");
+          return;
+        }
+        const property = await import_vscode24.window.showInputBox({
+          prompt: "Property the result must satisfy",
+          placeHolder: "e.g. a site with all-null readings is omitted"
+        });
+        if (!property || !property.trim()) {
+          return;
+        }
+        const rel = path10.relative(root, portalPath);
+        const r = await runSemipyCli(
+          ["assert-decision", "--portal", rel, "--slot-id", slotId, "--decision-id", decisionId, "--property", property.trim()],
+          root
+        );
+        if (r.code !== 0 && r.code !== null) {
+          void import_vscode24.window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "assert failed")}`);
+          return;
+        }
+        void import_vscode24.window.showInformationMessage(
+          (r.stdout || r.stderr || "Property recorded; regenerates against it on next run.").trim().slice(0, 300)
+        );
+        refreshAllDecorations(import_vscode24.window.activeTextEditor);
+      }
+    ),
+    import_vscode24.commands.registerCommand(
       "semipy.relaxGuarantee",
       async (item) => {
         const slotId = item?.slot?.slot_id;
         const caseIds = item?.guarantee?.caseIds ?? [];
         if (!slotId || caseIds.length === 0) {
-          void import_vscode22.window.showWarningMessage("Semipy: nothing to relax for this guarantee.");
+          void import_vscode24.window.showWarningMessage("Semipy: nothing to relax for this guarantee.");
           return;
         }
-        const ed = import_vscode22.window.activeTextEditor;
+        const ed = import_vscode24.window.activeTextEditor;
         if (ed) {
           refreshPortalForUri(ed.document.uri.fsPath, portalState);
         }
         const root = portalState.workspaceRoot;
         const portalPath = portalState.portalPath;
         if (!root || !portalPath) {
-          void import_vscode22.window.showErrorMessage("Semipy: no portal for relax.");
+          void import_vscode24.window.showErrorMessage("Semipy: no portal for relax.");
           return;
         }
-        const ok = await import_vscode22.window.showWarningMessage(
+        const ok = await import_vscode24.window.showWarningMessage(
           `Relax guarantee "${item.guarantee?.label}"? It will be quarantined (kept for audit, no longer enforced) across ${caseIds.length} input pattern(s).`,
           { modal: true },
           "Relax"
@@ -3587,17 +3824,17 @@ function activate(context) {
           root
         );
         if (r.code !== 0 && r.code !== null) {
-          void import_vscode22.window.showErrorMessage(
+          void import_vscode24.window.showErrorMessage(
             `Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "relax failed")}`
           );
           return;
         }
-        void import_vscode22.window.showInformationMessage((r.stdout || r.stderr || "Guarantee relaxed.").trim().slice(0, 200));
-        refreshAllDecorations(import_vscode22.window.activeTextEditor);
+        void import_vscode24.window.showInformationMessage((r.stdout || r.stderr || "Guarantee relaxed.").trim().slice(0, 200));
+        refreshAllDecorations(import_vscode24.window.activeTextEditor);
       }
     ),
-    import_vscode22.commands.registerCommand("semipy.viewActiveCode", async (slotId) => {
-      const ed = import_vscode22.window.activeTextEditor;
+    import_vscode24.commands.registerCommand("semipy.viewActiveCode", async (slotId) => {
+      const ed = import_vscode24.window.activeTextEditor;
       const fsPath = ed?.document.uri.fsPath;
       const portalPath = fsPath && findPortalJsonPathForEditor(fsPath, sessionSourceOpts()) || portalState.portalPath;
       const portal = portalPath ? loadPortalJson(portalPath) : portalState.portal;
@@ -3605,29 +3842,29 @@ function activate(context) {
       const commit = slot ? activeCommitFromPortalSlot(slot) : void 0;
       const src = commit?.generated_source;
       if (!slot || !commit || !src) {
-        void import_vscode22.window.showWarningMessage("Semipy: no active implementation found for this slot.");
+        void import_vscode24.window.showWarningMessage("Semipy: no active implementation found for this slot.");
         return;
       }
       await viewGeneratedCode(slotId, commit.commit_id, src);
     }),
-    import_vscode22.commands.registerCommand("semipy.revertEffectTreeItem", (item) => {
+    import_vscode24.commands.registerCommand("semipy.revertEffectTreeItem", (item) => {
       if (item?.slot?.slot_id && item.event?.event_id) {
-        return import_vscode22.commands.executeCommand("semipy.revertEffect", item.slot.slot_id, item.event.event_id);
+        return import_vscode24.commands.executeCommand("semipy.revertEffect", item.slot.slot_id, item.event.event_id);
       }
       return void 0;
     }),
-    import_vscode22.commands.registerCommand("semipy.revertEffect", async (slotId, eventId) => {
-      const ed = import_vscode22.window.activeTextEditor;
+    import_vscode24.commands.registerCommand("semipy.revertEffect", async (slotId, eventId) => {
+      const ed = import_vscode24.window.activeTextEditor;
       if (ed) {
         refreshPortalForUri(ed.document.uri.fsPath, portalState);
       }
       const root = portalState.workspaceRoot;
       const portalPath = portalState.portalPath;
       if (!root || !portalPath || !slotId || !eventId) {
-        void import_vscode22.window.showErrorMessage("Semipy: no portal / event for revert.");
+        void import_vscode24.window.showErrorMessage("Semipy: no portal / event for revert.");
         return;
       }
-      const ok = await import_vscode22.window.showWarningMessage(
+      const ok = await import_vscode24.window.showWarningMessage(
         `Revert this applied effect? semipy will replay its stored compensations (exact inverse of what was done).`,
         { modal: true },
         "Revert"
@@ -3641,25 +3878,25 @@ function activate(context) {
         root
       );
       if (r.code !== 0 && r.code !== null) {
-        void import_vscode22.window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "revert failed")}`);
+        void import_vscode24.window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "revert failed")}`);
         return;
       }
-      void import_vscode22.window.showInformationMessage((r.stdout || r.stderr || "Effect reverted.").trim().slice(0, 300));
-      refreshAllDecorations(import_vscode22.window.activeTextEditor);
+      void import_vscode24.window.showInformationMessage((r.stdout || r.stderr || "Effect reverted.").trim().slice(0, 300));
+      refreshAllDecorations(import_vscode24.window.activeTextEditor);
     }),
-    import_vscode22.commands.registerCommand("semipy.resetSlot", async (item) => {
+    import_vscode24.commands.registerCommand("semipy.resetSlot", async (item) => {
       const slotId = item?.slot?.slot_id;
-      const ed = import_vscode22.window.activeTextEditor;
+      const ed = import_vscode24.window.activeTextEditor;
       if (ed) {
         refreshPortalForUri(ed.document.uri.fsPath, portalState);
       }
       const root = portalState.workspaceRoot;
       const portalPath = portalState.portalPath;
       if (!root || !portalPath || !slotId) {
-        void import_vscode22.window.showErrorMessage("Semipy: no portal / slot for reset.");
+        void import_vscode24.window.showErrorMessage("Semipy: no portal / slot for reset.");
         return;
       }
-      const ok = await import_vscode22.window.showWarningMessage(
+      const ok = await import_vscode24.window.showWarningMessage(
         "Reset this slot? All of its versions (and its contract / effects history) are removed; the next run regenerates it from scratch.",
         { modal: true },
         "Reset slot"
@@ -3670,28 +3907,28 @@ function activate(context) {
       const rel = path10.relative(root, portalPath);
       const r = await runSemipyCli(["reset-slot", "--portal", rel, "--slot-id", slotId], root);
       if (r.code !== 0 && r.code !== null) {
-        void import_vscode22.window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "reset failed")}`);
+        void import_vscode24.window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "reset failed")}`);
         return;
       }
-      void import_vscode22.window.showInformationMessage((r.stdout || r.stderr || "Slot reset.").trim().slice(0, 300));
-      refreshAllDecorations(import_vscode22.window.activeTextEditor);
+      void import_vscode24.window.showInformationMessage((r.stdout || r.stderr || "Slot reset.").trim().slice(0, 300));
+      refreshAllDecorations(import_vscode24.window.activeTextEditor);
     }),
-    import_vscode22.commands.registerCommand(
+    import_vscode24.commands.registerCommand(
       "semipy.resetSlotVersion",
       async (item) => {
         const slotId = item?.slot?.slot_id;
         const commitId = item?.commit?.commit_id;
-        const ed = import_vscode22.window.activeTextEditor;
+        const ed = import_vscode24.window.activeTextEditor;
         if (ed) {
           refreshPortalForUri(ed.document.uri.fsPath, portalState);
         }
         const root = portalState.workspaceRoot;
         const portalPath = portalState.portalPath;
         if (!root || !portalPath || !slotId || !commitId) {
-          void import_vscode22.window.showErrorMessage("Semipy: no portal / version for reset.");
+          void import_vscode24.window.showErrorMessage("Semipy: no portal / version for reset.");
           return;
         }
-        const ok = await import_vscode22.window.showWarningMessage(
+        const ok = await import_vscode24.window.showWarningMessage(
           "Delete this version? The commit is removed and the slot falls back to its previous version.",
           { modal: true },
           "Delete version"
@@ -3705,53 +3942,53 @@ function activate(context) {
           root
         );
         if (r.code !== 0 && r.code !== null) {
-          void import_vscode22.window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "reset failed")}`);
+          void import_vscode24.window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "reset failed")}`);
           return;
         }
-        void import_vscode22.window.showInformationMessage((r.stdout || r.stderr || "Version deleted.").trim().slice(0, 300));
-        refreshAllDecorations(import_vscode22.window.activeTextEditor);
+        void import_vscode24.window.showInformationMessage((r.stdout || r.stderr || "Version deleted.").trim().slice(0, 300));
+        refreshAllDecorations(import_vscode24.window.activeTextEditor);
       }
     ),
-    import_vscode22.commands.registerCommand("semipy.promoteReasoningLine", async (uriArg, line0) => {
-      const uri = typeof uriArg === "string" ? import_vscode22.Uri.parse(uriArg) : uriArg;
-      const doc = await import_vscode22.workspace.openTextDocument(uri);
+    import_vscode24.commands.registerCommand("semipy.promoteReasoningLine", async (uriArg, line0) => {
+      const uri = typeof uriArg === "string" ? import_vscode24.Uri.parse(uriArg) : uriArg;
+      const doc = await import_vscode24.workspace.openTextDocument(uri);
       if (line0 < 0 || line0 >= doc.lineCount) {
         return;
       }
       const line = doc.lineAt(line0);
       const fixed = rewriteReasoningPrefixToSpec(line.text);
       if (fixed === null || fixed === line.text) {
-        void import_vscode22.window.showInformationMessage("Semipy: that line is not an inferred (#<) note.");
+        void import_vscode24.window.showInformationMessage("Semipy: that line is not an inferred (#<) note.");
         return;
       }
-      const edit = new import_vscode22.WorkspaceEdit();
+      const edit = new import_vscode24.WorkspaceEdit();
       edit.replace(uri, line.range, fixed);
-      await import_vscode22.workspace.applyEdit(edit);
-      import_vscode22.window.setStatusBarMessage("$(pin) Semipy: pinned as contract (#>) \u2014 re-run to honour it.", 5e3);
+      await import_vscode24.workspace.applyEdit(edit);
+      import_vscode24.window.setStatusBarMessage("$(pin) Semipy: pinned as contract (#>) \u2014 re-run to honour it.", 5e3);
     }),
-    import_vscode22.commands.registerCommand("semipy.dismissReasoningLine", async (uriArg, line0) => {
-      const uri = typeof uriArg === "string" ? import_vscode22.Uri.parse(uriArg) : uriArg;
-      const doc = await import_vscode22.workspace.openTextDocument(uri);
+    import_vscode24.commands.registerCommand("semipy.dismissReasoningLine", async (uriArg, line0) => {
+      const uri = typeof uriArg === "string" ? import_vscode24.Uri.parse(uriArg) : uriArg;
+      const doc = await import_vscode24.workspace.openTextDocument(uri);
       if (line0 < 0 || line0 >= doc.lineCount) {
         return;
       }
-      const start = new import_vscode22.Position(line0, 0);
-      const end = line0 + 1 < doc.lineCount ? new import_vscode22.Position(line0 + 1, 0) : doc.lineAt(line0).range.end;
-      const edit = new import_vscode22.WorkspaceEdit();
-      edit.delete(uri, new import_vscode22.Range(start, end));
-      await import_vscode22.workspace.applyEdit(edit);
+      const start = new import_vscode24.Position(line0, 0);
+      const end = line0 + 1 < doc.lineCount ? new import_vscode24.Position(line0 + 1, 0) : doc.lineAt(line0).range.end;
+      const edit = new import_vscode24.WorkspaceEdit();
+      edit.delete(uri, new import_vscode24.Range(start, end));
+      await import_vscode24.workspace.applyEdit(edit);
     }),
     registerCommitTextProvider(),
-    import_vscode22.commands.registerCommand("semipy.showOutput", () => {
+    import_vscode24.commands.registerCommand("semipy.showOutput", () => {
       getSemipyOutputChannel().show(true);
     }),
-    import_vscode22.commands.registerCommand("semipy.openSplitView", async () => {
-      const ed = import_vscode22.window.activeTextEditor;
+    import_vscode24.commands.registerCommand("semipy.openSplitView", async () => {
+      const ed = import_vscode24.window.activeTextEditor;
       if (ed) {
         refreshPortalForUri(ed.document.uri.fsPath, portalState);
       }
       if (!portalState.portal || !portalState.portalCacheDir) {
-        for (const v of import_vscode22.window.visibleTextEditors) {
+        for (const v of import_vscode24.window.visibleTextEditors) {
           if (v.document.languageId !== "python") {
             continue;
           }
@@ -3762,26 +3999,26 @@ function activate(context) {
         }
       }
       if (!portalState.portal || !portalState.portalCacheDir) {
-        void import_vscode22.window.showWarningMessage(
+        void import_vscode24.window.showWarningMessage(
           "Semipy: no portal resolved. Focus the Python file that owns this slot, then try again."
         );
         return;
       }
       await openDispatchSplitView(portalState.portalCacheDir, portalState.portal.module_name);
     }),
-    import_vscode22.commands.registerCommand("semipy.refreshHistory", () => {
-      const ed = import_vscode22.window.activeTextEditor;
+    import_vscode24.commands.registerCommand("semipy.refreshHistory", () => {
+      const ed = import_vscode24.window.activeTextEditor;
       refreshAllDecorations(ed);
       tree.refresh();
     }),
-    import_vscode22.commands.registerCommand("semipy.pickSlotVersion", async (slotId) => {
-      const ed = import_vscode22.window.activeTextEditor;
+    import_vscode24.commands.registerCommand("semipy.pickSlotVersion", async (slotId) => {
+      const ed = import_vscode24.window.activeTextEditor;
       if (ed) {
         refreshPortalForUri(ed.document.uri.fsPath, portalState);
       }
       const portal = portalState.portal;
       if (!portal) {
-        void import_vscode22.window.showWarningMessage("Semipy: no portal for this file.");
+        void import_vscode24.window.showWarningMessage("Semipy: no portal for this file.");
         return;
       }
       const slot = portal.slots[slotId];
@@ -3814,30 +4051,30 @@ function activate(context) {
           isLocked: v.isLocked
         });
       }
-      const picked = await import_vscode22.window.showQuickPick(items, {
+      const picked = await import_vscode24.window.showQuickPick(items, {
         placeHolder: "Check out a version to run \u2014 pins the chosen version; 'Use latest' follows the newest"
       });
       if (!picked) {
         return;
       }
       if (picked.action === "unlock") {
-        await import_vscode22.commands.executeCommand("semipy.unlockSlotVersion", slotId);
+        await import_vscode24.commands.executeCommand("semipy.unlockSlotVersion", slotId);
         return;
       }
       if (picked.isActive && picked.isLocked) {
         return;
       }
-      await import_vscode22.commands.executeCommand("semipy.lockSlotVersion", slotId, picked.commitId);
+      await import_vscode24.commands.executeCommand("semipy.lockSlotVersion", slotId, picked.commitId);
     }),
-    import_vscode22.commands.registerCommand("semipy.lockSlotVersion", async (slotId, commitId) => {
-      const ed = import_vscode22.window.activeTextEditor;
+    import_vscode24.commands.registerCommand("semipy.lockSlotVersion", async (slotId, commitId) => {
+      const ed = import_vscode24.window.activeTextEditor;
       if (ed) {
         refreshPortalForUri(ed.document.uri.fsPath, portalState);
       }
       const root = portalState.workspaceRoot;
       const portalPath = portalState.portalPath;
       if (!root || !portalPath || !commitId) {
-        void import_vscode22.window.showErrorMessage("Semipy: no portal or commit for lock.");
+        void import_vscode24.window.showErrorMessage("Semipy: no portal or commit for lock.");
         return;
       }
       const rel = path10.relative(root, portalPath);
@@ -3846,29 +4083,29 @@ function activate(context) {
         root
       );
       if (r.code !== 0 && r.code !== null) {
-        void import_vscode22.window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "lock failed")}`);
+        void import_vscode24.window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "lock failed")}`);
         return;
       }
       const lockedSlot = portalState.portal?.slots[slotId];
       await rewindSpecIfSnapshot(ed, lockedSlot, slotId, commitId, rel, root);
-      void import_vscode22.window.showInformationMessage((r.stderr || r.stdout || "Lock saved.").trim().slice(0, 400));
-      refreshAllDecorations(import_vscode22.window.activeTextEditor);
+      void import_vscode24.window.showInformationMessage((r.stderr || r.stdout || "Lock saved.").trim().slice(0, 400));
+      refreshAllDecorations(import_vscode24.window.activeTextEditor);
     }),
-    import_vscode22.commands.registerCommand("semipy.unlockSlotVersion", async (slotId) => {
-      const ed = import_vscode22.window.activeTextEditor;
+    import_vscode24.commands.registerCommand("semipy.unlockSlotVersion", async (slotId) => {
+      const ed = import_vscode24.window.activeTextEditor;
       if (ed) {
         refreshPortalForUri(ed.document.uri.fsPath, portalState);
       }
       const root = portalState.workspaceRoot;
       const portalPath = portalState.portalPath;
       if (!root || !portalPath) {
-        void import_vscode22.window.showWarningMessage("Semipy: no portal for this file.");
+        void import_vscode24.window.showWarningMessage("Semipy: no portal for this file.");
         return;
       }
       const rel = path10.relative(root, portalPath);
       const r = await runSemipyCli(["unlock", "--portal", rel, "--slot-id", slotId], root);
       if (r.code !== 0 && r.code !== null) {
-        void import_vscode22.window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "unlock failed")}`);
+        void import_vscode24.window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "unlock failed")}`);
         return;
       }
       refreshPortalForUri(ed?.document.uri.fsPath ?? "", portalState);
@@ -3877,20 +4114,20 @@ function activate(context) {
       if (activeHead) {
         await rewindSpecIfSnapshot(ed, unlockedSlot, slotId, activeHead, rel, root);
       }
-      void import_vscode22.window.showInformationMessage((r.stderr || r.stdout || "Unlocked.").trim().slice(0, 400));
-      refreshAllDecorations(import_vscode22.window.activeTextEditor);
+      void import_vscode24.window.showInformationMessage((r.stderr || r.stdout || "Unlocked.").trim().slice(0, 400));
+      refreshAllDecorations(import_vscode24.window.activeTextEditor);
     }),
-    import_vscode22.commands.registerCommand(
+    import_vscode24.commands.registerCommand(
       "semipy.viewGeneratedCode",
       async (slotId, commitId) => {
-        const ed = import_vscode22.window.activeTextEditor;
+        const ed = import_vscode24.window.activeTextEditor;
         const fsPath = ed?.document.uri.fsPath;
         const portalPath = fsPath && findPortalJsonPathForEditor(fsPath, sessionSourceOpts()) || portalState.portalPath;
         const portal = portalPath ? loadPortalJson(portalPath) : portalState.portal;
         const slot = portal?.slots[slotId];
         const src = slot?.commits[commitId]?.generated_source;
         if (!src) {
-          void import_vscode22.window.showWarningMessage(
+          void import_vscode24.window.showWarningMessage(
             "Semipy: commit source not loaded. Refresh history or open the source file that owns this portal."
           );
           return;
@@ -3898,7 +4135,7 @@ function activate(context) {
         await viewGeneratedCode(slotId, commitId, src);
       }
     ),
-    import_vscode22.commands.registerCommand(
+    import_vscode24.commands.registerCommand(
       "semipy.regenerateSlotDiagnostic",
       async (ws, portalRel, slotId) => {
         const r = await runSemipyCli(
@@ -3906,16 +4143,16 @@ function activate(context) {
           ws
         );
         if (r.code !== 0 && r.code !== null) {
-          void import_vscode22.window.showErrorMessage(
+          void import_vscode24.window.showErrorMessage(
             `Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "regenerate failed")}`
           );
           return;
         }
-        void import_vscode22.window.showInformationMessage(r.stderr || r.stdout || "semipy regenerate finished.");
+        void import_vscode24.window.showInformationMessage(r.stderr || r.stdout || "semipy regenerate finished.");
         diag.refresh();
       }
     ),
-    import_vscode22.languages.registerCodeActionsProvider(
+    import_vscode24.languages.registerCodeActionsProvider(
       { language: "python", scheme: "file" },
       createRegenerateCodeActionProvider(
         () => portalState.workspaceRoot,
@@ -3923,14 +4160,14 @@ function activate(context) {
       )
     )
   );
-  const ed0 = import_vscode22.window.activeTextEditor;
+  const ed0 = import_vscode24.window.activeTextEditor;
   if (ed0) {
     signFlip.seedDocument(ed0.document);
   }
   refreshAllDecorations(ed0);
   notifyResolutionChanges(portalState.portal);
-  if (import_vscode22.workspace.workspaceFolders?.length) {
-    const wf = import_vscode22.workspace.workspaceFolders[0].uri.fsPath;
+  if (import_vscode24.workspace.workspaceFolders?.length) {
+    const wf = import_vscode24.workspace.workspaceFolders[0].uri.fsPath;
     let timer;
     const fire = () => {
       if (timer) {
@@ -3938,12 +4175,12 @@ function activate(context) {
       }
       timer = setTimeout(() => {
         timer = void 0;
-        refreshAllDecorations(import_vscode22.window.activeTextEditor);
+        refreshAllDecorations(import_vscode24.window.activeTextEditor);
         notifyResolutionChanges(portalState.portal);
       }, debounceMs());
     };
-    const wPortal = import_vscode22.workspace.createFileSystemWatcher(new import_vscode22.RelativePattern(wf, "**/*.portal.json"));
-    const wSemi = import_vscode22.workspace.createFileSystemWatcher(new import_vscode22.RelativePattern(wf, "**/*.semi.py"));
+    const wPortal = import_vscode24.workspace.createFileSystemWatcher(new import_vscode24.RelativePattern(wf, "**/*.portal.json"));
+    const wSemi = import_vscode24.workspace.createFileSystemWatcher(new import_vscode24.RelativePattern(wf, "**/*.semi.py"));
     wPortal.onDidChange(fire);
     wPortal.onDidCreate(fire);
     wPortal.onDidDelete(fire);
@@ -3956,13 +4193,13 @@ function activate(context) {
 function subscribeOpacityWrapper(types, debounceMs, onRefresh) {
   let timer;
   const tick = () => {
-    onRefresh(import_vscode22.window.activeTextEditor);
+    onRefresh(import_vscode24.window.activeTextEditor);
   };
-  const sub1 = import_vscode22.window.onDidChangeActiveTextEditor(() => {
+  const sub1 = import_vscode24.window.onDidChangeActiveTextEditor(() => {
     tick();
   });
-  const sub2 = import_vscode22.workspace.onDidChangeTextDocument((ev) => {
-    const ed = import_vscode22.window.activeTextEditor;
+  const sub2 = import_vscode24.workspace.onDidChangeTextDocument((ev) => {
+    const ed = import_vscode24.window.activeTextEditor;
     if (!ed || ev.document !== ed.document) {
       return;
     }
