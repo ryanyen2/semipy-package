@@ -265,6 +265,86 @@ def cmd_reset_version(portal_path: Path, slot_id: str, commit_id: str) -> None:
     )
 
 
+def _decision_set_or_exit(slot, slot_id: str):
+    from semipy.decisions.persistence import decision_set_for
+
+    dset = decision_set_for(slot)
+    if dset is None or dset.is_empty():
+        raise SystemExit(f"slot {slot_id[:8]} has no surfaced decisions")
+    return dset
+
+
+def cmd_pick_decision(
+    portal_path: Path, slot_id: str, decision_id: str, fate: str, as_json: bool
+) -> None:
+    from semipy.decisions.resolve import DecisionResolveError, pick_branch
+
+    portal, cache_dir = _load_portal_explicit(portal_path)
+    slot = portal.slots.get(slot_id)
+    if slot is None:
+        raise SystemExit(f"unknown slot_id {slot_id!r}")
+    dset = _decision_set_or_exit(slot, slot_id)
+    try:
+        res = pick_branch(slot, dset, decision_id=decision_id, fate_label=fate, usage_id=slot_id)
+    except DecisionResolveError as exc:
+        raise SystemExit(str(exc))
+    save_portal(cache_dir, portal)
+    write_dispatch_module(cache_dir, portal, sketch_library=load_sketch_library(cache_dir))
+    if as_json:
+        json.dump(
+            {"commit_id": res.commit_id, "candidate_id": res.candidate_id, "spec_clause": res.spec_clause},
+            sys.stdout,
+            indent=2,
+        )
+        sys.stdout.write("\n")
+        return
+    sys.stdout.write(
+        f"semipy pick-decision: {fate!r} -> commit {res.commit_id[:8]}; clause: {res.spec_clause}\n"
+    )
+
+
+def cmd_assert_decision(
+    portal_path: Path, slot_id: str, decision_id: str, property_text: str, as_json: bool
+) -> None:
+    from semipy.decisions.resolve import DecisionResolveError, assert_property
+
+    portal, cache_dir = _load_portal_explicit(portal_path)
+    slot = portal.slots.get(slot_id)
+    if slot is None:
+        raise SystemExit(f"unknown slot_id {slot_id!r}")
+    dset = _decision_set_or_exit(slot, slot_id)
+    try:
+        # No automatic candidate verification at the CLI layer: record the property
+        # as a contract case and signal a targeted regeneration. An LLM/execution
+        # metamorphic check over stored candidates is a follow-up.
+        res = assert_property(
+            slot,
+            dset,
+            decision_id=decision_id,
+            property_text=property_text,
+            satisfies=lambda _cid: False,
+            usage_id=slot_id,
+        )
+    except DecisionResolveError as exc:
+        raise SystemExit(str(exc))
+    save_portal(cache_dir, portal)
+    if res.commit_id:
+        write_dispatch_module(cache_dir, portal, sketch_library=load_sketch_library(cache_dir))
+    if as_json:
+        json.dump(
+            {"contract_case_id": res.contract_case_id, "regen_needed": res.regen_needed,
+             "commit_id": res.commit_id},
+            sys.stdout,
+            indent=2,
+        )
+        sys.stdout.write("\n")
+        return
+    tail = "regenerates against it on next call" if res.regen_needed else f"satisfied -> commit {(res.commit_id or '')[:8]}"
+    sys.stdout.write(
+        f"semipy assert-decision: recorded property as case {res.contract_case_id}; {tail}.\n"
+    )
+
+
 def cmd_diagnostics(cache_dir: Path) -> None:
     path = _diagnostics_path(cache_dir)
     entries = _read_entries(path)
@@ -329,6 +409,20 @@ def main(argv: list[str] | None = None) -> None:
     pd = sub.add_parser("diagnostics", help="Print diagnostics.json entries")
     pd.add_argument("--portal", type=Path, required=True)
 
+    ppd = sub.add_parser("pick-decision", help="Resolve a surfaced fork by picking a fate (LLM-free)")
+    ppd.add_argument("--portal", type=Path, required=True)
+    ppd.add_argument("--slot-id", required=True)
+    ppd.add_argument("--decision-id", required=True)
+    ppd.add_argument("--fate", required=True, help="the fate_label to pick")
+    ppd.add_argument("--json", action="store_true", help="emit JSON")
+
+    pad = sub.add_parser("assert-decision", help="Resolve a fork by asserting a property (records a contract case)")
+    pad.add_argument("--portal", type=Path, required=True)
+    pad.add_argument("--slot-id", required=True)
+    pad.add_argument("--decision-id", required=True)
+    pad.add_argument("--property", required=True, dest="property_text", help="natural-language property the result must satisfy")
+    pad.add_argument("--json", action="store_true", help="emit JSON")
+
     args = p.parse_args(argv)
 
     if args.cmd == "regenerate":
@@ -353,6 +447,12 @@ def main(argv: list[str] | None = None) -> None:
         cmd_reset_version(Path(args.portal), args.slot_id, args.commit_id)
     elif args.cmd == "diagnostics":
         cmd_diagnostics(Path(args.portal).parent)
+    elif args.cmd == "pick-decision":
+        cmd_pick_decision(Path(args.portal), args.slot_id, args.decision_id, args.fate, args.json)
+    elif args.cmd == "assert-decision":
+        cmd_assert_decision(
+            Path(args.portal), args.slot_id, args.decision_id, args.property_text, args.json
+        )
     else:
         raise SystemExit(2)
 
