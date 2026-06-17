@@ -129,6 +129,45 @@ export interface EffectLedgerJson {
   events?: LedgerEventJson[];
 }
 
+// --- Decisions (surfaced silent forks) ------------------------------------
+// Mirrors semipy.decisions.model (Branch / Decision / DecisionSet). The render
+// contract for the #? fork UI: opacity = weight, axis_label/fate_label are
+// user-language names (empty -> show the deterministic output-cluster view).
+
+/** One behavioral fate a set of candidates gave the ambiguity germ. */
+export interface DecisionBranchJson {
+  fate_label: string;
+  candidate_ids: string[];
+  weight: number;
+  signature?: string[];
+  example_in?: unknown;
+  example_out?: unknown;
+}
+
+/** One surfaced fork: a germ, its fates, an optional guard, a distribution. */
+export interface DecisionJson {
+  decision_id: string;
+  germ: string;
+  axis_label: string;
+  branches: DecisionBranchJson[];
+  guard?: string | null;
+  consequence?: number;
+  consequence_kind?: string;
+  /** "open" | "resolved". */
+  status: string;
+  /** {via:"pick",branch,...} | {via:"assert",property,contract_case_id,...} | null. */
+  resolution?: Record<string, unknown> | null;
+  /** true when an LLM named axis/fates; false = deterministic output-cluster view. */
+  labeled?: boolean;
+}
+
+/** All decisions for one slot resolution + every candidate source (incl. losers). */
+export interface DecisionSetJson {
+  slot_id?: string;
+  decisions: DecisionJson[];
+  candidates: Record<string, string>;
+}
+
 export interface BranchJson {
   name: string;
   head: string;
@@ -162,6 +201,8 @@ export interface SlotJson {
   contract?: SlotContractJson;
   /** Append-only effect ledger; {} on portals predating effects. */
   ledger?: EffectLedgerJson;
+  /** Surfaced silent decisions + candidate sources; {} on unambiguous/legacy slots. */
+  decision_set?: DecisionSetJson;
   advisor_state?: Record<string, unknown>;
   input_observation_samples?: Record<string, string[]>;
 }

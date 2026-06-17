@@ -207,6 +207,18 @@ points at a `.portal.json`):
   `artifacts.py`, `parallel.py`, `console_lanes.py`, and `roles/` —
   explorer/version_checker/coder/executor_role/verifier/surfacer). See Subsystems
   above and [`docs/orchestration.md`](docs/orchestration.md).
+- **Decisions** (`semipy/decisions/`) — surfaces the model's *silent* underspec
+  choices. When a slot is underspecified, it draws multiple candidates, runs them,
+  and clusters by **observed output divergence** (pure: return-value capture;
+  effectful: reified `EffectScript` diff with no real mutation; nondeterministic/
+  expensive: seeded + cost-guarded **decision-structure** comparison, with an
+  honest "no comparable signal" fallback). A grounded classifier role labels only
+  forks execution demonstrated (no invented decisions); a germ-seeded
+  discriminating-input search exposes forks no sample input exercised. Open forks
+  render as inline `#?` lines (stripped before lowering, so `slot_id` is stable)
+  and resolve by **pick a branch** (LLM-free head swap to a stored candidate) or
+  **assert a property** (contract case + targeted regen). Fully opt-in
+  (`decisions_enabled` defaults off). Detail: [`docs/decisions.md`](docs/decisions.md).
 
 ## Public API
 
@@ -245,7 +257,8 @@ as Problems diagnostics, a version tree with checkout, and a steering control.
 `semipy.sessionSource` must match the runtime's resolved `session_source`. The
 `#<` steering vocabulary in the extension mirrors `semipy.models.SteeringBlock`
 (`intent`/`given`/`by`/`unless`/`yields`/`verified`); keep `src/data/types.ts` in
-sync with `store.py` / `contract/serialize.py` / `effects/ledger.py`.
+sync with `store.py` / `contract/serialize.py` / `effects/ledger.py` /
+`decisions/model.py` (the `DecisionSetJson` render contract — `#?` forks).
 
 ## Code conventions
 
