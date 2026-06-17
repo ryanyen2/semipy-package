@@ -134,33 +134,83 @@ def _effect_signature(script: Any) -> tuple[str, ...]:
     return tuple(parts) if parts else ("__no_effects__",)
 
 
+def _seed_records_from(runtime_values: dict[str, Any]) -> list[Any]:
+    """The records a seeded world should report as already existing.
+
+    Data-agnostic: prefer dict-valued inputs (a record being saved), then any
+    list of dicts, else any non-null input. No field-name knowledge.
+    """
+    dicts = [v for v in runtime_values.values() if isinstance(v, dict)]
+    if dicts:
+        return dicts
+    for v in runtime_values.values():
+        if isinstance(v, list) and any(isinstance(x, dict) for x in v):
+            return [x for x in v if isinstance(x, dict)]
+    return [v for v in runtime_values.values() if v is not None]
+
+
 def observe_effectful(
     candidates: dict[str, str],
     *,
     free_variables: list[str],
     runtime_values: dict[str, Any],
+    seed_existing: bool = True,
 ) -> DivergenceResult:
     """Cluster effectful candidates by their reified ``EffectScript``.
 
-    Each candidate runs through ``effects.shadow.run_effectful_source`` -- bound
-    to a fresh shadow world, so no real DB/file/API mutation occurs -- and is
-    clustered by the structural signature of the effects it intended to perform.
-    """
-    from semipy.effects.shadow import run_effectful_source
+    Each candidate runs through ``effects.shadow.run_effectful_source`` bound to a
+    shadow world, so no real DB/file/API mutation occurs.
 
-    runs: dict[str, CandidateRun] = {}
-    for cid, source in candidates.items():
+    With ``seed_existing`` (default), every candidate is run twice -- against an
+    *absent* world (fresh/empty, reads return nothing) and an *exists* world whose
+    reads report the input record as already present -- and clustered by the
+    combined signature. This exposes the runtime-determined write-mode decision
+    (update an existing row vs create a duplicate) that a single empty-world pass
+    structurally hides, because the ``if existing: update`` branch is dead when no
+    row exists. Candidates that genuinely upsert agree across both passes; those
+    that diverge on the exists path now form distinct branches.
+    """
+    from semipy.effects.shadow import SeededShadowWorld, run_effectful_source
+
+    seed = _seed_records_from(runtime_values) if seed_existing else []
+
+    def _run(source: str, world: Any) -> tuple[tuple[str, ...], Optional[str]]:
         script, _world, err = run_effectful_source(
             source,
             free_variables=list(free_variables),
             runtime_values=runtime_values,
+            world=world,
         )
         if err is not None or script is None:
+            return (UNRUNNABLE,), err or "no script"
+        return _effect_signature(script), None
+
+    runs: dict[str, CandidateRun] = {}
+    for cid, source in candidates.items():
+        sig_absent, err_absent = _run(source, None)
+        if seed_existing:
+            sig_exists, err_exists = _run(source, SeededShadowWorld(seed))
+        else:
+            sig_exists, err_exists = sig_absent, err_absent
+
+        err = err_absent or err_exists
+        if sig_absent == (UNRUNNABLE,) and sig_exists == (UNRUNNABLE,):
             signature: tuple[str, ...] = (UNRUNNABLE,)
             records: list[dict[str, Any]] = [{"error": err or "no script"}]
         else:
-            signature = _effect_signature(script)
-            records = [{"effects": _effect_signature(script)}]
+            # Combine the two passes into one signature so a candidate that
+            # behaves the same whether or not the row exists clusters with its
+            # peers, while a create-vs-update split forms a distinct branch.
+            signature = (
+                tuple(f"absent|{s}" for s in sig_absent)
+                + tuple(f"exists|{s}" for s in sig_exists)
+            )
+            records = [
+                {
+                    "effects": [f"when absent: {'; '.join(sig_absent)}",
+                                f"when exists: {'; '.join(sig_exists)}"],
+                }
+            ]
         runs[cid] = CandidateRun(
             candidate_id=cid,
             source=source,

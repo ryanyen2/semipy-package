@@ -57,4 +57,7 @@ def test_no_real_mutation_occurs():
     res = _observe({"A": _INSERT})
     run = res.runs["A"]
     assert run.error is None
-    assert run.signature[0].startswith("create@db://coral")
+    # Two-pass signature (F3): each pass is tagged absent|/exists|. The insert
+    # candidate creates regardless of whether the row exists.
+    assert run.signature[0].startswith("absent|create@db://coral")
+    assert any(s.startswith("exists|create@db://coral") for s in run.signature)

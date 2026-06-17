@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 
 from semipy.decisions.model import Branch, Decision, DecisionSet
 from semipy.decisions.persistence import attach_decision_set

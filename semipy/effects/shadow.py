@@ -75,6 +75,28 @@ class ShadowWorld:
         return set(self._shadows)
 
 
+class SeededShadowWorld(ShadowWorld):
+    """A shadow world whose reads return preloaded records, simulating that the
+    entities a candidate looks up already exist.
+
+    Effectful divergence run only against a fresh (empty) world cannot see an
+    update-vs-create fork: with no existing rows, every candidate's
+    ``if existing: update`` branch is dead and all collapse to ``create``. Running
+    the same candidates against a world that reports the input records as already
+    present exposes that fork. The seed is just the runtime input -- data-agnostic,
+    no field-name knowledge.
+    """
+
+    def __init__(self, seed_records: list[Any]) -> None:
+        super().__init__()
+        self._seed_records = list(seed_records)
+
+    def read(self, effect: Effect) -> Any:
+        # Report the seeded records for any read, so a lookup-before-write
+        # candidate takes its "already exists" branch regardless of selector.
+        return list(self._seed_records)
+
+
 def compile_source(source: str, namespace: Optional[dict[str, Any]] = None) -> Optional[Any]:
     """Compile generated source and return its primary function, or ``None``."""
     import ast

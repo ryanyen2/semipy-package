@@ -87,9 +87,11 @@ def _compute_consequence(divergence: DivergenceResult) -> tuple[float, str]:
     return _KIND_SCORE["categorical"], "categorical"
 
 
-def _build_branches(divergence: DivergenceResult, example_in: Any) -> list[Branch]:
+def _build_branches(
+    divergence: DivergenceResult, example_in: Any, clusters: Optional[list] = None
+) -> list[Branch]:
     branches: list[Branch] = []
-    for c in divergence.clusters:
+    for c in clusters if clusters is not None else divergence.clusters:
         branches.append(
             Branch(
                 fate_label=_deterministic_fate_label(divergence, c),
@@ -135,11 +137,13 @@ Ground every label in the provided code and I/O only. Never invent a branch or \
 a behavior not shown. Keep labels plain and concrete."""
 
 
-def _build_label_prompt(divergence: DivergenceResult, germ: str, branches: list[Branch]) -> str:
+def _build_label_prompt(
+    divergence: DivergenceResult, germ: str, branches: list[Branch], clusters: Optional[list] = None
+) -> str:
     import json
 
     parts = [f"## Germ\n{germ}", "## Branches"]
-    for i, (c, b) in enumerate(zip(divergence.clusters, branches)):
+    for i, (c, b) in enumerate(zip(clusters if clusters is not None else divergence.clusters, branches)):
         src = divergence.runs[c.representative_id].source.strip()
         parts.append(
             f"### Branch {i} (weight {b.weight})\n"
@@ -171,8 +175,10 @@ async def _label_async(prompt: str) -> Optional[_DecisionLabels]:
         return None
 
 
-def _apply_labels(decision: Decision, divergence: DivergenceResult) -> None:
-    labels = embed_run(_label_async(_build_label_prompt(divergence, decision.germ, decision.branches)))
+def _apply_labels(decision: Decision, divergence: DivergenceResult, clusters: Optional[list] = None) -> None:
+    labels = embed_run(
+        _label_async(_build_label_prompt(divergence, decision.germ, decision.branches, clusters))
+    )
     if labels is None:
         return
     if labels.axis_label:
@@ -205,6 +211,15 @@ def classify_divergence(
     """
     if not divergence.diverged():
         return []
+
+    # F2: when candidates differ along more than one axis at once (a different
+    # output schema AND a different value), factor them into independent decisions
+    # so each surfaced fork is about one thing, instead of one conflated fork with
+    # off-topic branches.
+    factored = _classify_factored(divergence, germ=germ, example_in=example_in, use_llm=use_llm)
+    if factored is not None:
+        return factored
+
     branches = _build_branches(divergence, example_in)
     score, kind = _compute_consequence(divergence)
     decision = Decision(
@@ -217,6 +232,47 @@ def classify_divergence(
     if use_llm:
         _apply_labels(decision, divergence)
     return [decision]
+
+
+def _classify_factored(
+    divergence: DivergenceResult, *, germ: str, example_in: Any, use_llm: bool
+) -> Optional[list[Decision]]:
+    """Build one decision per factored axis, or ``None`` to keep the single fork."""
+    from semipy.decisions.factor import factor_decisions
+
+    plans = factor_decisions(divergence)
+    if not plans:
+        return None
+
+    decisions: list[Decision] = []
+    for plan in plans:
+        branches = _build_branches(divergence, example_in, plan.clusters)
+        if plan.kind == "shape":
+            # The output-schema axis is named deterministically and legibly
+            # ("first_name/last_name keys" vs "first/last keys") -- no LLM needed,
+            # and it is a structural choice.
+            for b, fate in zip(branches, plan.deterministic_fates or []):
+                b.fate_label = fate
+            decision = Decision(
+                germ="output_shape",
+                axis_label="output shape",
+                branches=branches,
+                consequence=_KIND_SCORE["structural"],
+                consequence_kind="structural",
+            )
+        else:
+            score, kind = _compute_consequence(divergence)
+            decision = Decision(
+                germ=germ,
+                axis_label=germ,
+                branches=branches,
+                consequence=score,
+                consequence_kind=kind,
+            )
+            if use_llm:
+                _apply_labels(decision, divergence, plan.clusters)
+        decisions.append(decision)
+    return decisions
 
 
 def rank_decisions(decisions: list[Decision]) -> list[Decision]:

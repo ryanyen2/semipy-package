@@ -132,29 +132,30 @@ def _single_head(divergence: DivergenceResult) -> DecisionOutcome:
     )
 
 
-def resolve_with_decisions(
+@dataclass
+class _Observation:
+    """One observe-plus-discriminating-search pass over a candidate set."""
+
+    divergence: DivergenceResult
+    observe_rows: Optional[list[dict[str, Any]]]
+    germ: str
+    example_in: Any
+
+
+def _observe_and_search(
+    candidates: dict[str, str],
     *,
-    generate_candidate: CandidateGenerator,
     free_variables: list[str],
-    sample_rows: Optional[list[dict[str, Any]]] = None,
-    output_names: Optional[list[str]] = None,
-    effectful_runtime_values: Optional[dict[str, Any]] = None,
-    slot_id: str = "",
-    initial_candidates: int = 3,
-    max_candidates: int = 5,
-    use_llm: bool = True,
-    timeout: int = 15,
-) -> DecisionOutcome:
-    """Draw candidates adaptively and resolve to a head plus (if forked) a DecisionSet.
+    sample_rows: Optional[list[dict[str, Any]]],
+    output_names: Optional[list[str]],
+    effectful_runtime_values: Optional[dict[str, Any]],
+    timeout: int,
+) -> _Observation:
+    """Observe divergence, then (pure slots) probe for a hidden splitting input.
 
-    When candidates agree -- including after a discriminating-input probe -- returns
-    a single head with no decisions (the unchanged path). When a fork exists,
-    escalates the draw, classifies, and returns a populated ``DecisionSet``.
+    Returns the strongest divergence found together with the input set and germ
+    that exposed it, so the caller can classify over the same evidence.
     """
-    candidates = _draw(generate_candidate, 0, max(1, initial_candidates))
-    if not candidates:
-        return DecisionOutcome(diverged=False, head_candidate_id=None, head_source=None)
-
     pure = effectful_runtime_values is None
     divergence = _observe(
         candidates,
@@ -164,8 +165,6 @@ def resolve_with_decisions(
         effectful_runtime_values=effectful_runtime_values,
         timeout=timeout,
     )
-
-    # Decide what input set to cluster over and which germ names the fork.
     observe_rows = sample_rows
     germ = _germ_from_sample(sample_rows, free_variables) if pure else "output"
     example_in = sample_rows[0] if sample_rows else None
@@ -193,26 +192,70 @@ def resolve_with_decisions(
                 effectful_runtime_values=None,
                 timeout=timeout,
             )
+    return _Observation(divergence=divergence, observe_rows=observe_rows, germ=germ, example_in=example_in)
 
-    if not divergence.diverged():
-        return _single_head(divergence)
 
-    # Real fork: escalate the draw, then re-observe over the splitting input set.
+def resolve_with_decisions(
+    *,
+    generate_candidate: CandidateGenerator,
+    free_variables: list[str],
+    sample_rows: Optional[list[dict[str, Any]]] = None,
+    output_names: Optional[list[str]] = None,
+    effectful_runtime_values: Optional[dict[str, Any]] = None,
+    slot_id: str = "",
+    initial_candidates: int = 3,
+    max_candidates: int = 5,
+    use_llm: bool = True,
+    timeout: int = 15,
+) -> DecisionOutcome:
+    """Draw candidates adaptively and resolve to a head plus (if forked) a DecisionSet.
+
+    Policy (F1): the cheap initial draw is the fast path, but agreement among a
+    small sample is weak evidence of no fork -- a minority fate (e.g. a 20% choice)
+    is simply absent from three draws roughly half the time, and the
+    discriminating-input search cannot manufacture a candidate that was never
+    drawn. So when the initial draw agrees we *escalate the draw to
+    ``max_candidates`` and re-observe* before concluding no-fork, rather than only
+    escalating after divergence is already visible. Cost therefore scales with
+    ``max_candidates`` on genuinely-unanimous slots; that is the price of catching
+    rare-but-real forks. When candidates still agree after the full draw, returns a
+    single head with no decisions (the unchanged downstream behavior).
+    """
+    candidates = _draw(generate_candidate, 0, max(1, initial_candidates))
+    if not candidates:
+        return DecisionOutcome(diverged=False, head_candidate_id=None, head_source=None)
+
+    obs = _observe_and_search(
+        candidates,
+        free_variables=free_variables,
+        sample_rows=sample_rows,
+        output_names=output_names,
+        effectful_runtime_values=effectful_runtime_values,
+        timeout=timeout,
+    )
+
+    # Escalate the draw whether or not the initial sample diverged: on agreement
+    # to probe for an unsampled minority fate (F1), on divergence to stabilize the
+    # branch weights. Either way we re-observe over the full ensemble.
     if max_candidates > len(candidates):
         candidates.update(
             _draw(generate_candidate, len(candidates), max_candidates - len(candidates))
         )
-        divergence = _observe(
+        obs = _observe_and_search(
             candidates,
             free_variables=free_variables,
-            sample_rows=observe_rows,
+            sample_rows=sample_rows,
             output_names=output_names,
             effectful_runtime_values=effectful_runtime_values,
             timeout=timeout,
         )
 
+    divergence = obs.divergence
+    if not divergence.diverged():
+        return _single_head(divergence)
+
     decisions = rank_decisions(
-        classify_divergence(divergence, germ=germ, example_in=example_in, use_llm=use_llm)
+        classify_divergence(divergence, germ=obs.germ, example_in=obs.example_in, use_llm=use_llm)
     )
     head_id, head_src = _default_head(divergence)
     if not decisions:
