@@ -139,6 +139,7 @@ def _slot_to_dict(s: Slot) -> dict[str, Any]:
         "input_observation_samples": dict(getattr(s, "input_observation_samples", {}) or {}),
         "contract": dict(getattr(s, "contract", {}) or {}),
         "ledger": dict(getattr(s, "ledger", {}) or {}),
+        "decision_set": dict(getattr(s, "decision_set", {}) or {}),
     }
 
 
@@ -164,6 +165,7 @@ def _slot_from_dict(d: dict[str, Any]) -> Slot:
         input_observation_samples=dict(d.get("input_observation_samples", {}) or {}),
         contract=dict(d.get("contract", {}) or {}),
         ledger=dict(d.get("ledger", {}) or {}),
+        decision_set=dict(d.get("decision_set", {}) or {}),
     )
 
 
@@ -239,6 +241,8 @@ def _merge_slot(base: Slot, other: Slot) -> Slot:
         keep.contract = fold.contract
     if not keep.ledger and fold.ledger:
         keep.ledger = fold.ledger
+    if not keep.decision_set and fold.decision_set:
+        keep.decision_set = fold.decision_set
     if not keep.slot_spec and fold.slot_spec:
         keep.slot_spec = fold.slot_spec
     if not keep.spec_hash and fold.spec_hash:

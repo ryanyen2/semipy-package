@@ -22,10 +22,17 @@ from semipy.decisions.germs import (
     detect_germ_ids,
     detect_germs,
 )
+from semipy.decisions.model import Branch, Decision, DecisionSet
+from semipy.decisions.persistence import attach_decision_set, decision_set_for
 
 __all__ = [
     "GERMS",
     "GermHit",
     "detect_germs",
     "detect_germ_ids",
+    "Branch",
+    "Decision",
+    "DecisionSet",
+    "attach_decision_set",
+    "decision_set_for",
 ]

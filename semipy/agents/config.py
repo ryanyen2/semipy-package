@@ -127,6 +127,23 @@ class SemiConfig:
     #: Default per-effect blast-radius bound when none is declared.
     effect_default_blast_radius: int = 1
 
+    # --- Decisions subsystem (surface the model's silent forks) ---
+    #: Master switch. When on, an underspecified slot draws multiple candidates,
+    #: clusters them by observed divergence, and surfaces each silent choice as a
+    #: navigable ``#?`` fork. Default OFF: a slot whose candidates would agree, and
+    #: every existing project, sees no change to generation or runtime until opt-in.
+    decisions_enabled: bool = False
+    #: Adaptive draw: initial candidate count; escalates to the max only on divergence.
+    decision_initial_candidates: int = 3
+    #: Adaptive draw: maximum candidates drawn for a divergent slot.
+    decision_max_candidates: int = 5
+    #: Per-role model override for the decision classifier (labels forks in user
+    #: language). ``None`` falls back to ``openai_model`` via ``model_for_role``.
+    decision_classifier_model: Optional[str] = None
+    #: Wall-clock budget (seconds) for observing one slot's candidate divergence,
+    #: bounding cost on expensive/nondeterministic slots (U11).
+    decision_cost_budget_s: int = 20
+
     def model_for_role(self, role: Optional[str] = None) -> str:
         """Return the model id for an orchestration role, falling back to ``openai_model``.
 

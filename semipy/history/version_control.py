@@ -109,6 +109,11 @@ class Slot:
     # slot's implementations have applied, with materialized compensations for revert.
     # Owned by semipy.effects; a plain dict here. Empty for pure slots / legacy portals.
     ledger: dict[str, Any] = field(default_factory=dict)
+    # Serialized DecisionSet (dict): the surfaced forks for this slot's resolution
+    # plus every candidate's source (including losers), so a later branch-pick can
+    # swap the committed head without regenerating. Owned by semipy.decisions; a
+    # plain dict here. Empty for unambiguous slots / legacy portals.
+    decision_set: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
