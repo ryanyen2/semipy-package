@@ -27,6 +27,7 @@ from semipy.history.version_control import (
     create_commit,
     most_recent_branch_head,
 )
+from semipy.history.version_lock import is_slot_locked
 
 
 class DecisionResolveError(Exception):
@@ -99,6 +100,14 @@ def pick_branch(
     decision = decision_set.decision_by_id(decision_id)
     if decision is None:
         raise DecisionResolveError(f"no decision {decision_id!r} in set")
+    # A locked slot pins the active commit ahead of any branch head, so a pick
+    # here would mint a commit that dispatch never serves while falsely reporting
+    # success and closing the decision. Refuse loudly and tell the user to unlock.
+    if is_slot_locked(slot):
+        raise DecisionResolveError(
+            f"slot {slot.slot_id!r} is locked; unlock it (python -m semipy unlock --slot-id "
+            f"{slot.slot_id}) before picking a fate"
+        )
     branch = _find_branch(decision, fate_label)
     if not branch.candidate_ids:
         raise DecisionResolveError(f"branch {fate_label!r} has no candidates")
@@ -110,9 +119,29 @@ def pick_branch(
             f"candidate source for {candidate_id!r} is missing; cannot pick without regenerating"
         )
 
+    # Idempotent re-pick: if this decision already resolved to the same fate and
+    # its commit is still the head's source, return that commit rather than
+    # stacking a redundant commit onto the DAG on every re-invocation.
+    prior = decision.resolution if decision.status == "resolved" else None
+    if prior and prior.get("via") == "pick" and prior.get("branch") == fate_label:
+        prior_commit = prior.get("commit_id")
+        head = most_recent_branch_head(slot)
+        if prior_commit and head is not None and head.commit_id == prior_commit:
+            return PickResult(
+                commit_id=prior_commit,
+                candidate_id=candidate_id,
+                source=source,
+                spec_clause=_spec_clause(decision, fate_label),
+            )
+
     commit_id = _commit_candidate_as_head(slot, source, usage_id=usage_id)
     decision.status = "resolved"
-    decision.resolution = {"via": "pick", "branch": fate_label, "candidate_id": candidate_id}
+    decision.resolution = {
+        "via": "pick",
+        "branch": fate_label,
+        "candidate_id": candidate_id,
+        "commit_id": commit_id,
+    }
     attach_decision_set(slot, decision_set)
     return PickResult(
         commit_id=commit_id,

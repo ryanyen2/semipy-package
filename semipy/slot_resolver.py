@@ -1382,6 +1382,7 @@ def _resolve_slot_with_decisions(
         initial_candidates=getattr(cfg, "decision_initial_candidates", 3),
         max_candidates=getattr(cfg, "decision_max_candidates", 5),
         use_llm=True,
+        timeout=getattr(cfg, "decision_cost_budget_s", 15),
     )
 
     head_entry = entry_by_source.get(outcome.head_source or "")

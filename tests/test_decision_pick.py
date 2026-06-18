@@ -93,3 +93,32 @@ def test_pick_does_not_lose_prior_commits():
     pick_branch(slot, dset, decision_id=dset.decisions[0].decision_id, fate_label="skip")
     # Original commit still in history; pick added a new head, did not delete.
     assert len(slot.commits) == 2
+
+
+def test_pick_refuses_on_locked_slot():
+    # A locked slot pins dispatch to the locked commit, so a pick would mint a
+    # commit dispatch never serves while falsely closing the decision. Refuse.
+    from semipy.history.version_control import Portal
+    from semipy.history.version_lock import lock_slot_to_commit
+
+    slot = _slot_with_head()
+    portal = Portal(session_id="s", source_file="m.py", module_name="m", slots={slot.slot_id: slot})
+    lock_slot_to_commit(portal, slot.slot_id, most_recent_branch_head(slot).commit_id)
+    dset = _decision_set()
+    with pytest.raises(DecisionResolveError, match="locked"):
+        pick_branch(slot, dset, decision_id=dset.decisions[0].decision_id, fate_label="skip")
+    # The decision must remain open and no commit minted.
+    assert dset.decisions[0].status != "resolved"
+    assert len(slot.commits) == 1
+
+
+def test_repeated_pick_same_fate_is_idempotent():
+    slot = _slot_with_head()
+    dset = _decision_set()
+    did = dset.decisions[0].decision_id
+    first = pick_branch(slot, dset, decision_id=did, fate_label="skip")
+    n_after_first = len(slot.commits)
+    second = pick_branch(slot, dset, decision_id=did, fate_label="skip")
+    # Same commit returned, no extra commit stacked onto the DAG.
+    assert second.commit_id == first.commit_id
+    assert len(slot.commits) == n_after_first
