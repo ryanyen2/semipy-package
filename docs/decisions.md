@@ -37,6 +37,21 @@ targets, where taint and symbolic execution lose precision. The classifier only
 decision the candidates did not exhibit. With no API key it abstains to a
 deterministic, unlabeled output-cluster view.
 
+**Wiring into generation.** When `decisions_enabled`, `slot_resolver.execute_slot`
+routes the GENERATE and ADAPT decisions through `_resolve_slot_with_decisions`,
+which builds a memoizing `generate_candidate(i)` over `SemiAgent().generate` (so a
+losing candidate's source maps back to its compiled entry), runs the draw, commits
+the head, and attaches the `DecisionSet` to the slot. REUSE and INSTANTIATE never
+draw, and if every candidate generation fails the path falls back to a single
+`generate` so the original error surfaces. With `decisions_enabled=False` (the
+default) the live path is byte-for-byte the pre-existing single-generate call.
+Escalation always draws up to `decision_max_candidates` before concluding no-fork
+(F1): agreement among a small initial sample is weak evidence -- a 20% minority
+fate is simply absent from three draws roughly half the time. A divergence that
+spans two axes at once -- the output *schema* (differing dict key sets) and a
+*value* choice within the dominant schema -- is **factored** into two decisions
+rather than one conflated three-way fork (`factor.py`).
+
 ## The decision node
 
 A `Decision` is a feature-fate node indexed by an **ambiguity germ** in the input
@@ -57,7 +72,11 @@ Divergence is observed differently per domain, but always on real behavior:
 - **Effectful** (DB, server/client, webscraping) -- the candidate runs through
   `effects.shadow.run_effectful_source` and is clustered by its reified
   `EffectScript` (`observe_effectful`). Divergence is observed on *intended
-  effects* with **no real mutation**.
+  effects* with **no real mutation**. Each candidate is observed in **two passes**
+  -- against an empty world and against a `SeededShadowWorld` where the entity
+  already exists -- and the signatures are combined (`absent|...` + `exists|...`).
+  The second pass exposes insert-vs-upsert forks that an empty world hides (a
+  read-then-branch upsert looks identical to a blind insert when no row exists).
 - **Nondeterministic / expensive** (model training, scraping, visualization) --
   `runmodes.py`. RNG is **seeded** for reproducibility; a **cost guard** bounds
   wall-clock so an expensive candidate cannot hang resolution; clustering uses
@@ -82,6 +101,21 @@ A `#?` fork is resolved two ways (`resolve.py`), both LLM-free at the pick site:
 
 Because the `DecisionSet` persists **every** candidate source (including losers),
 a later pick swaps the head without regenerating.
+
+Both are driven from the CLI (and, in turn, the VS Code `#?` CodeLens picker):
+
+```bash
+python -m semipy pick-decision   --portal P --slot-id S --decision-id D --fate "count as 0"
+python -m semipy assert-decision --portal P --slot-id S --decision-id D --property "..."
+```
+
+`pick-decision` **refuses on a locked slot** (a lock pins the active commit ahead
+of any branch head, so a pick would mint a commit dispatch never serves while
+falsely closing the fork -- unlock first), and is **idempotent**: re-picking the
+same fate returns the existing commit rather than stacking a redundant one. Both
+commands mirror `reset-slot` (load -> mutate -> `save_portal` ->
+`write_dispatch_module`). `assert-decision` records the property and signals regen
+but does not yet run an LLM/execution `satisfies` check (a documented follow-up).
 
 ## The `DecisionSet` render contract
 
@@ -108,7 +142,7 @@ DecisionSet
       consequence_kind: str            # structural | categorical | numeric
       status: "open" | "resolved"
       resolution: null
-                | {via:"pick",   branch, candidate_id}
+                | {via:"pick",   branch, candidate_id, commit_id}
                 | {via:"assert", property, contract_case_id, ...}
       labeled: bool                    # LLM-named vs deterministic view
     }
@@ -124,4 +158,9 @@ same path `#<` uses), so adding, editing, or resolving a fork never perturbs
 
 On `SemiConfig` (via `configure`): `decisions_enabled` (master switch, default
 off), `decision_initial_candidates` (3), `decision_max_candidates` (5),
-`decision_classifier_model` (per-role override), `decision_cost_budget_s` (20).
+`decision_classifier_model` (per-role override), `decision_cost_budget_s` (20) --
+the per-resolution wall-clock budget forwarded to the draw as its observation
+timeout, so a slow/expensive candidate cannot hang resolution.
+
+A forked GENERATE/ADAPT costs up to `decision_max_candidates` LLM generations
+(the opt-in tradeoff); REUSE/INSTANTIATE and the default-off path are unaffected.

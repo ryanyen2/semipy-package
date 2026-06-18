@@ -92,6 +92,12 @@ points at a `.portal.json`):
   falls back to its previous commit (`version_lock.reset_version`).
 - `regenerate` / `lock` / `unlock` / `rollback` / `rewind-spec` / `revert-effect` /
   `quarantine-cases` / `diagnostics` — existing per-slot operations.
+- `pick-decision --portal P --slot-id S --decision-id D --fate F` — resolve a
+  surfaced `#?` fork by picking a fate (LLM-free head swap to the stored
+  candidate; refuses on a locked slot, idempotent on re-pick). `assert-decision
+  --portal P --slot-id S --decision-id D --property "..."` — resolve by asserting
+  a property (records a contract case + signals regen). Back the VS Code `#?`
+  steering actions (`resolve.py`).
 
 ## Subsystems (see `docs/` for depth)
 
@@ -217,8 +223,12 @@ points at a `.portal.json`):
   discriminating-input search exposes forks no sample input exercised. Open forks
   render as inline `#?` lines (stripped before lowering, so `slot_id` is stable)
   and resolve by **pick a branch** (LLM-free head swap to a stored candidate) or
-  **assert a property** (contract case + targeted regen). Fully opt-in
-  (`decisions_enabled` defaults off). Detail: [`docs/decisions.md`](docs/decisions.md).
+  **assert a property** (contract case + targeted regen). When enabled, the draw
+  is **auto-wired into generation**: `execute_slot` routes GENERATE/ADAPT through
+  `_resolve_slot_with_decisions` (the multi-candidate draw), commits the head, and
+  attaches the `DecisionSet`; REUSE/INSTANTIATE and the `decisions_enabled=False`
+  default path are byte-for-byte unchanged. Fully opt-in (`decisions_enabled`
+  defaults off). Detail: [`docs/decisions.md`](docs/decisions.md).
 
 ## Public API
 
