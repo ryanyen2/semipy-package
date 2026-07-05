@@ -119,6 +119,10 @@ class Slot:
     # Owned by semipy.kernel; a plain dict here. Empty for legacy slots -- a slot
     # with no kernel_tree is a degenerate (whole-slot) tree by convention.
     kernel_tree: dict[str, Any] = field(default_factory=dict)
+    # Freeze-attempt history (list of serialized FreezeEvent dicts, via
+    # semipy.kernel.operators.FreezeEvent.to_dict/from_dict), oldest first.
+    # Owned by semipy.kernel; empty for slots that never attempted a freeze.
+    freeze_events: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass

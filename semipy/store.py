@@ -141,6 +141,7 @@ def _slot_to_dict(s: Slot) -> dict[str, Any]:
         "ledger": dict(getattr(s, "ledger", {}) or {}),
         "decision_set": dict(getattr(s, "decision_set", {}) or {}),
         "kernel_tree": dict(getattr(s, "kernel_tree", {}) or {}),
+        "freeze_events": [dict(e) for e in (getattr(s, "freeze_events", None) or [])],
     }
 
 
@@ -168,6 +169,7 @@ def _slot_from_dict(d: dict[str, Any]) -> Slot:
         ledger=dict(d.get("ledger", {}) or {}),
         decision_set=dict(d.get("decision_set", {}) or {}),
         kernel_tree=dict(d.get("kernel_tree", {}) or {}),
+        freeze_events=[dict(e) for e in (d.get("freeze_events", None) or [])],
     )
 
 
