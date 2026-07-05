@@ -125,6 +125,48 @@ def test_recognizes_combined_filter_and_map_shape():
     assert {NodeKind.FILTER, NodeKind.MAP}.issubset(kinds)
 
 
+def _exec_leaf(artifact: str):
+    ns: dict = {}
+    exec(compile(artifact, "<leaf>", "exec"), ns)
+    return next(v for v in ns.values() if callable(v))
+
+
+def test_map_and_filter_leaf_artifacts_are_directly_executable_and_distinct():
+    # Regression: a prior version reused the whole function's own signature for
+    # a MAP/FILTER/FOLD leaf, whose expression actually references the *loop*
+    # variable -- unparsing to source that raised NameError the moment anything
+    # tried to call it. Leaves must be genuinely self-contained callables.
+    src = "def f(items):\n    out = []\n    for x in items:\n        if x > 0:\n            out.append(x * 2)\n    return out\n"
+    node = lower_source_to_tree(src, "s")
+    by_id = {n.node_id: n for n in node.walk()}
+    pred = _exec_leaf(next(n.artifact for nid, n in by_id.items() if nid.endswith(".filter.pred")))
+    body = _exec_leaf(next(n.artifact for nid, n in by_id.items() if nid.endswith(".map.body")))
+    assert pred(5) is True and pred(-1) is False
+    assert body(5) == 10
+    # The two leaves must capture *different* expressions -- the predicate and
+    # the map transform -- not the same one duplicated.
+    pred_src = next(n.artifact for nid, n in by_id.items() if nid.endswith(".filter.pred"))
+    body_src = next(n.artifact for nid, n in by_id.items() if nid.endswith(".map.body"))
+    assert pred_src != body_src
+
+
+def test_fold_leaf_artifact_takes_accumulator_and_item_as_its_own_parameters():
+    src = "def f(items):\n    total = 0\n    for x in items:\n        total += x\n    return total\n"
+    node = lower_source_to_tree(src, "s")
+    step = _exec_leaf(next(n.artifact for n in node.walk() if n.node_id.endswith(".fold.step")))
+    assert step(10, 3) == 13
+
+
+def test_comprehension_map_leaf_artifact_is_directly_executable():
+    src = "def f(items):\n    return [x * 2 for x in items if x > 0]\n"
+    node = lower_source_to_tree(src, "s")
+    by_id = {n.node_id: n for n in node.walk()}
+    pred = _exec_leaf(next(n.artifact for nid, n in by_id.items() if nid.endswith(".filter.pred")))
+    body = _exec_leaf(next(n.artifact for nid, n in by_id.items() if nid.endswith(".map.body")))
+    assert pred(5) is True and pred(-1) is False
+    assert body(5) == 10
+
+
 def test_recognizes_fold_shape_with_reassignment_and_augassign():
     src_reassign = "def f(items):\n    total = 0\n    for x in items:\n        total = total + x\n    return total\n"
     src_aug = "def f(items):\n    total = 0\n    for x in items:\n        total += x\n    return total\n"

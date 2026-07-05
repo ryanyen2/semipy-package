@@ -221,6 +221,31 @@ def _stmts_to_source(stmts: list[ast.stmt], fn_def: ast.FunctionDef | ast.AsyncF
         return ""
 
 
+def _leaf_function_source(name: str, params: list[str], expr: ast.expr) -> str:
+    """A genuinely self-contained, callable ``def name(params...): return expr``.
+
+    Used for a MAP/FILTER/FOLD leaf, whose expression references the *loop or
+    comprehension-local* variable(s) (the element, the accumulator) rather
+    than the enclosing function's own parameters. Reusing the parent's
+    signature there (as ``_stmts_to_source`` correctly does for whole-scope
+    nodes like a BRANCH arm) would unparse to source that raises ``NameError``
+    the moment anything tries to call it -- the loop variable was never in
+    scope. This is what makes blame's per-node trace replay (Phase 4) able to
+    actually execute a leaf, not just read it as a comment.
+    """
+    args = ast.arguments(
+        posonlyargs=[], args=[ast.arg(arg=p) for p in params],
+        vararg=None, kwonlyargs=[], kw_defaults=[], kwarg=None, defaults=[],
+    )
+    fn = ast.FunctionDef(name=name, args=args, body=[ast.Return(value=expr)], decorator_list=[], returns=None)
+    module = ast.Module(body=[fn], type_ignores=[])
+    ast.fix_missing_locations(module)
+    try:
+        return ast.unparse(module)
+    except Exception:
+        return ""
+
+
 def _loaded_names(node: ast.AST) -> set[str]:
     return {n.id for n in ast.walk(node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
 
@@ -246,8 +271,26 @@ def _is_bare_name(expr: ast.expr, name: str) -> bool:
     return isinstance(expr, ast.Name) and expr.id == name
 
 
-def _match_for_loop(for_stmt: ast.For) -> tuple[str, str, ast.expr] | None:
-    """Return (combinator_kind, acc_name, key_expr) for a recognized loop body shape."""
+@dataclass
+class _LoopMatch:
+    """One recognized for-loop body shape.
+
+    ``expr`` is the map transform / filter predicate / fold step; for
+    ``map_filter`` specifically, ``expr`` is the map transform and
+    ``filter_expr`` is the separate guarding predicate -- kept apart so a
+    caller can build correct, independently-executable leaves for *both*
+    (a prior version conflated them, silently dropping the map transform).
+    """
+
+    kind: str  # "map" | "filter" | "fold" | "map_filter"
+    item_name: str
+    acc_name: str
+    expr: ast.expr
+    filter_expr: ast.expr | None = None
+
+
+def _match_for_loop(for_stmt: ast.For) -> _LoopMatch | None:
+    """Recognize a for-loop body shape."""
     if not isinstance(for_stmt.target, ast.Name):
         return None  # tuple-unpacking loop targets: out of scope for Phase 1
     item_name = for_stmt.target.id
@@ -259,24 +302,29 @@ def _match_for_loop(for_stmt: ast.For) -> tuple[str, str, ast.expr] | None:
         if len(inner) == 1 and isinstance(inner[0], ast.Expr) and _is_append_call(inner[0].value):
             acc_name, arg = _append_call_parts(inner[0].value)
             if _is_bare_name(arg, item_name):
-                return ("filter", acc_name, cond)
-            return ("map_filter", acc_name, cond)
+                return _LoopMatch("filter", item_name, acc_name, cond)
+            return _LoopMatch("map_filter", item_name, acc_name, arg, filter_expr=cond)
         return None
 
     if len(body) == 1 and isinstance(body[0], ast.Expr) and _is_append_call(body[0].value):
         acc_name, arg = _append_call_parts(body[0].value)
-        return ("map", acc_name, arg)
+        return _LoopMatch("map", item_name, acc_name, arg)
 
     if len(body) == 1 and isinstance(body[0], ast.Assign):
         stmt = body[0]
         if len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
             acc_name = stmt.targets[0].id
             if acc_name in _loaded_names(stmt.value):
-                return ("fold", acc_name, stmt.value)
+                return _LoopMatch("fold", item_name, acc_name, stmt.value)
         return None
 
     if len(body) == 1 and isinstance(body[0], ast.AugAssign) and isinstance(body[0].target, ast.Name):
-        return ("fold", body[0].target.id, body[0].value)
+        acc_name = body[0].target.id
+        # ``total += x`` has no standalone expression for "the new value" --
+        # synthesize the equivalent ``total <op> x`` so the fold leaf's step
+        # actually depends on the accumulator, not just the loop item.
+        step_expr = ast.BinOp(left=ast.Name(id=acc_name, ctx=ast.Load()), op=body[0].op, right=body[0].value)
+        return _LoopMatch("fold", item_name, acc_name, step_expr)
 
     return None
 
@@ -288,24 +336,26 @@ def _try_loop_run(stmts: list[ast.stmt], node_id: str, fn_def: ast.FunctionDef) 
     matched = _match_for_loop(stmts[0])
     if matched is None:
         return None
-    kind, acc_name, key_expr = matched
-    leaf_source = _stmts_to_source([ast.Return(value=key_expr)], fn_def)
-    meta = {"accumulator": acc_name, "iterable": ast.unparse(stmts[0].iter)}
+    meta = {"accumulator": matched.acc_name, "iterable": ast.unparse(stmts[0].iter)}
 
-    if kind == "map":
+    if matched.kind == "map":
+        leaf_source = _leaf_function_source("map_body", [matched.item_name], matched.expr)
         leaf = Node(node_id=f"{node_id}.map.body", kind=NodeKind.OPAQUE, hardness=Hardness.PLASTIC, artifact=leaf_source)
         return Node(node_id=node_id, kind=NodeKind.MAP, hardness=Hardness.PLASTIC, children=[leaf], meta=meta)
-    if kind == "filter":
-        leaf = Node(node_id=f"{node_id}.filter.pred", kind=NodeKind.OPAQUE, hardness=Hardness.PLASTIC, artifact=leaf_source, output_type="bool")
+    if matched.kind == "filter":
+        pred_source = _leaf_function_source("filter_pred", [matched.item_name], matched.expr)
+        leaf = Node(node_id=f"{node_id}.filter.pred", kind=NodeKind.OPAQUE, hardness=Hardness.PLASTIC, artifact=pred_source, output_type="bool")
         return Node(node_id=node_id, kind=NodeKind.FILTER, hardness=Hardness.PLASTIC, children=[leaf], meta=meta)
-    if kind == "fold":
-        leaf = Node(node_id=f"{node_id}.fold.step", kind=NodeKind.OPAQUE, hardness=Hardness.PLASTIC, artifact=leaf_source)
+    if matched.kind == "fold":
+        step_source = _leaf_function_source("fold_step", [matched.acc_name, matched.item_name], matched.expr)
+        leaf = Node(node_id=f"{node_id}.fold.step", kind=NodeKind.OPAQUE, hardness=Hardness.PLASTIC, artifact=step_source)
         return Node(node_id=node_id, kind=NodeKind.FOLD, hardness=Hardness.PLASTIC, children=[leaf], meta=meta)
-    if kind == "map_filter":
-        pred_source = _stmts_to_source([ast.Return(value=stmts[0].body[0].test)], fn_def)  # type: ignore[union-attr]
+    if matched.kind == "map_filter":
+        pred_source = _leaf_function_source("filter_pred", [matched.item_name], matched.filter_expr)
         pred_leaf = Node(node_id=f"{node_id}.filter.pred", kind=NodeKind.OPAQUE, hardness=Hardness.PLASTIC, artifact=pred_source, output_type="bool")
         filter_node = Node(node_id=f"{node_id}.filter", kind=NodeKind.FILTER, hardness=Hardness.PLASTIC, children=[pred_leaf], meta=meta)
-        map_leaf = Node(node_id=f"{node_id}.map.body", kind=NodeKind.OPAQUE, hardness=Hardness.PLASTIC, artifact=leaf_source)
+        map_source = _leaf_function_source("map_body", [matched.item_name], matched.expr)
+        map_leaf = Node(node_id=f"{node_id}.map.body", kind=NodeKind.OPAQUE, hardness=Hardness.PLASTIC, artifact=map_source)
         map_node = Node(node_id=f"{node_id}.map", kind=NodeKind.MAP, hardness=Hardness.PLASTIC, children=[map_leaf], meta=meta)
         return Node(node_id=node_id, kind=NodeKind.COMPOSE, hardness=Hardness.PLASTIC, children=[filter_node, map_node])
     return None
@@ -327,19 +377,19 @@ def _try_comprehension_run(stmts: list[ast.stmt], node_id: str, fn_def: ast.Func
     meta = {"iterable": ast.unparse(gen.iter)}
 
     if has_filter and is_map:
-        pred_source = _stmts_to_source([ast.Return(value=gen.ifs[0])], fn_def)
+        pred_source = _leaf_function_source("filter_pred", [item_name], gen.ifs[0])
         pred_leaf = Node(node_id=f"{node_id}.filter.pred", kind=NodeKind.OPAQUE, hardness=Hardness.PLASTIC, artifact=pred_source, output_type="bool")
         filter_node = Node(node_id=f"{node_id}.filter", kind=NodeKind.FILTER, hardness=Hardness.PLASTIC, children=[pred_leaf], meta=meta)
-        map_source = _stmts_to_source([ast.Return(value=comp.elt)], fn_def)
+        map_source = _leaf_function_source("map_body", [item_name], comp.elt)
         map_leaf = Node(node_id=f"{node_id}.map.body", kind=NodeKind.OPAQUE, hardness=Hardness.PLASTIC, artifact=map_source)
         map_node = Node(node_id=f"{node_id}.map", kind=NodeKind.MAP, hardness=Hardness.PLASTIC, children=[map_leaf], meta=meta)
         return Node(node_id=node_id, kind=NodeKind.COMPOSE, hardness=Hardness.PLASTIC, children=[filter_node, map_node])
     if has_filter:
-        pred_source = _stmts_to_source([ast.Return(value=gen.ifs[0])], fn_def)
+        pred_source = _leaf_function_source("filter_pred", [item_name], gen.ifs[0])
         pred_leaf = Node(node_id=f"{node_id}.filter.pred", kind=NodeKind.OPAQUE, hardness=Hardness.PLASTIC, artifact=pred_source, output_type="bool")
         return Node(node_id=node_id, kind=NodeKind.FILTER, hardness=Hardness.PLASTIC, children=[pred_leaf], meta=meta)
     if is_map:
-        map_source = _stmts_to_source([ast.Return(value=comp.elt)], fn_def)
+        map_source = _leaf_function_source("map_body", [item_name], comp.elt)
         map_leaf = Node(node_id=f"{node_id}.map.body", kind=NodeKind.OPAQUE, hardness=Hardness.PLASTIC, artifact=map_source)
         return Node(node_id=node_id, kind=NodeKind.MAP, hardness=Hardness.PLASTIC, children=[map_leaf], meta=meta)
     return None
