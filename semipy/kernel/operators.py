@@ -11,13 +11,13 @@ the molten-candidate pipeline already uses). A free-text output (no usable
 ``≈_Y``) is refused outright before any gate runs: summarize/judge-style
 slots are never freeze-eligible, by construction (§2, §4 Prop 4).
 
-This module is additive: it does not yet replace ``interpreted.attempt_promotion``
-at its call sites (``InterpretedOp``, ``slot_resolver._execute_interpreted_slot``).
-Doing so is a deliberate, behavior-changing follow-up -- the three-gate freeze
-is strictly more conservative, so some promotions ``attempt_promotion`` used to
-grant (e.g. a residual matched from only 1-2 examples, which cannot compress
-the evidence) this operator will correctly refuse. That swap needs an explicit
-decision, not a silent bundle into this phase.
+``slot_resolver._execute_interpreted_slot`` (the live, portal-integrated
+promotion path) calls this directly and persists the resulting ``FreezeEvent``
+on the slot. ``interpreted.attempt_promotion`` itself is unchanged and still
+backs the standalone ``InterpretedOp`` (experiments/tests, not portal-wired);
+the three-gate freeze here is strictly more conservative, so some promotions
+the old single-gate check granted (e.g. a residual matched from only 1-2
+examples, which cannot compress the evidence) are now correctly refused.
 """
 from __future__ import annotations
 

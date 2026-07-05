@@ -1180,15 +1180,15 @@ def _execute_interpreted_slot(
 
     Calls the LLM per input (memoized by runtime fingerprint), accumulates
     (args -> output) examples in ``slot.advisor_state``, and once enough have
-    accumulated tries to compile a residual that reproduces HELD-OUT examples.
-    On success the slot promotes to a normal cached commit and this branch is
-    never taken again; on failure it stays interpreted and retries later.
+    accumulated attempts ``kernel.operators.freeze`` (frontier-kernel Phase 3):
+    held-out reproducibility, an MDL compression check, and a counterexample
+    license across the residual candidates drawn. On a licensed freeze the
+    slot promotes to a normal cached commit and this branch is never taken
+    again; on refusal it stays interpreted and retries later. Every attempt
+    (licensed or not) is appended to ``slot.freeze_events``.
     """
-    from semipy.interpreted import (
-        attempt_promotion,
-        extract_label_set,
-        interpret_call,
-    )
+    from semipy.interpreted import extract_label_set, interpret_call
+    from semipy.kernel.operators import append_freeze_event, freeze
 
     output_names = list(slot_spec.output_names or [])
     labels = extract_label_set(slot_spec.expected_type)
@@ -1235,12 +1235,16 @@ def _execute_interpreted_slot(
     if n >= promote_after and n >= int(adv.get("interpreted_next_attempt", promote_after)):
         adv["interpreted_attempts"] = int(adv.get("interpreted_attempts", 0)) + 1
         pairs = [(e["args"], e["output"]) for e in examples]
-        src, frac = attempt_promotion(
-            slot_spec.spec_text, slot_spec.free_variables, pairs,
+        src, freeze_event = freeze(
+            instruction=slot_spec.spec_text, free_variables=slot_spec.free_variables,
+            examples=pairs, expected_type=slot_spec.expected_type,
             output_names=output_names, labels=labels,
             timeout=getattr(config, "gist_timeout", 30),
             e2b_api_key=getattr(config, "e2b_api_key", None),
+            node_id=slot_spec.slot_id,
         )
+        frac = freeze_event.certificate.held_out_pass_fraction
+        append_freeze_event(slot, freeze_event)
         promoted = False
         if src:
             _promote_interpreted_commit(
