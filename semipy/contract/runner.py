@@ -58,6 +58,10 @@ class ContractRunResult:
     failures: list[CaseFailure] = field(default_factory=list)
     n_evaluated: int = 0
     n_skipped: int = 0
+    # ids of cases actually replayed (had a runnable row and produced a record) --
+    # distinct from n_evaluated so callers can persist a per-case outcome ledger
+    # without re-deriving which cases were merely skipped.
+    evaluated_case_ids: set[str] = field(default_factory=set)
 
     def failing_case_ids(self) -> set[str]:
         return {f.case_id for f in self.failures}
@@ -329,10 +333,12 @@ def run_contract(
     # Evaluate every runnable case.
     failures: list[CaseFailure] = []
     evaluated = 0
+    evaluated_case_ids: set[str] = set()
     for i, case in enumerate(cases):
         if i not in rec_by_case:
             continue
         evaluated += 1
+        evaluated_case_ids.add(case.case_id)
         rec = rec_by_case[i]
         msg: str | None
         if case.kind == "metamorphic":
@@ -370,4 +376,5 @@ def run_contract(
         failures=failures,
         n_evaluated=evaluated,
         n_skipped=skipped,
+        evaluated_case_ids=evaluated_case_ids,
     )

@@ -35,6 +35,31 @@ def quarantine_cases(slot: Any, case_ids: list[str], why: str) -> None:
     save_contract(slot, contract)
 
 
+def record_case_outcomes(slot: Any, cases: list[ContractCase], result: Any, *, commit_id: str) -> None:
+    """Persist a pass/fail outcome for every case ``result`` actually replayed.
+
+    ``result`` is a ``ContractRunResult``; only cases in its ``evaluated_case_ids``
+    were actually run (a skipped case leaves no outcome). No-op if nothing was
+    evaluated, so a disabled/no-op contract gate never touches the portal.
+    """
+    evaluated_ids: set[str] = getattr(result, "evaluated_case_ids", None) or set()
+    if not evaluated_ids:
+        return
+    failing_ids = result.failing_case_ids()
+    contract = get_contract(slot)
+    changed = False
+    for case in cases:
+        if case.case_id not in evaluated_ids:
+            continue
+        stored = contract.cases.get(case.case_id)
+        if stored is None:
+            continue
+        stored.record_outcome(passed=case.case_id not in failing_ids, commit_id=commit_id)
+        changed = True
+    if changed:
+        save_contract(slot, contract)
+
+
 def retire_active_cases(slot: Any, why: str) -> int:
     """Retire (quarantine) every active case on the slot; returns how many.
 

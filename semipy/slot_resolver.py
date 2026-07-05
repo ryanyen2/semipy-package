@@ -743,19 +743,21 @@ def _run_reuse_contract_gate(
     if not getattr(config, "contract_gate", False):
         return None, None
     try:
-        from semipy.contract.access import load_active_cases
+        from semipy.contract.access import load_active_cases, record_case_outcomes
         from semipy.contract.runner import run_contract
 
         active = load_active_cases(slot)
         if not active:
             return None, None
         cap = int(getattr(config, "contract_max_cases", 25))
+        cases = active[:cap]
         cr = run_contract(
             implementation_source=getattr(commit, "generated_source", "") or "",
             slot_spec=slot_spec,
-            cases=active[:cap],
+            cases=cases,
             scaffold_source=slot_spec.enclosing_function_source,
         )
+        record_case_outcomes(slot, cases, cr, commit_id=getattr(commit, "commit_id", ""))
         if cr.passed:
             return None, None
         msg = cr.first_failure_message()

@@ -37,6 +37,25 @@ INVARIANT_NAMES: tuple[str, ...] = (
     "idempotent",
 )
 
+# Fraction of cases reserved as held-out (not used to accept/select a candidate;
+# reserved for the freeze certificate's reproducibility gate — see frontier-kernel
+# plan Part I §3.1). Bounded so recent replay history does not grow without limit.
+_HOLDOUT_FRACTION = 0.2
+_MAX_CASE_OUTCOMES = 50
+
+
+def assign_holdout_split(case_id: str, *, fraction: float = _HOLDOUT_FRACTION) -> bool:
+    """Deterministic train/held-out split from a case's content-addressed id.
+
+    A hash-bucket split is data-agnostic: it works uniformly whether the case's
+    input is a string, a record, a number, or anything else, so no per-type split
+    rule is needed. Callers assign this once at case-creation time and persist the
+    result (``ContractCase.holdout``) rather than recomputing it, so a later change
+    to ``fraction`` cannot retroactively reassign an existing case's split.
+    """
+    bucket = int(hashlib.sha256(f"holdout\0{case_id}".encode()).hexdigest(), 16) % 100
+    return bucket < int(fraction * 100)
+
 
 def _assertion_key(
     *,
@@ -111,8 +130,24 @@ class ContractCase:
     superseded_by: str = ""            # case_id that replaced this one
     supersede_reason: str = ""         # deliberate behavior-change rationale
 
+    # Evidence-ledger fields (frontier-kernel Phase 0):
+    # Which tree node this case pins. "" = whole-slot (today's only granularity);
+    # populated with a real per-node id once trace replay materializes node-local
+    # (input, output) pairs (frontier-kernel Phase 4).
+    node_id: str = ""
+    # Train/held-out split, assigned once at creation via assign_holdout_split().
+    holdout: bool = False
+    # Bounded replay history against this case: [{"ts", "passed", "commit_id"}, ...].
+    outcomes: list[dict[str, Any]] = field(default_factory=list)
+
     def is_active(self) -> bool:
         return self.status == "active"
+
+    def record_outcome(self, *, passed: bool, commit_id: str) -> None:
+        """Append one replay outcome, keeping only the most recent ones."""
+        self.outcomes.append({"ts": time.time(), "passed": passed, "commit_id": commit_id})
+        if len(self.outcomes) > _MAX_CASE_OUTCOMES:
+            self.outcomes = self.outcomes[-_MAX_CASE_OUTCOMES:]
 
     @property
     def primary_input(self) -> Any:

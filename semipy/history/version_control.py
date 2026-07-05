@@ -114,6 +114,11 @@ class Slot:
     # swap the committed head without regenerating. Owned by semipy.decisions; a
     # plain dict here. Empty for unambiguous slots / legacy portals.
     decision_set: dict[str, Any] = field(default_factory=dict)
+    # Serialized hardness tree (dict, via semipy.kernel.tree.tree_to_dict/from_dict):
+    # the node-level decomposition of the slot's current head implementation.
+    # Owned by semipy.kernel; a plain dict here. Empty for legacy slots -- a slot
+    # with no kernel_tree is a degenerate (whole-slot) tree by convention.
+    kernel_tree: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

@@ -36,6 +36,7 @@ from semipy.contract.models import (
     INVARIANT_NAMES,
     ContractCase,
     SlotContract,
+    assign_holdout_split,
     compute_case_id,
 )
 from semipy.contract.relations import relation_names
@@ -183,6 +184,7 @@ def _seed_invariants(
                 effect=effect,
                 decision=decision,
                 origin_commit_id=commit_id,
+                holdout=assign_holdout_split(cid),
             )
 
         # non_empty: only meaningful for types that *can* be empty (str/containers).
@@ -341,6 +343,7 @@ def _apply_llm_proposals(
                     case_id=cid, kind="example", input_sample=dict(row), input_fingerprint=fp,
                     expected_repr=str(rec.get("repr", "")), expected_type=str(rec.get("type", "")),
                     reason=p.reason, effect=p.effect, decision=decision, origin_commit_id=commit_id,
+                    holdout=assign_holdout_split(cid),
                 )
             )
             examples_added += 1
@@ -352,6 +355,7 @@ def _apply_llm_proposals(
                     case_id=cid, kind="invariant", input_sample=dict(row), input_fingerprint=fp,
                     invariant=p.invariant, expected_type=str(rec.get("type", "")),
                     reason=p.reason, effect=p.effect, decision=decision, origin_commit_id=commit_id,
+                    holdout=assign_holdout_split(cid),
                 )
             )
         elif p.kind == "metamorphic" and p.relation in relation_names():
@@ -361,6 +365,7 @@ def _apply_llm_proposals(
                     case_id=cid, kind="metamorphic", input_sample=dict(row), input_fingerprint=fp,
                     relation=p.relation, reason=p.reason, effect=p.effect,
                     decision=decision, origin_commit_id=commit_id,
+                    holdout=assign_holdout_split(cid),
                 )
             )
 

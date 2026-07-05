@@ -140,6 +140,7 @@ def _slot_to_dict(s: Slot) -> dict[str, Any]:
         "contract": dict(getattr(s, "contract", {}) or {}),
         "ledger": dict(getattr(s, "ledger", {}) or {}),
         "decision_set": dict(getattr(s, "decision_set", {}) or {}),
+        "kernel_tree": dict(getattr(s, "kernel_tree", {}) or {}),
     }
 
 
@@ -166,6 +167,7 @@ def _slot_from_dict(d: dict[str, Any]) -> Slot:
         contract=dict(d.get("contract", {}) or {}),
         ledger=dict(d.get("ledger", {}) or {}),
         decision_set=dict(d.get("decision_set", {}) or {}),
+        kernel_tree=dict(d.get("kernel_tree", {}) or {}),
     )
 
 
