@@ -141,6 +141,13 @@ class CodeSketch:
     expected_category: str = ""
     free_variable_names: tuple[str, ...] = ()
     binding_id: str = ""
+    # Licensed for cross-slot matching (frontier-kernel Phase 6): set by
+    # kernel.operators.license_sketch once the pattern has recurred, generalized
+    # to an independently generated occurrence, and compresses. A brand-new
+    # sketch starts unlicensed -- find_sketch_match will not surface it -- so a
+    # pattern seen once is never promoted on an LLM's self-reported confidence
+    # alone.
+    licensed: bool = False
 
 
 @dataclass
@@ -308,6 +315,8 @@ def find_sketch_match(
     candidates = list(library.sketches.values())
     scored: list[tuple[int, float, CodeSketch]] = []
     for sk in candidates:
+        if not sk.licensed:
+            continue
         if not _sketch_matches_slot_spec(sk, slot_spec):
             continue
         params_map = {p.hole_name: p for p in sk.params}
@@ -327,15 +336,35 @@ def find_sketch_match(
     return (best, hv)
 
 
-def merge_sketch_into_library(library: SketchLibrary, sketch: CodeSketch, binding: SemanticBinding) -> None:
-    """Upsert sketch and binding; merge structural index."""
+def merge_sketch_into_library(library: SketchLibrary, sketch: CodeSketch, binding: SemanticBinding) -> CodeSketch:
+    """Upsert sketch and binding; merge structural index.
+
+    Recurrence identity is the *structural* pattern (signature + spec_template),
+    not the exact ``sketch_id``: two independent generations of the same
+    conceptual pattern almost never produce byte-identical ``code_template``s
+    (naming, formatting), so matching on ``sketch_id`` alone would leave every
+    sketch permanently at recurrence 1 -- recurrence-based licensing (see
+    ``kernel.operators.license_sketch``) needs occurrences to actually
+    accumulate onto one sketch. An exact ``sketch_id`` match is checked first
+    since it is strictly more specific (same code too, not just same template).
+
+    Returns the sketch that now holds this occurrence's evidence -- the caller
+    needs it to run licensing.
+    """
     library.bindings[binding.binding_id] = binding
     existing = library.sketches.get(sketch.sketch_id)
+    if existing is None:
+        for sid in library.structural_index.get(sketch.structural_signature, []):
+            candidate = library.sketches.get(sid)
+            if candidate is not None and candidate.spec_template == sketch.spec_template:
+                existing = candidate
+                break
     if existing is not None:
         for cid in sketch.source_commit_ids:
             if cid not in existing.source_commit_ids:
                 existing.source_commit_ids.append(cid)
-        return
+        return existing
     library.sketches[sketch.sketch_id] = sketch
     library.structural_index.setdefault(sketch.structural_signature, []).append(sketch.sketch_id)
     library.version += 1
+    return sketch

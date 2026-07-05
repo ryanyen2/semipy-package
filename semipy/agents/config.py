@@ -68,10 +68,16 @@ class SemiConfig:
     #: If False, persist sketches before ``execute_slot`` returns (needed for INSTANTIATE in the same process).
     #: If True, run extraction in a background thread (lower latency; same-run INSTANTIATE may not see new sketches).
     sketch_library_learning_async: bool = False
-    #: Minimum model-reported confidence for a sketch binding to be added to the library.
-    #: When the spec/code alignment is unclear, the binding is skipped rather than memorized
-    #: as a pattern. Raise to be stricter; lower to be more permissive.
+    #: Minimum model-reported confidence for a sketch binding to be *considered* at all.
+    #: This is a cheap proposal-side prefilter (an LLM self-report, never the oracle-gated
+    #: authority on reuse): when the spec/code alignment is unclear, the binding is skipped
+    #: rather than memorized as a pattern. Raise to be stricter; lower to be more permissive.
     sketch_library_min_confidence: float = 0.6
+    #: Minimum number of independently generated occurrences of the same structural
+    #: pattern before a sketch is licensed for cross-slot matching (kernel.operators
+    #: .license_sketch). A pattern seen once proves nothing; this replaces the old
+    #: single-shot confidence-only promotion gate.
+    sketch_library_min_recurrence: int = 2
     #: When True, record per-call outcomes, run the intent-fit judge on real data,
     #: and emit context-change traces. Default off for backward compatibility.
     adaptive_mode: bool = False

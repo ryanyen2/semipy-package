@@ -614,7 +614,23 @@ def _run_sketch_binding_extraction(
             slot_spec.expected_category.value,
             tuple(slot_spec.free_variables),
         )
-        merge_sketch_into_library(lib, sketch, binding)
+        merged = merge_sketch_into_library(lib, sketch, binding)
+        if not merged.licensed:
+            from semipy.kernel.operators import license_sketch
+
+            lic = license_sketch(
+                merged,
+                incoming_spec_text=spec_text,
+                incoming_source=generated_source,
+                min_recurrence=int(getattr(cfg, "sketch_library_min_recurrence", 2)),
+            )
+            merged.licensed = lic.licensed
+            if cfg.verbose:
+                print(
+                    f"  Pattern learning: {'licensed' if lic.licensed else 'not yet licensed'} "
+                    f"({lic.reason}).",
+                    file=sys.stderr,
+                )
         save_sketch_library(cache_dir, lib)
         # Hold the per-portal lock around the portal read-modify-write: when this
         # runs in a background thread (sketch_library_learning_async), it must not

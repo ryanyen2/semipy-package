@@ -36,7 +36,15 @@ structure against both branches' own evidence, a fresh separation search
 (reusing the same discriminating-input searcher freeze's counterexample
 license uses), and an MDL comparison, before collapsing two branches into
 one. Like ``melt``, both are additive: there is no live branch/merge call
-site yet (that is Phase 6's routing/slot_resolver collapse).
+site yet.
+
+``license_sketch`` (Phase 6, §5 library/) applies the same discipline to
+cross-slot pattern reuse: ``library.merge_sketch_into_library``'s single-shot,
+LLM-self-reported-confidence gate is replaced with recurrence (the pattern
+must show up across more than one independently generated occurrence),
+generalization (the template built from the first occurrence must actually
+reproduce a later, independent one -- not just replay what it memorized), and
+an MDL check (the template must compress relative to storing raw sources).
 """
 from __future__ import annotations
 
@@ -483,4 +491,87 @@ def merge(
         licensed=True,
         reason="candidate reproduces both branches, survives separation search, and MDL favors the union",
         unified_source=candidate_unified_source,
+    )
+
+
+@dataclass
+class SketchLicense:
+    """The outcome of one sketch cross-slot-reuse licensing attempt (Phase 6)."""
+
+    licensed: bool
+    reason: str
+    recurrence: int
+    mdl_gain: float
+
+
+def license_sketch(
+    sketch: Any,  # library.sketch.CodeSketch, already merged with this occurrence
+    *,
+    incoming_spec_text: str,
+    incoming_source: str,
+    min_recurrence: int = 2,
+) -> SketchLicense:
+    """License a code sketch for cross-slot matching (§5 library/).
+
+    Replaces the single-shot LLM-confidence gate with three checks, run in the
+    same spirit as ``freeze``'s: **recurrence** (the structural pattern has
+    shown up across at least ``min_recurrence`` occurrences -- one occurrence
+    proves nothing); **generalization** (the template built from the first
+    occurrence, re-instantiated against *this* occurrence's own spec text,
+    must reproduce this occurrence's independently generated source -- proof
+    the template actually captures the reusable structure rather than
+    memorizing instance one); and **MDL** (storing the template once plus one
+    hole-value set per occurrence must be cheaper than storing every
+    occurrence's raw source). Call only while the sketch is not yet licensed
+    -- licensing is sticky (never re-run against a sketch already licensed),
+    matching the calculus's monotone-safety discipline: a later occurrence
+    that fails to fit the template does not retroactively revoke a license
+    earned from evidence that still stands.
+    """
+    from semipy.library.sketch import instantiate_sketch_code, match_spec_to_sketch
+
+    recurrence = len(sketch.source_commit_ids)
+    if recurrence < min_recurrence:
+        return SketchLicense(
+            licensed=False,
+            reason=f"recurrence {recurrence} < required {min_recurrence}",
+            recurrence=recurrence, mdl_gain=0.0,
+        )
+
+    params_map = {p.hole_name: p for p in sketch.params}
+    hole_values = match_spec_to_sketch(incoming_spec_text, sketch.spec_template, params_map)
+    if hole_values is None:
+        return SketchLicense(
+            licensed=False,
+            reason="this occurrence's spec text no longer fits the template's token pattern",
+            recurrence=recurrence, mdl_gain=0.0,
+        )
+
+    reinstantiated = instantiate_sketch_code(sketch, hole_values)
+    try:
+        import ast as _ast
+        reproduced = _ast.dump(_ast.parse(reinstantiated)) == _ast.dump(_ast.parse(incoming_source))
+    except SyntaxError:
+        reproduced = False
+    if not reproduced:
+        return SketchLicense(
+            licensed=False,
+            reason="template does not reproduce this independently generated occurrence",
+            recurrence=recurrence, mdl_gain=0.0,
+        )
+
+    raw_cost = recurrence * len(incoming_source)
+    template_cost = len(sketch.code_template) + recurrence * len(repr(hole_values))
+    mdl_gain = raw_cost - template_cost
+    if mdl_gain <= 0:
+        return SketchLicense(
+            licensed=False,
+            reason=f"template does not compress evidence relative to raw sources (gain={mdl_gain} <= 0)",
+            recurrence=recurrence, mdl_gain=mdl_gain,
+        )
+
+    return SketchLicense(
+        licensed=True,
+        reason="pattern recurred, generalized to a new occurrence, and compresses",
+        recurrence=recurrence, mdl_gain=mdl_gain,
     )

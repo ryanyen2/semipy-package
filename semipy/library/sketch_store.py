@@ -97,6 +97,7 @@ def _sketch_to_dict(sk: CodeSketch) -> dict[str, Any]:
         "expected_category": sk.expected_category,
         "free_variable_names": list(sk.free_variable_names),
         "binding_id": sk.binding_id,
+        "licensed": sk.licensed,
     }
 
 
@@ -116,6 +117,11 @@ def _sketch_from_dict(d: dict[str, Any]) -> CodeSketch:
         expected_category=str(d.get("expected_category", "")),
         free_variable_names=tuple(str(x) for x in d.get("free_variable_names", [])),
         binding_id=str(d.get("binding_id", "")),
+        # Back-compat: a library written before licensing existed has no
+        # "licensed" key. A sketch already proven via a real successful
+        # instantiation ("validated") is at least as strong evidence as the new
+        # gates, so it is not silently un-licensed on load.
+        licensed=bool(d.get("licensed", d.get("validated", False))),
     )
 
 
