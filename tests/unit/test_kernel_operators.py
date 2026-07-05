@@ -8,6 +8,7 @@ import pytest
 
 import semipy.decisions.discriminate as discriminate_mod
 import semipy.interpreted  # noqa: F401 -- registers the real module in sys.modules
+from semipy.contract.models import ContractCase
 from semipy.decisions.discriminate import DiscriminationResult
 from semipy.history.version_control import Slot
 from semipy.kernel.operators import (
@@ -15,6 +16,7 @@ from semipy.kernel.operators import (
     FreezeEvent,
     append_freeze_event,
     freeze,
+    freeze_eligibility_floor,
     frozen_fraction,
     get_freeze_events,
 )
@@ -217,3 +219,70 @@ def test_frozen_fraction_reflects_most_recent_event():
     )
     append_freeze_event(slot, FreezeEvent(certificate=refused_cert))
     assert frozen_fraction(slot) == 0.0  # most recent attempt was refused
+
+
+# ---------------------------------------------------------------------------
+# freeze-eligibility floor (Phase 4 prerequisite; §4 Prop 2's side condition)
+# ---------------------------------------------------------------------------
+
+
+def test_freeze_eligibility_floor_requires_both_a_discriminating_case_and_a_nonvacuous_relation():
+    discriminating = ContractCase(case_id="d", kind="invariant", input_sample={"x": [1, 2]})
+    vacuous_relation = ContractCase(
+        case_id="r1", kind="metamorphic", relation="dict_key_order_invariance",
+        input_sample={"x": "not a dict"},  # wrong shape for this relation -> vacuous
+    )
+    nonvacuous_relation = ContractCase(
+        case_id="r2", kind="metamorphic", relation="list_permutation_invariance",
+        input_sample={"x": [1, 2, 3]},
+    )
+
+    met, reasons = freeze_eligibility_floor([discriminating, vacuous_relation])
+    assert met is False
+    assert any("non-vacuous metamorphic relation" in r for r in reasons)
+
+    met2, reasons2 = freeze_eligibility_floor([discriminating, nonvacuous_relation])
+    assert met2 is True
+    assert reasons2 == []
+
+    met3, reasons3 = freeze_eligibility_floor([nonvacuous_relation])
+    assert met3 is False
+    assert any("discriminating case" in r for r in reasons3)
+
+
+def test_freeze_eligibility_floor_ignores_superseded_cases():
+    stale = ContractCase(case_id="d", kind="invariant", input_sample={"x": 1}, status="superseded")
+    met, reasons = freeze_eligibility_floor([stale])
+    assert met is False
+    assert len(reasons) == 2  # neither half of the floor is met by an inactive case
+
+
+def test_freeze_refuses_via_the_eligibility_floor_even_when_the_other_gates_would_pass(monkeypatch):
+    small_src = "def solve(x):\n    return x*2\n"
+    monkeypatch.setattr(interpreted_mod, "synthesize_residual_source", lambda *a, **k: small_src)
+    monkeypatch.setattr(interpreted_mod, "validate_residual", lambda *a, **k: (True, 1.0))
+
+    # No contract cases at all -> floor fails on both halves, refused before
+    # any synthesis/validation gate is even consulted for licensing.
+    src, event = freeze(
+        instruction="double it", free_variables=["x"], examples=_EXAMPLES,
+        expected_type=int, samples=1, cases=[],
+    )
+    assert src is None
+    assert event.certificate.licensed is False
+    assert any("freeze-eligibility floor" in r for r in event.certificate.refusal_reasons)
+
+
+def test_freeze_ignores_the_floor_when_cases_is_not_supplied(monkeypatch):
+    # The live interpreted-mode call site never passes `cases` -- behavior must
+    # stay exactly as it was before the floor existed.
+    small_src = "def solve(x):\n    return x*2\n"
+    monkeypatch.setattr(interpreted_mod, "synthesize_residual_source", lambda *a, **k: small_src)
+    monkeypatch.setattr(interpreted_mod, "validate_residual", lambda *a, **k: (True, 1.0))
+
+    src, event = freeze(
+        instruction="double it", free_variables=["x"], examples=_EXAMPLES,
+        expected_type=int, samples=1,
+    )
+    assert src == small_src
+    assert event.certificate.licensed is True

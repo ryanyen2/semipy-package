@@ -123,6 +123,32 @@ def _refused(
     return None, FreezeEvent(certificate=cert, node_id=node_id, source_len=0, timestamp=time.time())
 
 
+def freeze_eligibility_floor(cases: Sequence[Any]) -> tuple[bool, list[str]]:
+    """The freeze-eligibility floor (Phase 4; §4 Prop 2's side condition, "no
+    contract, no blame"): a node needs at least one discriminating case (a
+    concrete example/invariant assertion) *and* at least one non-vacuous
+    metamorphic relation in its active contract before its evidence is
+    trusted enough to license a freeze -- otherwise the floor is satisfied
+    only vacuously (see ``contract.relations.is_relation_nonvacuous``).
+    Returns ``(met, reasons)``.
+    """
+    from semipy.contract.relations import is_relation_nonvacuous
+
+    active = [c for c in cases if getattr(c, "status", "active") == "active"]
+    has_discriminating = any(getattr(c, "kind", "") in ("example", "invariant") for c in active)
+    has_nonvacuous_relation = any(
+        getattr(c, "kind", "") == "metamorphic"
+        and is_relation_nonvacuous(getattr(c, "relation", ""), getattr(c, "primary_input", None))
+        for c in active
+    )
+    reasons: list[str] = []
+    if not has_discriminating:
+        reasons.append("freeze-eligibility floor: no discriminating case (example/invariant) in the active contract")
+    if not has_nonvacuous_relation:
+        reasons.append("freeze-eligibility floor: no non-vacuous metamorphic relation in the active contract")
+    return (has_discriminating and has_nonvacuous_relation), reasons
+
+
 def freeze(
     *,
     instruction: str,
@@ -138,12 +164,19 @@ def freeze(
     e2b_api_key: Optional[str] = None,
     samples: int = 2,
     node_id: str = "",
+    cases: Optional[Sequence[Any]] = None,
 ) -> tuple[Optional[str], FreezeEvent]:
     """Attempt certified posterior collapse for one interpreted node.
 
     Returns ``(residual_source, event)``. ``residual_source`` is ``None`` unless
-    all three gates license the freeze; ``event`` always carries a certificate
+    all gates license the freeze; ``event`` always carries a certificate
     (licensed or not) with the reasons, for the evidence ledger.
+
+    ``cases`` is optional: when supplied (a slot's active ``ContractCase``
+    list), the Phase 4 freeze-eligibility floor is enforced before anything
+    else runs. Interpreted-mode slots have no contract, so the live
+    ``slot_resolver`` call site does not pass it -- the floor only applies
+    once a caller has real contract-backed evidence to check.
     """
     import time
 
@@ -155,6 +188,11 @@ def freeze(
             ["output type has no usable ≈_Y (free text); never freeze-eligible"],
             epsilon=epsilon, delta=delta, gamma=gamma, node_id=node_id,
         )
+
+    if cases is not None:
+        floor_met, floor_reasons = freeze_eligibility_floor(cases)
+        if not floor_met:
+            return _refused(floor_reasons, epsilon=epsilon, delta=delta, gamma=gamma, node_id=node_id)
 
     budget_total = counterexample_budget(epsilon, delta, gamma)
 
