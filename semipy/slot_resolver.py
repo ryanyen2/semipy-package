@@ -1311,6 +1311,7 @@ def _resolve_slot_with_decisions(
     slot_spec: SlotSpec,
     generation_spec: Any,
     runtime_values: dict[str, Any],
+    slot: Any = None,
 ) -> tuple[Any, Any]:
     """Draw N candidates and surface the model's silent fork (F0, opt-in).
 
@@ -1321,9 +1322,12 @@ def _resolve_slot_with_decisions(
     is built so the fork can be surfaced and steered.
 
     Returns ``(head_entry, decision_set)``. ``head_entry`` is the CacheEntry whose
-    source backs the heaviest runnable cluster (so its compiled fn flows through
-    the contract/effect gates unchanged). If every candidate fails generation,
-    falls back to a single ``SemiAgent().generate`` so error behavior is preserved.
+    source backs the execution-ranked head (frontier-kernel Phase 2, see
+    ``kernel/population.py``): type validity + the slot's contract-pass fraction
+    (when ``slot`` has active cases) + cluster agreement, falling back to the
+    heaviest runnable cluster when no contract signal is available -- today's
+    behavior, unchanged. If every candidate fails generation, falls back to a
+    single ``SemiAgent().generate`` so error behavior is preserved.
     """
     from semipy.decisions.draw import resolve_with_decisions
 
@@ -1387,7 +1391,23 @@ def _resolve_slot_with_decisions(
         timeout=getattr(cfg, "decision_cost_budget_s", 15),
     )
 
-    head_entry = entry_by_source.get(outcome.head_source or "")
+    head_source = outcome.head_source
+    if outcome.divergence is not None:
+        from semipy.kernel.population import score_candidates_against_contract, select_head
+
+        contract_scores = None
+        if slot is not None:
+            candidates = {cid: run.source for cid, run in outcome.divergence.runs.items()}
+            contract_scores = score_candidates_against_contract(
+                candidates, slot=slot, slot_spec=slot_spec, config=cfg,
+            )
+        _head_id, ranked_source = select_head(
+            outcome.divergence, contract_pass_fractions=contract_scores,
+        )
+        if ranked_source is not None:
+            head_source = ranked_source
+
+    head_entry = entry_by_source.get(head_source or "")
     if head_entry is None:
         # All candidates failed, or the head source was not captured -> fall back
         # to the unchanged single-generation path (raises as before on failure).
@@ -1992,7 +2012,7 @@ def _execute_slot_locked(
     _pending_decision_set = None
     if config.decisions_enabled and resolution.decision in (Decision.GENERATE, Decision.ADAPT):
         entry, _pending_decision_set = _resolve_slot_with_decisions(
-            slot_spec, generation_spec, runtime_values
+            slot_spec, generation_spec, runtime_values, slot=slot
         )
     else:
         entry = SemiAgent().generate(generation_spec)
