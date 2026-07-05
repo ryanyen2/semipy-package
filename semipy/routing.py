@@ -1,10 +1,12 @@
 """RoutingPolicy — explicit, testable routing policy for slot resolution decisions.
 
-All routing logic previously split across resolver.py and slot_resolver.py is
-consolidated here. The policy evaluates signals in strict priority order and
-returns a ResolutionResult with the full context needed by the caller.
+Fetching the signals (locked-commit lookup, donor search, sketch matching --
+all real I/O against the portal) stays here. Deciding what they mean -- the
+priority cascade below -- is ``kernel.policy.decide_route`` (Phase 6, §5): one
+canonical, pure, unit-testable function instead of logic embedded in this
+I/O-touching class, so nothing outside ``kernel/`` can drift from it.
 
-Priority order (first match wins):
+Priority order (first match wins; see ``kernel.policy.decide_route``):
   0. No slot in portal → GENERATE
   L. Version lock present → REUSE (locked commit)
   1. force_regenerate=True → ADAPT from head; ADAPT from donor if no head; GENERATE
@@ -15,13 +17,13 @@ Priority order (first match wins):
   4. No local commits, donor found → REUSE (from donor)
   3. No local commits, sketch found → INSTANTIATE
   2. No local commits, no donor, no sketch → GENERATE
-  10. Default → REUSE
 """
 from __future__ import annotations
 
 from typing import Any, Optional
 
 from semipy.history.version_control import Commit, Slot, most_recent_branch_head, walk_history
+from semipy.kernel.policy import decide_route
 from semipy.resolver import ResolutionResult
 from semipy.types import Decision, SlotSpec, ValidationResult, equivalence_key_from_stored_snapshot
 
@@ -131,186 +133,96 @@ class RoutingPolicy:
         prior_validation: Optional[ValidationResult] = None,
         semantic_result: Optional[Any] = None,
     ) -> ResolutionResult:
-        """Evaluate routing signals in priority order and return a ResolutionResult."""
-
-        # Case 0: No slot in portal.
+        """Fetch the routing signals, hand them to ``kernel.policy.decide_route``
+        for the precedence call, then attach whichever object the winning
+        source names to a ``ResolutionResult``."""
         if slot is None:
             return ResolutionResult(
-                decision=Decision.GENERATE,
-                slot=None,
-                branch_name="main",
-                parent_commit_ids=[],
-                parent_sources=[],
-                lineage_summary=None,
-                commit_id=None,
+                decision=Decision.GENERATE, slot=None, branch_name="main",
+                parent_commit_ids=[], parent_sources=[], lineage_summary=None, commit_id=None,
             )
 
-        # Version lock: bypass all other routing when a commit is pinned.
+        locked_commit: Optional[Commit] = None
         try:
             from semipy.history.version_lock import locked_commit_id
             lc = locked_commit_id(slot)
             if lc is not None:
-                c = slot.commits.get(lc)
-                if c is not None:
-                    return ResolutionResult(
-                        decision=Decision.REUSE,
-                        slot=slot,
-                        branch_name=None,
-                        parent_commit_ids=[],
-                        parent_sources=[],
-                        lineage_summary=None,
-                        commit_id=lc,
-                    )
+                locked_commit = slot.commits.get(lc)
         except Exception:
             pass
 
         has_commits = bool(slot.commits)
         head = _head_commit(slot) if has_commits else None
         equiv_ok = _equivalence_matches(slot, slot_spec)
+        donor = _best_donor(self._portal, slot_spec, slot.slot_id)
+        sketch_result = _try_sketch_instantiation(slot_spec, sketch_library, slot)
 
-        # Case 1: force_regenerate — ADAPT from best available parent or GENERATE.
-        if force_regenerate:
-            if head is not None:
-                lineage = _lineage_summary(slot, head.commit_id)
-                return ResolutionResult(
-                    decision=Decision.ADAPT,
-                    slot=slot,
-                    branch_name=f"b_{slot_spec.spec_hash[:8]}",
-                    parent_commit_ids=[head.commit_id],
-                    parent_sources=[head.generated_source],
-                    lineage_summary=lineage,
-                    commit_id=None,
-                )
-            donor = _best_donor(self._portal, slot_spec, slot.slot_id)
-            if donor is not None:
-                ds, dc = donor
-                lineage = _lineage_summary(ds, dc.commit_id)
-                return ResolutionResult(
-                    decision=Decision.ADAPT,
-                    slot=slot,
-                    branch_name=f"b_{slot_spec.spec_hash[:8]}",
-                    parent_commit_ids=[dc.commit_id],
-                    parent_sources=[dc.generated_source],
-                    lineage_summary=lineage,
-                    commit_id=None,
-                )
-            return ResolutionResult(
-                decision=Decision.GENERATE,
-                slot=slot,
-                branch_name="main",
-                parent_commit_ids=[],
-                parent_sources=[],
-                lineage_summary=None,
-                commit_id=None,
-            )
-
-        # Case 8: post-verify failure with adapt-forcing failure_kind.
-        # Execution errors (execution_error, syntax_error) retry via force_regenerate=True.
-        # Shape mismatches (type_mismatch, empty_output, identity_return) trigger ADAPT.
+        failure_kind = None
         if prior_validation is not None and not prior_validation.passed:
             failure_kind = getattr(prior_validation, "failure_kind", None)
-            if failure_kind in ("type_mismatch", "empty_output", "identity_return"):
-                if head is not None:
-                    lineage = _lineage_summary(slot, head.commit_id)
-                    return ResolutionResult(
-                        decision=Decision.ADAPT,
-                        slot=slot,
-                        branch_name=f"b_{slot_spec.spec_hash[:8]}",
-                        parent_commit_ids=[head.commit_id],
-                        parent_sources=[head.generated_source],
-                        lineage_summary=lineage,
-                        commit_id=None,
-                    )
-                return ResolutionResult(
-                    decision=Decision.GENERATE,
-                    slot=slot,
-                    branch_name="main",
-                    parent_commit_ids=[],
-                    parent_sources=[],
-                    lineage_summary=None,
-                    commit_id=None,
-                )
+        semantic_wants_adapt = (
+            semantic_result is not None and getattr(semantic_result, "decision", None) == "adapt"
+        )
 
-        # Case 9: semantic check concluded the implementation needs updating.
-        if semantic_result is not None and getattr(semantic_result, "decision", None) == "adapt":
-            if head is not None:
-                lineage = _lineage_summary(slot, head.commit_id)
+        route = decide_route(
+            has_slot=True,
+            is_locked=locked_commit is not None,
+            force_regenerate=force_regenerate,
+            has_head=head is not None,
+            has_commits=has_commits,
+            equiv_ok=equiv_ok,
+            prior_validation_failure_kind=failure_kind,
+            semantic_wants_adapt=semantic_wants_adapt,
+            donor_available=donor is not None,
+            sketch_available=sketch_result is not None,
+        )
+
+        if route.source == "locked":
+            assert locked_commit is not None
+            return ResolutionResult(
+                decision=Decision.REUSE, slot=slot, branch_name=None,
+                parent_commit_ids=[], parent_sources=[], lineage_summary=None,
+                commit_id=locked_commit.commit_id,
+            )
+
+        if route.source == "sketch":
+            assert sketch_result is not None
+            return sketch_result
+
+        if route.source == "donor":
+            assert donor is not None
+            ds, dc = donor
+            if route.decision == Decision.ADAPT:
                 return ResolutionResult(
-                    decision=Decision.ADAPT,
-                    slot=slot,
+                    decision=Decision.ADAPT, slot=slot,
                     branch_name=f"b_{slot_spec.spec_hash[:8]}",
-                    parent_commit_ids=[head.commit_id],
-                    parent_sources=[head.generated_source],
-                    lineage_summary=lineage,
-                    commit_id=None,
+                    parent_commit_ids=[dc.commit_id], parent_sources=[dc.generated_source],
+                    lineage_summary=_lineage_summary(ds, dc.commit_id), commit_id=None,
                 )
             return ResolutionResult(
-                decision=Decision.GENERATE,
-                slot=slot,
-                branch_name="main",
-                parent_commit_ids=[],
-                parent_sources=[],
-                lineage_summary=None,
-                commit_id=None,
+                decision=Decision.REUSE, slot=slot, branch_name=None,
+                parent_commit_ids=[], parent_sources=[], lineage_summary=None,
+                commit_id=dc.commit_id, reuse_dispatch_slot_id=ds.slot_id,
             )
 
-        # Case 5: has commits but equivalence mismatch — INSTANTIATE (sketch) or ADAPT.
-        if has_commits and not equiv_ok:
-            sk_r = _try_sketch_instantiation(slot_spec, sketch_library, slot)
-            if sk_r is not None:
-                return sk_r
-            lineage = _lineage_summary(slot, head.commit_id) if head is not None else None
+        if route.source == "head":
+            if route.decision == Decision.ADAPT:
+                lineage = _lineage_summary(slot, head.commit_id) if head is not None else None
+                return ResolutionResult(
+                    decision=Decision.ADAPT, slot=slot,
+                    branch_name=f"b_{slot_spec.spec_hash[:8]}",
+                    parent_commit_ids=[head.commit_id] if head is not None else [],
+                    parent_sources=[head.generated_source] if head is not None else [],
+                    lineage_summary=lineage, commit_id=None,
+                )
             return ResolutionResult(
-                decision=Decision.ADAPT,
-                slot=slot,
-                branch_name=f"b_{slot_spec.spec_hash[:8]}",
-                parent_commit_ids=[head.commit_id] if head is not None else [],
-                parent_sources=[head.generated_source] if head is not None else [],
-                lineage_summary=lineage,
-                commit_id=None,
-            )
-
-        # Cases 6/7: has commits and equivalence ok → REUSE (caller runs verify).
-        # If verify fails the caller re-invokes with prior_validation set (case 8).
-        if has_commits and equiv_ok:
-            return ResolutionResult(
-                decision=Decision.REUSE,
-                slot=slot,
-                branch_name=None,
-                parent_commit_ids=[],
-                parent_sources=[],
-                lineage_summary=None,
+                decision=Decision.REUSE, slot=slot, branch_name=None,
+                parent_commit_ids=[], parent_sources=[], lineage_summary=None,
                 commit_id=head.commit_id if head is not None else None,
             )
 
-        # No local commits.
-        # Case 4: cross-slot donor REUSE.
-        donor = _best_donor(self._portal, slot_spec, slot.slot_id)
-        if donor is not None:
-            ds, dc = donor
-            return ResolutionResult(
-                decision=Decision.REUSE,
-                slot=slot,
-                branch_name=None,
-                parent_commit_ids=[],
-                parent_sources=[],
-                lineage_summary=None,
-                commit_id=dc.commit_id,
-                reuse_dispatch_slot_id=ds.slot_id,
-            )
-
-        # Case 3: sketch INSTANTIATE.
-        sk_r = _try_sketch_instantiation(slot_spec, sketch_library, slot)
-        if sk_r is not None:
-            return sk_r
-
-        # Case 2: no commits, no donor, no sketch → GENERATE.
+        # route.source == "none": GENERATE (or a headless/donorless ADAPT fallback).
         return ResolutionResult(
-            decision=Decision.GENERATE,
-            slot=slot,
-            branch_name="main",
-            parent_commit_ids=[],
-            parent_sources=[],
-            lineage_summary=None,
-            commit_id=None,
+            decision=route.decision, slot=slot, branch_name="main",
+            parent_commit_ids=[], parent_sources=[], lineage_summary=None, commit_id=None,
         )
