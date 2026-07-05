@@ -96,6 +96,51 @@ def _matched_arm(node: Node, free_variables: dict[str, Any]) -> Optional[Node]:
     return None
 
 
+def _return_target_name(artifact: Optional[str]) -> Optional[str]:
+    """If *artifact* parses to a function whose sole statement is
+    ``return <name>``, return that name; else None."""
+    if not artifact:
+        return None
+    try:
+        module = ast.parse(artifact)
+    except SyntaxError:
+        return None
+    fn = next((n for n in module.body if isinstance(n, ast.FunctionDef)), None)
+    if fn is None or len(fn.body) != 1:
+        return None
+    stmt = fn.body[0]
+    if isinstance(stmt, ast.Return) and isinstance(stmt.value, ast.Name):
+        return stmt.value.id
+    return None
+
+
+def _accumulator_passthrough_child(node: Node) -> Optional[Node]:
+    """If *node* (a COMPOSE) is exactly ``[..., combinator, ..., return <acc>]``
+    -- a single combinator child whose accumulator the final segment returns
+    unchanged, and no other combinator among the siblings -- that combinator's
+    own output *is* the compose's final output, so blame may safely descend
+    into it. This is the common real shape (``out = []`` / a loop / ``return
+    out``), not just the degenerate case where the combinator is the whole
+    function body. Anything else (ambiguous data flow) returns None.
+    """
+    combinators = [
+        c for c in node.children
+        if c.kind in (NodeKind.MAP, NodeKind.FILTER, NodeKind.FOLD, NodeKind.BRANCH)
+    ]
+    if len(combinators) != 1:
+        return None
+    combinator = combinators[0]
+    acc_name = combinator.meta.get("accumulator")
+    if not acc_name:
+        return None
+    last = node.children[-1]
+    if last.kind != NodeKind.OPAQUE:
+        return None
+    if _return_target_name(last.artifact) != acc_name:
+        return None
+    return combinator
+
+
 def _first_divergent_element(kind: NodeKind, iterable: Any, replayed: list, expected: Any) -> Any:
     if not isinstance(expected, list):
         return None
@@ -116,10 +161,13 @@ def blame(tree: Node, *, free_variables: dict[str, Any], expected_output: Any) -
 
     Descends from the root: a BRANCH recurses into whichever arm actually
     matched (its output *is* the branch's output, so this is exact, not a
-    guess); a MAP/FILTER is replayed and, on divergence, reports the specific
-    element its leaf got wrong. Anything else (FOLD, OPAQUE, COMPOSE, or a
-    MAP/FILTER whose iterable isn't a bare free variable) stops the descent
-    and blames the current node whole.
+    guess); a COMPOSE that is a single combinator with its accumulator
+    returned unchanged (the common ``out = []`` / loop / ``return out``
+    shape) descends into that combinator, since its output *is* the
+    compose's; a MAP/FILTER is replayed and, on divergence, reports the
+    specific element its leaf got wrong. Anything else (FOLD, OPAQUE, an
+    ambiguous COMPOSE, or a MAP/FILTER whose iterable isn't a bare free
+    variable) stops the descent and blames the current node whole.
     """
     node = tree
     while True:
@@ -131,6 +179,17 @@ def blame(tree: Node, *, free_variables: dict[str, Any], expected_output: Any) -
                     "no guard matched (or a guard failed to evaluate); blaming the branch node whole",
                 )
             node = arm
+            continue
+
+        if node.kind == NodeKind.COMPOSE:
+            child = _accumulator_passthrough_child(node)
+            if child is None:
+                return BlameResult(
+                    node.node_id, node.kind.value,
+                    "compose has ambiguous or unverifiable data flow (not a single "
+                    "accumulator passed through unchanged); blaming it whole",
+                )
+            node = child
             continue
 
         if node.kind in (NodeKind.MAP, NodeKind.FILTER):

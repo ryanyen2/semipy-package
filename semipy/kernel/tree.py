@@ -508,6 +508,184 @@ def _set_hardness(node: Node, hardness: Hardness) -> None:
 
 
 # ---------------------------------------------------------------------------
+# patch_source: the inverse of lowering, for melt's local rejuvenation
+# (Phase 4, §3.2). Splices a regenerated node's artifact back into the whole
+# function's original source, leaving everything else byte-identical.
+#
+# Scoped to exactly the node shapes blame.py can localize to: the root
+# itself, a node reached by descending through zero or more BRANCH arms, and
+# a MAP/FILTER leaf reached directly from a plain for-loop or comprehension
+# (not the map_filter combo, which lowers to a COMPOSE -- blame never
+# descends into one, so melt is never asked to patch inside it). Anything
+# else returns None rather than guessing; the caller falls back to
+# whole-function regeneration, today's behavior.
+# ---------------------------------------------------------------------------
+
+
+def _split_docstring(stmts: list[ast.stmt]) -> tuple[list[ast.stmt], list[ast.stmt]]:
+    body = _strip_docstring(stmts)
+    prefix_len = len(stmts) - len(body)
+    return stmts[:prefix_len], stmts[prefix_len:]
+
+
+def _extract_new_function(new_artifact: str) -> ast.FunctionDef | None:
+    try:
+        module = ast.parse(textwrap.dedent(new_artifact))
+    except SyntaxError:
+        return None
+    fn = _first_function_def(module)
+    return fn if isinstance(fn, ast.FunctionDef) else None
+
+
+def _extract_body_stmts(new_artifact: str) -> list[ast.stmt] | None:
+    fn = _extract_new_function(new_artifact)
+    if fn is None:
+        return None
+    return _strip_docstring(fn.body)
+
+
+def _extract_return_expr(new_artifact: str) -> ast.expr | None:
+    """The sole return value of a leaf artifact shaped like
+    ``_leaf_function_source`` builds: ``def name(params): return expr``."""
+    body = _extract_body_stmts(new_artifact)
+    if body is None or len(body) != 1 or not isinstance(body[0], ast.Return) or body[0].value is None:
+        return None
+    return body[0].value
+
+
+def _patch_loop_leaf(for_stmt: ast.For, node_id: str, target_id: str, new_artifact: str) -> bool:
+    matched = _match_for_loop(for_stmt)
+    if matched is None or matched.kind == "map_filter":
+        return False  # combo lowers to a COMPOSE; blame never targets inside it
+    new_expr = _extract_return_expr(new_artifact)
+    if new_expr is None:
+        return False
+    if matched.kind == "map" and target_id == f"{node_id}.map.body":
+        append_call = for_stmt.body[0].value  # type: ignore[union-attr]
+        append_call.args[0] = new_expr
+        return True
+    if matched.kind == "filter" and target_id == f"{node_id}.filter.pred":
+        for_stmt.body[0].test = new_expr  # type: ignore[union-attr]
+        return True
+    if matched.kind == "fold" and target_id == f"{node_id}.fold.step":
+        stmt = for_stmt.body[0]
+        if isinstance(stmt, ast.Assign):
+            stmt.value = new_expr
+        elif isinstance(stmt, ast.AugAssign):
+            # An AugAssign has no standalone "new value" slot -- promote it to
+            # a plain assignment so the melted (possibly non-augmented) step
+            # expression can be stored directly.
+            for_stmt.body[0] = ast.Assign(targets=[ast.Name(id=matched.acc_name, ctx=ast.Store())], value=new_expr)
+        else:
+            return False
+        return True
+    return False
+
+
+def _patch_comprehension_leaf(return_stmt: ast.Return, node_id: str, target_id: str, new_artifact: str) -> bool:
+    comp = return_stmt.value
+    if not isinstance(comp, ast.ListComp) or len(comp.generators) != 1:
+        return False
+    gen = comp.generators[0]
+    if not isinstance(gen.target, ast.Name):
+        return False
+    is_map = not (isinstance(comp.elt, ast.Name) and comp.elt.id == gen.target.id)
+    new_expr = _extract_return_expr(new_artifact)
+    if new_expr is None:
+        return False
+    if is_map and target_id == f"{node_id}.map.body":
+        comp.elt = new_expr
+        return True
+    if gen.ifs and target_id == f"{node_id}.filter.pred":
+        gen.ifs[0] = new_expr
+        return True
+    return False
+
+
+def _patch_run(run: list[ast.stmt], node_id: str, target_id: str, new_artifact: str) -> bool:
+    if node_id == target_id:
+        new_stmts = _extract_body_stmts(new_artifact)
+        if new_stmts is None:
+            return False
+        run[:] = new_stmts
+        return True
+
+    if len(run) == 1 and isinstance(run[0], ast.For):
+        return _patch_loop_leaf(run[0], node_id, target_id, new_artifact)
+
+    if len(run) == 1 and isinstance(run[0], ast.Return) and isinstance(run[0].value, ast.ListComp):
+        return _patch_comprehension_leaf(run[0], node_id, target_id, new_artifact)
+
+    if len(run) == 1 and isinstance(run[0], ast.If):
+        arms, else_body = _collect_if_chain(run[0])
+        for i, (_test, arm_body) in enumerate(arms):
+            arm_id = f"{node_id}.branch.{i}"
+            if target_id == arm_id or target_id.startswith(arm_id + "."):
+                return _patch_stmts(arm_body, arm_id, target_id, new_artifact)
+        if else_body is not None:
+            arm_id = f"{node_id}.branch.{len(arms)}"
+            if target_id == arm_id or target_id.startswith(arm_id + "."):
+                return _patch_stmts(else_body, arm_id, target_id, new_artifact)
+
+    return False
+
+
+def _patch_stmts(stmts: list[ast.stmt], node_id: str, target_id: str, new_artifact: str) -> bool:
+    """Mutate *stmts* (a live AST list -- a function body or a branch arm's
+    body/orelse) in place so the sub-structure lower_stmts_to_tree would label
+    *target_id* is replaced. Mirrors lower_stmts_to_tree's own segmentation
+    exactly, so the ids line up without extra bookkeeping on Node."""
+    prefix, body = _split_docstring(stmts)
+    if not body:
+        return False
+    runs = _segment_top_level(body)
+
+    if len(runs) == 1:
+        if not _patch_run(runs[0], node_id, target_id, new_artifact):
+            return False
+        stmts[:] = prefix + runs[0]
+        return True
+
+    for i, run in enumerate(runs):
+        run_id = f"{node_id}.compose.{i}"
+        if target_id == run_id or target_id.startswith(run_id + "."):
+            if not _patch_run(run, run_id, target_id, new_artifact):
+                return False
+            stmts[:] = prefix + [s for r in runs for s in r]
+            return True
+    return False
+
+
+def patch_source(source: str, root_id: str, target_id: str, new_artifact: str) -> str | None:
+    """Splice *new_artifact* in as the replacement for node *target_id* in the
+    tree ``lower_source_to_tree(source, root_id)`` would produce. Returns the
+    patched whole-function source, or ``None`` when the shape is out of scope
+    (never guesses; the caller falls back to whole-function regeneration).
+    """
+    if target_id == root_id:
+        try:
+            ast.parse(textwrap.dedent(new_artifact))
+        except SyntaxError:
+            return None
+        return new_artifact
+
+    try:
+        module = ast.parse(textwrap.dedent(source))
+    except SyntaxError:
+        return None
+    fn_def = _first_function_def(module)
+    if fn_def is None:
+        return None
+    if not _patch_stmts(fn_def.body, root_id, target_id, new_artifact):
+        return None
+    ast.fix_missing_locations(module)
+    try:
+        return ast.unparse(module)
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Phase 1 go/no-go measurement: what fraction of a corpus lowers multi-node.
 # ---------------------------------------------------------------------------
 

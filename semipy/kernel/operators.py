@@ -1,4 +1,4 @@
-"""``freeze`` -- certified posterior collapse (Phase 3, §3.1).
+"""``freeze`` and ``melt`` -- two of the four certified moves (Phase 3-4, §3.1-3.2).
 
 Generalizes ``interpreted.attempt_promotion``'s single held-out check into the
 three gates the plan requires: held-out reproducibility (reusing
@@ -18,6 +18,15 @@ backs the standalone ``InterpretedOp`` (experiments/tests, not portal-wired);
 the three-gate freeze here is strictly more conservative, so some promotions
 the old single-gate check granted (e.g. a residual matched from only 1-2
 examples, which cannot compress the evidence) are now correctly refused.
+
+``melt`` (Phase 4) is local rejuvenation: blame a failing case down to the
+shallowest node that reproduces it (``kernel.blame``), then splice an
+already-regenerated replacement for that node back into the original source
+(``kernel.tree.patch_source``) rather than discarding the whole function.
+This is additive infrastructure, not yet wired into the live ADAPT path --
+producing the replacement artifact itself (an LLM call scoped to just the
+blamed node) is a separate, deliberate follow-up decision, same as freeze's
+staged rollout in Phase 3.
 """
 from __future__ import annotations
 
@@ -295,3 +304,68 @@ def frozen_fraction(slot: Any) -> float:
     if not events:
         return 0.0
     return 1.0 if events[-1].certificate.licensed else 0.0
+
+
+@dataclass
+class MeltResult:
+    """The outcome of one local-rejuvenation attempt."""
+
+    patched_source: Optional[str]
+    blamed_node_id: str
+    blamed_kind: str
+    blame_reason: str
+    patch_target_id: str
+    locality: float
+
+
+def melt(
+    original_source: str,
+    root_id: str,
+    *,
+    free_variables: dict[str, Any],
+    expected_output: Any,
+    new_node_source: str,
+) -> MeltResult:
+    """Local rejuvenation (§3.2): blame the failing case, then splice
+    *new_node_source* -- an already-regenerated replacement -- back into
+    *original_source* at exactly the blamed node's position.
+
+    The caller is responsible for shaping *new_node_source* to match what
+    ``patch_target_id`` needs: a small ``def name(params): return expr``
+    for a MAP/FILTER leaf (``blamed_kind in ("map", "filter")``), or a
+    replacement statement list wrapped in the original function's own
+    signature for anything else (a BRANCH arm, a whole segment). melt does
+    not validate that the replacement's shape is sensible for the slot --
+    that trust boundary belongs to whatever generates it (an LLM call scoped
+    to the blamed node, in the eventual live wiring).
+
+    ``patched_source`` is ``None`` when blame could not localize past the
+    root (regenerate the whole function -- today's behavior, unchanged) or
+    when the splice itself is out of ``patch_source``'s scope; either way the
+    caller falls back to whole-function regeneration rather than guessing.
+    """
+    from semipy.kernel.blame import blame, locality_metric
+    from semipy.kernel.tree import lower_source_to_tree, patch_source
+
+    tree = lower_source_to_tree(original_source, root_id)
+    result = blame(tree, free_variables=free_variables, expected_output=expected_output)
+    locality = locality_metric(tree, result.node_id)
+
+    patch_target_id = result.node_id
+    if result.kind == "map":
+        patch_target_id = f"{result.node_id}.map.body"
+    elif result.kind == "filter":
+        patch_target_id = f"{result.node_id}.filter.pred"
+
+    patched: Optional[str] = None
+    if result.node_id != root_id:
+        patched = patch_source(original_source, root_id, patch_target_id, new_node_source)
+
+    return MeltResult(
+        patched_source=patched,
+        blamed_node_id=result.node_id,
+        blamed_kind=result.kind,
+        blame_reason=result.reason,
+        patch_target_id=patch_target_id,
+        locality=locality,
+    )
