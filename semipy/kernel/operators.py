@@ -27,6 +27,16 @@ This is additive infrastructure, not yet wired into the live ADAPT path --
 producing the replacement artifact itself (an LLM call scoped to just the
 blamed node) is a separate, deliberate follow-up decision, same as freeze's
 staged rollout in Phase 3.
+
+``branch`` and ``merge`` (Phase 5, §3.3-3.4) round out the four moves.
+``branch`` compiles LLM-proposed guard strings against the closed DSL
+(``kernel.guard``) and is licensed only when at least one compiles -- an
+unverified guard never dispatches. ``merge`` verifies a candidate unified
+structure against both branches' own evidence, a fresh separation search
+(reusing the same discriminating-input searcher freeze's counterexample
+license uses), and an MDL comparison, before collapsing two branches into
+one. Like ``melt``, both are additive: there is no live branch/merge call
+site yet (that is Phase 6's routing/slot_resolver collapse).
 """
 from __future__ import annotations
 
@@ -368,4 +378,109 @@ def melt(
         blame_reason=result.reason,
         patch_target_id=patch_target_id,
         locality=locality,
+    )
+
+
+@dataclass
+class BranchEvent:
+    """The outcome of compiling a proposed regime split into guards."""
+
+    guards: list[str]
+    rejected_guards: list[str]
+    licensed: bool
+    reason: str
+
+
+def branch(proposed_guards: Sequence[str]) -> BranchEvent:
+    """Compile and validate LLM-proposed guard strings into the closed DSL
+    (§3.3). A guard that does not compile is excluded, not patched up or
+    guessed at -- the node stays molten on that regime rather than
+    dispatching on an unverified predicate. Licensed once at least one guard
+    compiles (a mixture needs at least one real discriminator; an all-reject
+    result is indistinguishable from "no split was actually found").
+    """
+    from semipy.kernel.guard import compile_guard
+
+    compiled: list[str] = []
+    rejected: list[str] = []
+    for g in proposed_guards:
+        if compile_guard(g) is not None:
+            compiled.append(g)
+        else:
+            rejected.append(g)
+    licensed = bool(compiled)
+    reason = (
+        "at least one guard compiled against the closed predicate DSL" if licensed
+        else "no proposed guard compiled against the closed predicate DSL; node stays molten"
+    )
+    return BranchEvent(guards=compiled, rejected_guards=rejected, licensed=licensed, reason=reason)
+
+
+@dataclass
+class MergeEvent:
+    """The outcome of one verified-mixture-collapse attempt."""
+
+    licensed: bool
+    reason: str
+    unified_source: Optional[str] = None
+
+
+def merge(
+    *,
+    branch_a_source: str,
+    branch_b_source: str,
+    candidate_unified_source: str,
+    branch_a_examples: Sequence[tuple[Sequence[Any], Any]],
+    branch_b_examples: Sequence[tuple[Sequence[Any], Any]],
+    free_variables: Sequence[str],
+    output_names: Optional[Sequence[str]] = None,
+    timeout: int = 15,
+) -> MergeEvent:
+    """Verified mixture collapse (§3.4): merge two branches into one
+    structure only if the candidate (i) reproduces both branches' own
+    evidence, (ii) survives a fresh separation search against each original
+    branch (the same hypothesis test as freeze's counterexample license,
+    §3.1, applied to the pair), and (iii) MDL favors the union over keeping
+    two branches. Merge-on-shape-congruence alone is not enough -- any one
+    gate failing keeps the branches distinct.
+    """
+    from semipy.decisions.discriminate import search_discriminating_inputs
+    from semipy.interpreted import validate_residual
+
+    all_examples = list(branch_a_examples) + list(branch_b_examples)
+
+    ok, frac = validate_residual(candidate_unified_source, all_examples, timeout=timeout)
+    if not ok:
+        return MergeEvent(
+            licensed=False,
+            reason=f"candidate does not reproduce both branches' evidence ({frac:.2f} match)",
+        )
+
+    candidates = {
+        "unified": candidate_unified_source,
+        "branch_a": branch_a_source,
+        "branch_b": branch_b_source,
+    }
+    rows = [{fv: a for fv, a in zip(free_variables, args)} for args, _ in all_examples] or [{}]
+    disc = search_discriminating_inputs(
+        candidates, free_variables=list(free_variables), base_rows=rows,
+        output_names=list(output_names or []), timeout=timeout,
+    )
+    if disc.found:
+        return MergeEvent(
+            licensed=False,
+            reason=f"separation search found a splitting input (germ={disc.germ}); branches remain distinct",
+        )
+
+    mdl_gain = (len(branch_a_source) + len(branch_b_source)) - len(candidate_unified_source)
+    if mdl_gain <= 0:
+        return MergeEvent(
+            licensed=False,
+            reason=f"MDL gate: unified structure is not shorter than the two branches (gain={mdl_gain} <= 0)",
+        )
+
+    return MergeEvent(
+        licensed=True,
+        reason="candidate reproduces both branches, survives separation search, and MDL favors the union",
+        unified_source=candidate_unified_source,
     )
