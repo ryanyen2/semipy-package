@@ -1,4 +1,5 @@
 node_modules/
 .test-emit/
 .test-emit-decisions/
+.test-emit-slot-insight/
 *.vsix

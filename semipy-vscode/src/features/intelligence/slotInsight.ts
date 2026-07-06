@@ -12,6 +12,7 @@ import type {
   ContractCaseJson,
   ContractCaseKind,
   EffectJson,
+  FreezeEventJson,
   LedgerEventJson,
   SlotContractJson,
   SlotJson,
@@ -172,8 +173,23 @@ export interface EffectInsight {
   latestOps: string[]; // distinct ops of the latest event
 }
 
+/** kernel.operators.freeze's certificate, condensed for the hover (Phase 7). */
+export interface FreezeInsight {
+  attempts: number;
+  licensedCount: number;
+  latestLicensed: boolean;
+  epsilon: number;
+  delta: number;
+  budgetSpent: number;
+  budgetTotal: number;
+  heldOutPassFraction: number;
+  mdlGain: number;
+  refusalReasons: string[];
+  timestamp: number;
+}
+
 export interface SlotInsight {
-  decision: string; // GENERATE | ADAPT | REUSE | INSTANTIATE | ...
+  decision: string; // GENERATE | ADAPT | REUSE | INSTANTIATE | PROMOTE | ...
   glyph: string; // typographic decision glyph
   commitShort: string;
   timestamp: number;
@@ -182,6 +198,7 @@ export interface SlotInsight {
   contract: ContractInsight;
   change: ChangeInsight | undefined;
   effect: EffectInsight;
+  freeze: FreezeInsight | undefined;
 }
 
 const LOCK_REF = "__locked__";
@@ -203,6 +220,8 @@ export function decisionGlyph(decision: string): string {
       return "⎇"; // ⎇ branch
     case "MERGE":
       return "⨇";
+    case "PROMOTE":
+      return "●"; // ● solid circle: certified freeze of an interpreted slot
     default:
       return "◇"; // ◇ hollow diamond
   }
@@ -292,6 +311,29 @@ function effectInsight(slot: SlotJson): EffectInsight {
   };
 }
 
+// --- freeze certificate -----------------------------------------------------
+
+function freezeInsight(events: FreezeEventJson[] | undefined): FreezeInsight | undefined {
+  if (!events || events.length === 0) {
+    return undefined;
+  }
+  const latest = events[events.length - 1];
+  const cert = latest.certificate;
+  return {
+    attempts: events.length,
+    licensedCount: events.filter((e) => e.certificate.licensed).length,
+    latestLicensed: cert.licensed,
+    epsilon: cert.epsilon,
+    delta: cert.delta,
+    budgetSpent: cert.budget_spent,
+    budgetTotal: cert.budget_total,
+    heldOutPassFraction: cert.held_out_pass_fraction,
+    mdlGain: cert.mdl_gain,
+    refusalReasons: cert.refusal_reasons || [],
+    timestamp: latest.timestamp,
+  };
+}
+
 // --- top-level ------------------------------------------------------------
 
 export function computeSlotInsight(slot: SlotJson): SlotInsight | undefined {
@@ -302,6 +344,7 @@ export function computeSlotInsight(slot: SlotJson): SlotInsight | undefined {
   const contract = contractInsight(slot);
   const change = changeInsight(commit);
   const effect = effectInsight(slot);
+  const freeze = freezeInsight(slot.freeze_events);
   const locked = !!slot.refs?.[LOCK_REF];
 
   let health: SlotHealth = "ok";
@@ -323,6 +366,7 @@ export function computeSlotInsight(slot: SlotJson): SlotInsight | undefined {
     contract,
     change,
     effect,
+    freeze,
   };
 }
 

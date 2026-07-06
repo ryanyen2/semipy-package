@@ -173,6 +173,27 @@ export interface BranchJson {
   head: string;
 }
 
+/** kernel.operators.FreezeCertificate: the recorded license (or refusal) for one freeze attempt. */
+export interface FreezeCertificateJson {
+  epsilon: number;
+  delta: number;
+  gamma: number;
+  budget_total: number;
+  budget_spent: number;
+  held_out_pass_fraction: number;
+  mdl_gain: number;
+  licensed: boolean;
+  refusal_reasons: string[];
+}
+
+/** kernel.operators.FreezeEvent: one freeze attempt, licensed or refused. */
+export interface FreezeEventJson {
+  certificate: FreezeCertificateJson;
+  node_id: string;
+  source_len: number;
+  timestamp: number;
+}
+
 export interface SlotSpecJson {
   slot_id?: string;
   spec_text?: string;
@@ -205,6 +226,8 @@ export interface SlotJson {
   decision_set?: DecisionSetJson;
   advisor_state?: Record<string, unknown>;
   input_observation_samples?: Record<string, string[]>;
+  /** Every freeze attempt (licensed or refused); [] on portals predating certified freezing. */
+  freeze_events?: FreezeEventJson[];
 }
 
 export interface PortalJson {

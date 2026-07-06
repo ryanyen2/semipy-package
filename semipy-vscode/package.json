@@ -302,6 +302,7 @@
     "check": "tsc --noEmit",
     "test:slot-anchor": "tsc --module commonjs --target ES2022 --esModuleInterop --skipLibCheck --moduleResolution node --outDir .test-emit --rootDir src --strict false --declaration false src/features/slotAnnotations/slotLineResolve.ts src/data/portalLoader.ts src/features/splitEditor/correspondenceMap.ts && node test/slotLineResolve.test.js",
     "test:decisions": "tsc --module commonjs --target ES2022 --esModuleInterop --skipLibCheck --moduleResolution node --outDir .test-emit-decisions --rootDir src --strict false --declaration false src/features/decisions/decisionInsight.ts && node test/decisionInsight.test.js",
+    "test:slot-insight": "tsc --module commonjs --target ES2022 --esModuleInterop --skipLibCheck --moduleResolution node --outDir .test-emit-slot-insight --rootDir src --strict false --declaration false src/features/intelligence/slotInsight.ts && node test/slotInsight.test.js",
     "package": "vsce package",
     "publish": "vsce publish"
   },

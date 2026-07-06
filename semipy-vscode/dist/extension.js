@@ -1267,6 +1267,8 @@ function decisionGlyph(decision) {
       return "\u2387";
     case "MERGE":
       return "\u2A07";
+    case "PROMOTE":
+      return "\u25CF";
     default:
       return "\u25C7";
   }
@@ -1341,6 +1343,26 @@ function effectInsight(slot) {
     latestOps: distinctOps(latestEffects)
   };
 }
+function freezeInsight(events) {
+  if (!events || events.length === 0) {
+    return void 0;
+  }
+  const latest = events[events.length - 1];
+  const cert = latest.certificate;
+  return {
+    attempts: events.length,
+    licensedCount: events.filter((e) => e.certificate.licensed).length,
+    latestLicensed: cert.licensed,
+    epsilon: cert.epsilon,
+    delta: cert.delta,
+    budgetSpent: cert.budget_spent,
+    budgetTotal: cert.budget_total,
+    heldOutPassFraction: cert.held_out_pass_fraction,
+    mdlGain: cert.mdl_gain,
+    refusalReasons: cert.refusal_reasons || [],
+    timestamp: latest.timestamp
+  };
+}
 function computeSlotInsight(slot) {
   if (!slot.commits || Object.keys(slot.commits).length === 0) {
     return void 0;
@@ -1349,6 +1371,7 @@ function computeSlotInsight(slot) {
   const contract = contractInsight(slot);
   const change = changeInsight(commit);
   const effect = effectInsight(slot);
+  const freeze = freezeInsight(slot.freeze_events);
   const locked = !!slot.refs?.[LOCK_REF2];
   let health = "ok";
   if (change?.hasRegression) {
@@ -1367,7 +1390,8 @@ function computeSlotInsight(slot) {
     health,
     contract,
     change,
-    effect
+    effect,
+    freeze
   };
 }
 function insightChips(insight) {
@@ -1605,6 +1629,20 @@ function buildHoverMarkdown(slot, insight) {
       if (sup)
         bits.push(`${sup} superseded`);
       lines.push(`- *${bits.join(" \xB7 ")}*`);
+    }
+    lines.push("");
+  }
+  if (insight.freeze) {
+    const f = insight.freeze;
+    const verdict = f.latestLicensed ? "$(check) licensed" : "$(circle-slash) refused";
+    lines.push(
+      `$(shield) **Freeze certificate** \u2014 ${verdict} \xB7 budget ${f.budgetSpent}/${f.budgetTotal} \xB7 \u03B5=${f.epsilon} \u03B4=${f.delta} \xB7 held-out ${(f.heldOutPassFraction * 100).toFixed(0)}% \xB7 MDL ${f.mdlGain > 0 ? "+" : ""}${f.mdlGain.toFixed(0)}`
+    );
+    if (!f.latestLicensed && f.refusalReasons.length) {
+      lines.push(`> ${truncate(f.refusalReasons.join("; "), 160)}`);
+    }
+    if (f.attempts > 1) {
+      lines.push(`> ${f.attempts} attempts total \xB7 ${f.licensedCount} licensed`);
     }
     lines.push("");
   }

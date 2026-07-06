@@ -128,6 +128,25 @@ export function buildHoverMarkdown(slot: SlotJson, insight: SlotInsight): string
     lines.push("");
   }
 
+  // FREEZE CERTIFICATE -- the license (or refusal) behind a certified promotion.
+  if (insight.freeze) {
+    const f = insight.freeze;
+    const verdict = f.latestLicensed
+      ? "$(check) licensed"
+      : "$(circle-slash) refused";
+    lines.push(
+      `$(shield) **Freeze certificate** — ${verdict} · budget ${f.budgetSpent}/${f.budgetTotal} ` +
+        `· ε=${f.epsilon} δ=${f.delta} · held-out ${(f.heldOutPassFraction * 100).toFixed(0)}% · MDL ${f.mdlGain > 0 ? "+" : ""}${f.mdlGain.toFixed(0)}`,
+    );
+    if (!f.latestLicensed && f.refusalReasons.length) {
+      lines.push(`> ${truncate(f.refusalReasons.join("; "), 160)}`);
+    }
+    if (f.attempts > 1) {
+      lines.push(`> ${f.attempts} attempts total · ${f.licensedCount} licensed`);
+    }
+    lines.push("");
+  }
+
   // WHAT IT CHECKS AGAINST -- the formal constraint the generator/validator enforce.
   const constraint = constraintLine(slot);
   if (constraint) {
