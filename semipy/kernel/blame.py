@@ -50,6 +50,12 @@ class BlameResult:
     offending_input: Any = None
     replayed_output: Any = None
     expected_output: Any = None
+    # What the blamed leaf should have produced for offending_input: the expected
+    # element (MAP) or expected membership bool (FILTER). None whenever
+    # offending_input is None. This is melt's germ for synthesizing a replacement
+    # leaf (Phase 4) -- distinct from expected_output, which is the whole node's
+    # expected list.
+    offending_target: Any = None
 
 
 def _compile_leaf(artifact: Optional[str]) -> Optional[Any]:
@@ -141,18 +147,21 @@ def _accumulator_passthrough_child(node: Node) -> Optional[Node]:
     return combinator
 
 
-def _first_divergent_element(kind: NodeKind, iterable: Any, replayed: list, expected: Any) -> Any:
+def _first_divergent_element(
+    kind: NodeKind, iterable: Any, replayed: list, expected: Any
+) -> Optional[tuple[Any, Any]]:
+    """(offending_input, what the leaf should have produced for it), or None."""
     if not isinstance(expected, list):
         return None
     if kind == NodeKind.MAP:
         for el, actual, exp in zip(iterable, replayed, expected):
             if actual != exp:
-                return el
+                return el, exp
         return None
     if kind == NodeKind.FILTER:
         for el in iterable:
             if (el in replayed) != (el in expected):
-                return el
+                return el, (el in expected)
     return None
 
 
@@ -219,7 +228,9 @@ def blame(tree: Node, *, free_variables: dict[str, Any], expected_output: Any) -
             return BlameResult(
                 node.node_id, node.kind.value,
                 "leaf's per-element output diverges from the expected output at the reported input",
-                offending_input=offending, replayed_output=value, expected_output=expected_output,
+                offending_input=offending[0] if offending else None,
+                replayed_output=value, expected_output=expected_output,
+                offending_target=offending[1] if offending else None,
             )
 
         return BlameResult(

@@ -23,6 +23,14 @@ def test_blame_confirms_node_matches_when_there_is_no_divergence():
     assert "not under this node" in result.reason
 
 
+def test_blame_reports_the_expected_target_for_a_map_divergence():
+    src = "def f(items):\n    return [x * 2 for x in items]\n"
+    node = lower_source_to_tree(src, "s")
+    result = blame(node, free_variables={"items": [1, 2, 3]}, expected_output=[2, 4, 999])
+    assert result.offending_input == 3
+    assert result.offending_target == 999  # what the leaf should have produced for 3
+
+
 def test_blame_localizes_filter_and_reports_the_offending_element():
     src = "def f(items):\n    return [x for x in items if x > 0]\n"
     node = lower_source_to_tree(src, "s")
@@ -30,6 +38,14 @@ def test_blame_localizes_filter_and_reports_the_offending_element():
 
     result = blame(node, free_variables={"items": [1, -1, 2]}, expected_output=[1])
     assert result.offending_input == 2  # should have been included but was dropped from expected
+    assert result.offending_target is False  # 2 should NOT have passed the predicate
+
+
+def test_blame_offending_target_is_none_when_there_is_no_divergence():
+    src = "def f(items):\n    return [x * 2 for x in items]\n"
+    node = lower_source_to_tree(src, "s")
+    result = blame(node, free_variables={"items": [1, 2, 3]}, expected_output=[2, 4, 6])
+    assert result.offending_target is None
 
 
 def test_blame_descends_through_branch_into_the_matched_arm():

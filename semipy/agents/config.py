@@ -103,6 +103,18 @@ class SemiConfig:
     contract_maintainer: bool = False
     #: If True, run the maintainer in a background thread (lower latency; cases may lag a call).
     contract_maintainer_async: bool = False
+    #: When a regenerated candidate fails an active case inside the contract gate's
+    #: retry loop, attempt kernel.operators' melt (blame the failure to the shallowest
+    #: tree node, patch just that node) before falling back to a full-function
+    #: regeneration. Off by default; melt is strictly an optimization (same acceptance
+    #: gate re-checks the result either way) but still a new code path.
+    melt_on_contract_failure: bool = False
+    #: When the contract gate's retry budget is exhausted and a case would be
+    #: quarantined, attempt kernel.operators' branch (synthesize + license a guard
+    #: that preserves the old case's behavior alongside the new evidence) instead of
+    #: giving up on it. Off by default: unlike melt, this changes what happens to a
+    #: case that would otherwise be quarantined, not just how the candidate is produced.
+    branch_on_quarantine: bool = False
 
     # --- Effects subsystem (reified real-world effects: DB/file/data/API) ---
     #: Master switch. When on, effectful slots (whose generated function declares an

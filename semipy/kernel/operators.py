@@ -23,20 +23,35 @@ examples, which cannot compress the evidence) are now correctly refused.
 shallowest node that reproduces it (``kernel.blame``), then splice an
 already-regenerated replacement for that node back into the original source
 (``kernel.tree.patch_source``) rather than discarding the whole function.
-This is additive infrastructure, not yet wired into the live ADAPT path --
-producing the replacement artifact itself (an LLM call scoped to just the
-blamed node) is a separate, deliberate follow-up decision, same as freeze's
-staged rollout in Phase 3.
+Live-wired (opt-in via ``config.melt_on_contract_failure``): when a candidate
+fails an active "example" case inside ``slot_resolver``'s contract-gate retry
+loop, ``_try_melt_for_example_case`` blames the failure, synthesizes a
+replacement for just the blamed MAP/FILTER leaf (one small LLM call scoped to
+that leaf, via ``interpreted.synthesize_residual_source``), and patches it in
+-- tried before a full-function regeneration, never instead of the gate's own
+re-verification. Neither the tree nor the patch is ever persisted; both are
+recomputed on demand from the candidate's own source and discarded after.
 
 ``branch`` and ``merge`` (Phase 5, §3.3-3.4) round out the four moves.
 ``branch`` compiles LLM-proposed guard strings against the closed DSL
 (``kernel.guard``) and is licensed only when at least one compiles -- an
-unverified guard never dispatches. ``merge`` verifies a candidate unified
-structure against both branches' own evidence, a fresh separation search
-(reusing the same discriminating-input searcher freeze's counterexample
-license uses), and an MDL comparison, before collapsing two branches into
-one. Like ``melt``, both are additive: there is no live branch/merge call
-site yet.
+unverified guard never dispatches. ``synthesize_separating_guard`` is the
+live-wired proposal step feeding it: given two concrete, already-known
+disagreement points (a contract case's own input vs. the input that drove a
+conflicting regeneration), it tries a small closed template bank first, then
+escalates to one scoped LLM call, and independently evaluates whatever it
+gets before trusting it. Live-wired (opt-in via ``config.branch_on_quarantine``):
+when the contract gate's retry budget is exhausted and a case would be
+quarantined, ``slot_resolver._try_branch_split`` tries this instead --
+licenses the guard, then ``kernel.tree.build_branch_wrapper`` combines the two
+*whole* candidate implementations behind it (no tree/patch_source needed here;
+every live slot is still one opaque node, so this operates at the whole-function
+level, not a sub-node splice). ``merge`` verifies a candidate unified structure
+against both branches' own evidence, a fresh separation search (reusing the
+same discriminating-input searcher freeze's counterexample license uses), and
+an MDL comparison, before collapsing two branches into one. Unlike branch,
+merge is still additive: nothing yet produces two branch-shaped artifacts of
+the same slot for it to act on.
 
 ``license_sketch`` (Phase 6, §5 library/) applies the same discipline to
 cross-slot pattern reuse: ``library.merge_sketch_into_library``'s single-shot,
@@ -422,6 +437,96 @@ def branch(proposed_guards: Sequence[str]) -> BranchEvent:
         else "no proposed guard compiled against the closed predicate DSL; node stays molten"
     )
     return BranchEvent(guards=compiled, rejected_guards=rejected, licensed=licensed, reason=reason)
+
+
+_GUARD_ELIGIBLE_TYPENAMES = frozenset(
+    {"int", "float", "str", "bool", "list", "dict", "tuple", "set", "frozenset", "bytes"}
+)
+
+
+def _template_guard_candidates(var: str, old_value: Any, new_value: Any) -> list[str]:
+    """A small, closed bank of guard shapes over one shared free variable, derived
+    from a structural property of *old_value* alone -- the side the guard must
+    license True for. Every candidate stays inside ``kernel.guard``'s grammar by
+    construction; callers still evaluate each one before trusting it."""
+    candidates: list[str] = []
+    old_t, new_t = type(old_value).__name__, type(new_value).__name__
+    if old_t != new_t and old_t in _GUARD_ELIGIBLE_TYPENAMES:
+        candidates.append(f"isinstance({var}, {old_t})")
+    if old_value is None:
+        candidates.append(f"{var} is None")
+    if hasattr(old_value, "__len__"):
+        candidates.append(f"len({var}) == 0" if len(old_value) == 0 else f"len({var}) > 0")
+    if isinstance(old_value, (int, float)) and not isinstance(old_value, bool):
+        candidates.append(f"{var} == {old_value!r}" if abs(old_value) < 1e6 else f"{var} > 0")
+    return candidates
+
+
+def _propose_guard_via_llm(
+    *, old_input: dict[str, Any], new_input: dict[str, Any], free_variables: Sequence[str]
+) -> Optional[str]:
+    """Escalate to one scoped LLM call for a separating predicate, reusing
+    ``interpreted.synthesize_residual_source`` (the same primitive freeze uses)
+    with a two-row True/False training set instead of a domain instruction. The
+    result is trusted only as a *proposal*: the caller independently evaluates it
+    against both concrete inputs before accepting it."""
+    if not free_variables:
+        return None
+    from semipy.interpreted import synthesize_residual_source
+
+    args_old = [old_input.get(v) for v in free_variables]
+    args_new = [new_input.get(v) for v in free_variables]
+    instruction = (
+        "Return a single boolean expression (not a multi-statement function body) "
+        "using only comparisons, isinstance/len/type, and and/or/not over the given "
+        "variables. It must evaluate True for the first example and False for the second."
+    )
+    src = synthesize_residual_source(instruction, free_variables, [(args_old, True), (args_new, False)])
+    if not src:
+        return None
+    try:
+        import ast as _ast
+
+        fn = _ast.parse(src).body[0]
+        if not isinstance(fn, _ast.FunctionDef) or len(fn.body) != 1 or not isinstance(fn.body[0], _ast.Return):
+            return None
+        return _ast.unparse(fn.body[0].value) if fn.body[0].value is not None else None
+    except SyntaxError:
+        return None
+
+
+def synthesize_separating_guard(
+    *, old_input: dict[str, Any], new_input: dict[str, Any]
+) -> Optional[str]:
+    """Find a guard (§3.3's closed DSL) that separates two concrete, already-known
+    disagreement points: it must evaluate True on *old_input* (the case whose
+    behavior must be preserved) and False on *new_input* (the input that drove the
+    conflicting regeneration). Tries a small closed template bank first (no LLM
+    call, deterministic); escalates to one scoped LLM proposal only if nothing in
+    the bank separates the two. Every candidate -- template or LLM-proposed -- is
+    independently evaluated against both concrete inputs before being returned; an
+    LLM's syntactically-valid-but-wrong proposal is caught here, not trusted.
+    Returns ``None`` if no guard in scope separates them (the caller falls back to
+    whatever it would have done otherwise -- e.g. quarantining a case).
+    """
+    from semipy.kernel.guard import compile_guard
+
+    def _separates(guard_src: str) -> bool:
+        compiled = compile_guard(guard_src)
+        if compiled is None:
+            return False
+        return compiled.evaluate(old_input) is True and compiled.evaluate(new_input) is False
+
+    shared_vars = [v for v in old_input if v in new_input]
+    for var in shared_vars:
+        for candidate in _template_guard_candidates(var, old_input[var], new_input.get(var)):
+            if _separates(candidate):
+                return candidate
+
+    proposed = _propose_guard_via_llm(old_input=old_input, new_input=new_input, free_variables=shared_vars)
+    if proposed and _separates(proposed):
+        return proposed
+    return None
 
 
 @dataclass

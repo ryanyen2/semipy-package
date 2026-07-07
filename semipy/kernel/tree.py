@@ -361,11 +361,12 @@ def _try_loop_run(stmts: list[ast.stmt], node_id: str, fn_def: ast.FunctionDef) 
     return None
 
 
-def _try_comprehension_run(stmts: list[ast.stmt], node_id: str, fn_def: ast.FunctionDef) -> Node | None:
-    """Recognize ``return [<elt> for <target> in <iter> (if <cond>)?]`` (single generator)."""
-    if len(stmts) != 1 or not isinstance(stmts[0], ast.Return) or not isinstance(stmts[0].value, ast.ListComp):
+def _comprehension_node(comp: ast.expr, node_id: str) -> Node | None:
+    """Build the MAP/FILTER/COMPOSE(FILTER,MAP) shape for one list comprehension
+    (single generator, <=1 filter clause) -- shared by both the bare-``return``
+    and the assign-to-a-name recognizers below."""
+    if not isinstance(comp, ast.ListComp):
         return None
-    comp = stmts[0].value
     if len(comp.generators) != 1 or comp.generators[0].ifs and len(comp.generators[0].ifs) > 1:
         return None
     gen = comp.generators[0]
@@ -393,6 +394,42 @@ def _try_comprehension_run(stmts: list[ast.stmt], node_id: str, fn_def: ast.Func
         map_leaf = Node(node_id=f"{node_id}.map.body", kind=NodeKind.OPAQUE, hardness=Hardness.PLASTIC, artifact=map_source)
         return Node(node_id=node_id, kind=NodeKind.MAP, hardness=Hardness.PLASTIC, children=[map_leaf], meta=meta)
     return None
+
+
+def _try_comprehension_run(stmts: list[ast.stmt], node_id: str, fn_def: ast.FunctionDef) -> Node | None:
+    """Recognize ``return [<elt> for <target> in <iter> (if <cond>)?]`` (single generator)."""
+    if len(stmts) != 1 or not isinstance(stmts[0], ast.Return) or not isinstance(stmts[0].value, ast.ListComp):
+        return None
+    return _comprehension_node(stmts[0].value, node_id)
+
+
+def _is_listcomp_assign(stmt: ast.stmt) -> bool:
+    return (
+        isinstance(stmt, ast.Assign)
+        and len(stmt.targets) == 1
+        and isinstance(stmt.targets[0], ast.Name)
+        and isinstance(stmt.value, ast.ListComp)
+    )
+
+
+def _try_assigned_comprehension_run(stmts: list[ast.stmt], node_id: str, fn_def: ast.FunctionDef) -> Node | None:
+    """Recognize ``<name> = [<elt> for <target> in <iter> (if <cond>)?]`` -- a
+    comprehension assigned to a plain name rather than returned directly.
+
+    This is not a niche shape: it is what semipy's own generation convention
+    actually produces (a placeholder ``result = ...`` line, then the real
+    ``result = [...]`` assignment, then a later, separate ``return {"result":
+    result}``) -- ``_try_comprehension_run`` alone never matches semipy's own
+    generated code because it requires the comprehension to sit directly inside
+    a bare ``return``. ``_segment_top_level`` isolates this assignment into its
+    own run exactly like a ``For``/``If``, so the surrounding placeholder
+    assignment and the wrapping return end up as separate sibling nodes in the
+    enclosing COMPOSE -- the same way ``out = []`` / ``return out`` already
+    surround a recognized loop.
+    """
+    if len(stmts) != 1 or not _is_listcomp_assign(stmts[0]):
+        return None
+    return _comprehension_node(stmts[0].value, node_id)  # type: ignore[union-attr]
 
 
 def _collect_if_chain(if_stmt: ast.If) -> tuple[list[tuple[ast.expr, list[ast.stmt]]], list[ast.stmt] | None]:
@@ -426,12 +463,17 @@ def _try_branch_run(stmts: list[ast.stmt], node_id: str, fn_def: ast.FunctionDef
 
 
 def _segment_top_level(body: list[ast.stmt]) -> list[list[ast.stmt]]:
-    """Split a statement list into runs, each a single ``For``/``If`` or a run of
-    simple statements -- the unit each combinator matcher operates on."""
+    """Split a statement list into runs, each a single ``For``/``If``/comprehension-
+    assignment or a run of simple statements -- the unit each combinator matcher
+    operates on. A comprehension-assignment (``name = [... for ... in ...]``) is
+    isolated the same way a ``For``/``If`` is: it *is* the combinator, not
+    incidental to one, so leaving it grouped with a neighboring placeholder
+    assignment or wrapping return would hide it from
+    ``_try_assigned_comprehension_run``."""
     runs: list[list[ast.stmt]] = []
     current: list[ast.stmt] = []
     for stmt in body:
-        if isinstance(stmt, (ast.For, ast.If)):
+        if isinstance(stmt, (ast.For, ast.If)) or _is_listcomp_assign(stmt):
             if current:
                 runs.append(current)
                 current = []
@@ -452,7 +494,7 @@ def lower_stmts_to_tree(stmts: list[ast.stmt], node_id: str, fn_def: ast.Functio
     runs = _segment_top_level(stmts)
     if len(runs) == 1:
         run = runs[0]
-        for matcher in (_try_comprehension_run, _try_loop_run, _try_branch_run):
+        for matcher in (_try_comprehension_run, _try_assigned_comprehension_run, _try_loop_run, _try_branch_run):
             matched = matcher(run, node_id, fn_def)
             if matched is not None:
                 return matched
@@ -462,7 +504,7 @@ def lower_stmts_to_tree(stmts: list[ast.stmt], node_id: str, fn_def: ast.Functio
     for i, run in enumerate(runs):
         run_id = f"{node_id}.compose.{i}"
         matched = None
-        for matcher in (_try_comprehension_run, _try_loop_run, _try_branch_run):
+        for matcher in (_try_comprehension_run, _try_assigned_comprehension_run, _try_loop_run, _try_branch_run):
             matched = matcher(run, run_id, fn_def)
             if matched is not None:
                 break
@@ -678,6 +720,75 @@ def patch_source(source: str, root_id: str, target_id: str, new_artifact: str) -
         return None
     if not _patch_stmts(fn_def.body, root_id, target_id, new_artifact):
         return None
+    ast.fix_missing_locations(module)
+    try:
+        return ast.unparse(module)
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# build_branch_wrapper: whole-function regime dispatch, for branch (Phase 5,
+# §3.3). Unlike patch_source, this never needs the hardness tree at all -- it
+# combines two *whole* candidate implementations (both generated for the same
+# slot signature) behind a guard, since today every live slot is still a
+# single opaque node (Phase 1's go/no-go fraction). If/when a slot's tree
+# actually decomposes further, the same technique applies at a sub-node level;
+# nothing here depends on that having happened yet.
+# ---------------------------------------------------------------------------
+
+
+def build_branch_wrapper(guard_source: str, *, old_source: str, new_source: str) -> str | None:
+    """Combine two whole-function implementations of the same slot into one
+    guard-dispatching wrapper: ``if <guard>: return _regime_old(...) else:
+    return _regime_new(...)``. Uses *new_source*'s own signature for the public
+    function (both sources are expected to share one -- they implement the same
+    slot); renames the two bodies into private helpers called positionally.
+    Returns ``None`` if either source fails to parse, has no top-level
+    function, the two signatures have a different arity, or the guard itself
+    fails to parse as an expression -- the caller falls back to whatever it
+    would have done without the split (e.g. quarantining a case).
+    """
+    import copy
+
+    try:
+        old_module = ast.parse(textwrap.dedent(old_source))
+        new_module = ast.parse(textwrap.dedent(new_source))
+        guard_expr = ast.parse(guard_source, mode="eval").body
+    except SyntaxError:
+        return None
+    old_fn = _first_function_def(old_module)
+    new_fn = _first_function_def(new_module)
+    if not isinstance(old_fn, ast.FunctionDef) or not isinstance(new_fn, ast.FunctionDef):
+        return None
+    if len(old_fn.args.args) != len(new_fn.args.args):
+        return None
+
+    fn_name = new_fn.name
+    old_name, new_name = f"_{fn_name}__regime_old", f"_{fn_name}__regime_new"
+    param_names = [a.arg for a in new_fn.args.args]
+
+    def _call(target: str) -> ast.Call:
+        args = [ast.Name(id=p, ctx=ast.Load()) for p in param_names]
+        return ast.Call(func=ast.Name(id=target, ctx=ast.Load()), args=args, keywords=[])
+
+    old_helper = ast.FunctionDef(
+        name=old_name, args=copy.deepcopy(new_fn.args), body=old_fn.body,
+        decorator_list=[], returns=None,
+    )
+    new_helper = ast.FunctionDef(
+        name=new_name, args=copy.deepcopy(new_fn.args), body=new_fn.body,
+        decorator_list=[], returns=None,
+    )
+    dispatcher = ast.FunctionDef(
+        name=fn_name, args=copy.deepcopy(new_fn.args),
+        body=[
+            ast.If(test=guard_expr, body=[ast.Return(value=_call(old_name))], orelse=[]),
+            ast.Return(value=_call(new_name)),
+        ],
+        decorator_list=[], returns=None,
+    )
+    module = ast.Module(body=[old_helper, new_helper, dispatcher], type_ignores=[])
     ast.fix_missing_locations(module)
     try:
         return ast.unparse(module)

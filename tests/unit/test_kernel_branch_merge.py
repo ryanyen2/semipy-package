@@ -15,7 +15,7 @@ import sys
 import semipy.decisions.discriminate as discriminate_mod
 import semipy.interpreted  # noqa: F401 -- registers the real module in sys.modules
 from semipy.decisions.discriminate import DiscriminationResult
-from semipy.kernel.operators import BranchEvent, MergeEvent, branch, merge
+from semipy.kernel.operators import BranchEvent, MergeEvent, branch, merge, synthesize_separating_guard
 
 # semipy/__init__.py clobbers the `semipy.interpreted` package attribute with
 # the `interpreted()` factory function it re-exports; sys.modules is the
@@ -47,6 +47,59 @@ def test_branch_refuses_when_no_guard_compiles():
 def test_branch_refuses_on_an_empty_proposal_list():
     result = branch([])
     assert result.licensed is False
+
+
+# ---------------------------------------------------------------------------
+# synthesize_separating_guard (Phase 5, branch's live-wired guard proposal)
+# ---------------------------------------------------------------------------
+
+
+def test_synthesize_separating_guard_finds_a_none_check_via_the_template_bank():
+    guard = synthesize_separating_guard(old_input={"x": None}, new_input={"x": 5})
+    assert guard == "x is None"
+
+
+def test_synthesize_separating_guard_finds_a_type_check_via_the_template_bank():
+    guard = synthesize_separating_guard(old_input={"x": "hello"}, new_input={"x": 5})
+    assert guard == "isinstance(x, str)"
+
+
+def test_synthesize_separating_guard_finds_an_empty_length_check():
+    guard = synthesize_separating_guard(old_input={"items": []}, new_input={"items": [1, 2]})
+    assert guard == "len(items) == 0"
+
+
+def test_synthesize_separating_guard_escalates_to_the_llm_when_no_template_separates(monkeypatch):
+    # Same type, same truthiness, no template candidate can tell these apart --
+    # only the (mocked) LLM escalation can propose something.
+    monkeypatch.setattr(
+        interpreted_mod, "synthesize_residual_source",
+        lambda *a, **k: "def solve(status):\n    return status == 'archived'\n",
+    )
+    guard = synthesize_separating_guard(
+        old_input={"status": "archived"}, new_input={"status": "active"},
+    )
+    assert guard == "status == 'archived'"
+
+
+def test_synthesize_separating_guard_rejects_an_llm_proposal_that_does_not_actually_separate(monkeypatch):
+    # Two non-empty strings of the same shape: no template candidate applies, so
+    # this reaches the (mocked) LLM escalation. Its proposal is syntactically
+    # valid but evaluates the same way on both inputs -- must not be trusted.
+    monkeypatch.setattr(
+        interpreted_mod, "synthesize_residual_source",
+        lambda *a, **k: "def solve(status):\n    return True\n",
+    )
+    guard = synthesize_separating_guard(
+        old_input={"status": "archived"}, new_input={"status": "deleted"},
+    )
+    assert guard is None
+
+
+def test_synthesize_separating_guard_returns_none_when_nothing_separates_identical_inputs(monkeypatch):
+    monkeypatch.setattr(interpreted_mod, "synthesize_residual_source", lambda *a, **k: None)
+    guard = synthesize_separating_guard(old_input={"x": 5}, new_input={"x": 5})
+    assert guard is None
 
 
 # ---------------------------------------------------------------------------

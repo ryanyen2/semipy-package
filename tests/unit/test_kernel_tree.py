@@ -15,6 +15,7 @@ from semipy.kernel.tree import (
     Hardness,
     Node,
     NodeKind,
+    build_branch_wrapper,
     degenerate_tree,
     get_tree,
     is_multi_node,
@@ -237,6 +238,34 @@ def test_recognizes_comprehension_map_and_filter():
     assert {NodeKind.FILTER, NodeKind.MAP}.issubset(kinds)
 
 
+def test_recognizes_comprehension_assigned_to_a_name_not_just_bare_return():
+    """The shape semipy's own generation convention actually produces: a named
+    result variable assigned from a comprehension, returned separately (bare or
+    dict-wrapped) -- not the comprehension sitting directly inside ``return``."""
+    src = "def f(items):\n    result = [x for x in items if x > 0]\n    return result\n"
+    node = lower_source_to_tree(src, "s")
+    kinds = {n.kind for n in node.walk()}
+    assert NodeKind.FILTER in kinds
+    assert is_multi_node(node)
+
+
+def test_recognizes_assigned_comprehension_with_placeholder_and_dict_wrapped_return():
+    """The exact shape observed from a real gpt-5.5 generation for a STATEMENT_BLOCK
+    slot: a leftover ``result = ...`` placeholder, the real comprehension
+    assignment, then a ``return {"result": result}`` wrap -- three separate
+    top-level statements, none of which is a bare ``return [comp]``."""
+    src = (
+        "def double_numbers_slot(xs):\n"
+        "    result = ...\n"
+        "    result = [int(x) * 2 for x in (xs or [])]\n"
+        '    return {"result": result}\n'
+    )
+    node = lower_source_to_tree(src, "s")
+    kinds = {n.kind for n in node.walk()}
+    assert NodeKind.MAP in kinds
+    assert is_multi_node(node)
+
+
 def test_recognizes_multi_stage_compose_pipeline():
     src = textwrap.dedent(
         """
@@ -369,3 +398,62 @@ def test_multi_node_fraction_over_representative_corpus_is_reported():
     n = len(_REPRESENTATIVE_CORPUS)
     n_opaque = len(expected_opaque)
     assert fraction == (n - n_opaque) / n
+
+
+# ---------------------------------------------------------------------------
+# build_branch_wrapper (Phase 5, branch): whole-function regime dispatch --
+# never needs the hardness tree, since every live slot is still one opaque
+# node (the multi-node fraction above).
+# ---------------------------------------------------------------------------
+
+
+def test_build_branch_wrapper_dispatches_on_the_guard():
+    wrapped = build_branch_wrapper(
+        "x is None",
+        old_source="def f(x):\n    return -1\n",
+        new_source="def f(x):\n    return x + 1\n",
+    )
+    assert wrapped is not None
+    ns: dict = {}
+    exec(compile(wrapped, "<wrapped>", "exec"), ns)
+    f = ns["f"]
+    assert f(None) == -1       # old regime, preserved behind the guard
+    assert f(5) == 6           # new regime, unchanged
+
+
+def test_build_branch_wrapper_keeps_both_bodies_as_private_helpers():
+    wrapped = build_branch_wrapper(
+        "x is None",
+        old_source="def f(x):\n    return -1\n",
+        new_source="def f(x):\n    return x + 1\n",
+    )
+    assert "_f__regime_old" in wrapped
+    assert "_f__regime_new" in wrapped
+    assert "def f(x):" in wrapped
+
+
+def test_build_branch_wrapper_returns_none_for_mismatched_arity():
+    wrapped = build_branch_wrapper(
+        "x is None",
+        old_source="def f(x, y):\n    return -1\n",
+        new_source="def f(x):\n    return x + 1\n",
+    )
+    assert wrapped is None
+
+
+def test_build_branch_wrapper_returns_none_for_an_unparseable_guard():
+    wrapped = build_branch_wrapper(
+        "not a valid guard (((",
+        old_source="def f(x):\n    return -1\n",
+        new_source="def f(x):\n    return x + 1\n",
+    )
+    assert wrapped is None
+
+
+def test_build_branch_wrapper_returns_none_when_a_source_does_not_parse():
+    wrapped = build_branch_wrapper(
+        "x is None",
+        old_source="def f(x:\n    return -1\n",
+        new_source="def f(x):\n    return x + 1\n",
+    )
+    assert wrapped is None

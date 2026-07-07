@@ -791,6 +791,98 @@ def _run_reuse_contract_gate(
         return None, None
 
 
+def _try_melt_for_example_case(
+    *, case: Any, candidate_source: str, slot_spec: SlotSpec,
+) -> str | None:
+    """Attempt melt's local rejuvenation (frontier-kernel Phase 4) for one
+    ``case`` the contract gate's *candidate_source* just failed: blame the
+    failure to the shallowest node in the candidate's own tree, synthesize a
+    replacement for just that node, and splice it back in. Returns the patched
+    source, or ``None`` when melt is out of scope for this case (not an
+    "example" case, its expected value doesn't literal_eval, blame can't
+    localize past the root, or the localized node isn't a MAP/FILTER leaf) --
+    the caller falls back to whole-function regeneration, unchanged.
+    """
+    if getattr(case, "kind", None) != "example":
+        return None
+    try:
+        expected_output = ast.literal_eval(case.expected_repr)
+    except Exception:
+        return None
+
+    from semipy.interpreted import synthesize_residual_source
+    from semipy.kernel.blame import blame
+    from semipy.kernel.operators import melt
+    from semipy.kernel.tree import lower_source_to_tree
+
+    root_id = slot_spec.slot_id
+    tree = lower_source_to_tree(candidate_source, root_id)
+    result = blame(tree, free_variables=case.input_sample, expected_output=expected_output)
+    if result.node_id == root_id or result.kind not in ("map", "filter"):
+        return None
+    if result.offending_input is None and result.offending_target is None:
+        return None
+
+    leaf_node = next((n for n in tree.walk() if n.node_id == result.node_id), None)
+    leaf = leaf_node.children[0] if leaf_node and leaf_node.children else None
+    if leaf is None or not leaf.artifact:
+        return None
+    try:
+        leaf_fn = ast.parse(leaf.artifact).body[0]
+        item_name = leaf_fn.args.args[0].arg  # type: ignore[union-attr]
+    except Exception:
+        return None
+
+    instruction = (
+        f"{slot_spec.spec_text}\n\n"
+        + (
+            "This is the per-element transform applied inside a map over one item; "
+            "write it as a function of that single item."
+            if result.kind == "map"
+            else "This is the per-element boolean predicate applied inside a filter over "
+            "one item; write it as a function of that single item returning True/False."
+        )
+    )
+    new_leaf_source = synthesize_residual_source(
+        instruction, [item_name], [([result.offending_input], result.offending_target)],
+    )
+    if not new_leaf_source:
+        return None
+
+    melt_result = melt(
+        candidate_source, root_id,
+        free_variables=case.input_sample, expected_output=expected_output,
+        new_node_source=new_leaf_source,
+    )
+    return melt_result.patched_source
+
+
+def _try_branch_split(
+    *, case: Any, runtime_values: dict[str, Any], parent_source: str, candidate_source: str,
+) -> str | None:
+    """Attempt to preserve ``case`` behind a guard instead of quarantining it
+    (frontier-kernel Phase 5, branch): find a predicate that routes case's own
+    input to *parent_source* (which already satisfies it -- it was active
+    before this regeneration) and everything else to *candidate_source* (which
+    satisfies the new evidence that conflicts with it), license it, and wrap
+    both bodies behind it. Returns the wrapped source, or ``None`` when no
+    guard separates the two inputs or the wrap fails to construct -- the
+    caller falls back to quarantining the case, unchanged.
+    """
+    if getattr(case, "kind", None) != "example":
+        return None
+    from semipy.kernel.operators import branch, synthesize_separating_guard
+    from semipy.kernel.tree import build_branch_wrapper
+
+    guard = synthesize_separating_guard(old_input=case.input_sample, new_input=runtime_values)
+    if guard is None:
+        return None
+    event = branch([guard])
+    if not event.licensed:
+        return None
+    return build_branch_wrapper(event.guards[0], old_source=parent_source, new_source=candidate_source)
+
+
 def _run_generate_contract_gate(
     slot: Any,
     slot_spec: SlotSpec,
@@ -808,10 +900,16 @@ def _run_generate_contract_gate(
        of contract inputs — is always traced when the contract is enabled.
        3. An unintended diff (a regression on an input the parent handled) also
        fails the gate. On any violation, regenerate up to ``contract_gate_max_retries``
-       with the specific problem appended to the failure context.
+       with the specific problem appended to the failure context -- unless melt
+       (opt-in, ``config.melt_on_contract_failure``) can patch just the blamed
+       node instead; tried first each retry, falls straight through to full
+       regeneration when it's out of scope or doesn't fix the failure.
 
     Returns ``(entry, unresolved_case_ids, change_record_dict)``. Unresolved ids are
-    quarantined by the caller so the system still makes progress; the change record
+    quarantined by the caller, unless branch (opt-in, ``config.branch_on_quarantine``)
+    finds a guard that preserves the case's own behavior alongside the new evidence
+    instead -- tried once, against the first still-failing case, before quarantining;
+    on success the case is dropped from the returned ids. Either way the change record
     is attached to the commit as the real "what changed" provenance.
     """
     if not getattr(config, "contract_enabled", True):
@@ -867,12 +965,34 @@ def _run_generate_contract_gate(
         )
         return cr, change
 
+    case_by_id = {c.case_id: c for c in active}
+    melt_enabled = bool(getattr(config, "melt_on_contract_failure", False))
+
     cr, change = _assess(entry.generated_source)
     attempt = 0
     while gate_on and attempt < max_retries and (
         (not cr.passed) or (block and change.unintended_count > 0)
     ):
         attempt += 1
+
+        if melt_enabled and not cr.passed and cr.failures:
+            case = case_by_id.get(cr.failures[0].case_id)
+            patched = (
+                _try_melt_for_example_case(case=case, candidate_source=entry.generated_source, slot_spec=slot_spec)
+                if case is not None else None
+            )
+            if patched is not None:
+                melted_entry = replace(entry, generated_source=patched)
+                melted_cr, melted_change = _assess(melted_entry.generated_source)
+                if melted_cr.passed and not (block and melted_change.unintended_count > 0):
+                    entry, cr, change = melted_entry, melted_cr, melted_change
+                    if config.verbose:
+                        print_pipeline_log(
+                            call_site, "melt",
+                            f"Locally patched node for case {case.case_id[:8]}; skipped full regeneration.",
+                        )
+                    continue
+
         if not cr.passed:
             extra = cr.first_failure_message()
         else:
@@ -896,7 +1016,26 @@ def _run_generate_contract_gate(
     ids: set[str] = set()
     if gate_on and not cr.passed:
         ids = cr.failing_case_ids()
-        if config.verbose:
+        if bool(getattr(config, "branch_on_quarantine", False)) and parent_source and cr.failures:
+            case = case_by_id.get(cr.failures[0].case_id)
+            branched = (
+                _try_branch_split(
+                    case=case, runtime_values=runtime_values,
+                    parent_source=parent_source, candidate_source=entry.generated_source,
+                )
+                if case is not None else None
+            )
+            if branched is not None:
+                branched_cr, branched_change = _assess(branched)
+                if branched_cr.passed and not (block and branched_change.unintended_count > 0):
+                    entry, cr, change = replace(entry, generated_source=branched), branched_cr, branched_change
+                    ids = set()
+                    if config.verbose:
+                        print_pipeline_log(
+                            call_site, "branch",
+                            f"Preserved case {case.case_id[:8]} behind a guard instead of quarantining it.",
+                        )
+        if ids and config.verbose:
             print_pipeline_log(
                 call_site,
                 "contract_gate",
