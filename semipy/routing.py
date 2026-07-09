@@ -154,8 +154,22 @@ class RoutingPolicy:
         has_commits = bool(slot.commits)
         head = _head_commit(slot) if has_commits else None
         equiv_ok = _equivalence_matches(slot, slot_spec)
-        donor = _best_donor(self._portal, slot_spec, slot.slot_id)
-        sketch_result = _try_sketch_instantiation(slot_spec, sketch_library, slot)
+        # These two signals are now computed eagerly (decide_route is a pure
+        # function of resolved signals), but they do real work -- a donor search
+        # across the portal's slots and a sketch-library lookup. A raise in
+        # either must not propagate on a path that never consumes it (a version
+        # lock, a force_regenerate-with-head), which is what the pre-Phase-6
+        # lazy cascade guaranteed by only touching them inside their branches.
+        # Degrade to "signal absent" instead, matching the locked-commit lookup
+        # above.
+        try:
+            donor = _best_donor(self._portal, slot_spec, slot.slot_id)
+        except Exception:
+            donor = None
+        try:
+            sketch_result = _try_sketch_instantiation(slot_spec, sketch_library, slot)
+        except Exception:
+            sketch_result = None
 
         failure_kind = None
         if prior_validation is not None and not prior_validation.passed:
