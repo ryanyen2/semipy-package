@@ -183,6 +183,39 @@ def test_freeze_refuses_when_no_residual_compiles(monkeypatch):
     assert "no residual candidate compiled" in event.certificate.refusal_reasons
 
 
+def test_freeze_certificate_records_whether_the_counterexample_search_actually_ran(monkeypatch):
+    # A deterministic proposal collapses two draws to one distinct candidate, so
+    # the §3.1 search cannot run -- the certificate must say so (not leave a
+    # nonzero budget_total looking like a search that happened), while the freeze
+    # still licenses honestly on held-out reproducibility + MDL.
+    small_src = "def solve(x):\n    return x*2\n"
+    monkeypatch.setattr(interpreted_mod, "synthesize_residual_source", lambda *a, **k: small_src)
+    monkeypatch.setattr(interpreted_mod, "validate_residual", lambda *a, **k: (True, 1.0))
+    _src, event = freeze(
+        instruction="double it", free_variables=["x"], examples=_EXAMPLES,
+        expected_type=int, samples=2,  # two draws, but identical -> one candidate
+    )
+    cert = event.certificate
+    assert cert.licensed is True
+    assert cert.counterexample_evaluated is False
+    assert cert.budget_spent == 0
+
+    # Two genuinely distinct candidates that do not disagree: the search runs and
+    # finds nothing, so the flag is True and the freeze is fully certified.
+    sources = iter(["def solve(x):\n    return x*2\n", "def solve(x):\n    return x+x\n"])
+    monkeypatch.setattr(interpreted_mod, "synthesize_residual_source", lambda *a, **k: next(sources))
+    monkeypatch.setattr(
+        discriminate_mod, "search_discriminating_inputs",
+        lambda *a, **k: DiscriminationResult(found=False, base_clusters=1, best_clusters=1, germ="", tried=4),
+    )
+    _src2, event2 = freeze(
+        instruction="double it", free_variables=["x"], examples=_EXAMPLES,
+        expected_type=int, samples=2,
+    )
+    assert event2.certificate.counterexample_evaluated is True
+    assert event2.certificate.budget_spent == 4
+
+
 # ---------------------------------------------------------------------------
 # freeze-event ledger accessors
 # ---------------------------------------------------------------------------

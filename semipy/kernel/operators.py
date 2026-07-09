@@ -86,6 +86,13 @@ class FreezeCertificate:
     mdl_gain: float
     licensed: bool
     refusal_reasons: list[str] = field(default_factory=list)
+    # Whether the counterexample search (§3.1's hypothesis test on Δ) actually
+    # ran. It can only run when the committee drew >1 distinct candidate to
+    # search for disagreement among; a deterministic proposal that collapses to
+    # a single candidate leaves this False, so ``budget_total`` (the theoretical
+    # budget for the configured ε/δ/γ) is not misread as a search that happened.
+    # A freeze with this False rests on held-out reproducibility + MDL alone.
+    counterexample_evaluated: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -98,6 +105,7 @@ class FreezeCertificate:
             "mdl_gain": self.mdl_gain,
             "licensed": self.licensed,
             "refusal_reasons": list(self.refusal_reasons),
+            "counterexample_evaluated": self.counterexample_evaluated,
         }
 
     @classmethod
@@ -112,6 +120,7 @@ class FreezeCertificate:
             mdl_gain=d.get("mdl_gain", 0.0),
             licensed=d.get("licensed", False),
             refusal_reasons=list(d.get("refusal_reasons", [])),
+            counterexample_evaluated=d.get("counterexample_evaluated", False),
         )
 
 
@@ -269,6 +278,7 @@ def freeze(
     # residual committee this synthesis pass actually drew.
     budget_spent = 0
     disagreement_found = False
+    counterexample_evaluated = False
     if held_out_licensed:
         if len(candidates) > 1:
             rows = [
@@ -280,6 +290,7 @@ def freeze(
             )
             budget_spent = disc.tried
             disagreement_found = disc.found
+            counterexample_evaluated = True
             if disagreement_found:
                 reasons.append(f"counterexample search found disagreement (germ={disc.germ})")
         else:
@@ -302,6 +313,7 @@ def freeze(
         budget_total=budget_total, budget_spent=budget_spent,
         held_out_pass_fraction=best_frac, mdl_gain=mdl_gain,
         licensed=licensed, refusal_reasons=reasons,
+        counterexample_evaluated=counterexample_evaluated,
     )
     event = FreezeEvent(
         certificate=cert, node_id=node_id,

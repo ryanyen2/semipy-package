@@ -113,3 +113,27 @@ def test_priority_prior_validation_beats_equivalence_ok():
         prior_validation_failure_kind="identity_return",
     )
     assert r.decision == Decision.ADAPT
+
+
+def test_decide_does_not_propagate_a_raise_from_the_eager_donor_search():
+    # decide_route is a pure function of resolved signals, so RoutingPolicy.decide
+    # computes the donor/sketch signals eagerly. A raise in one of those searches
+    # must not crash a resolution that never consumes it -- here a slot with no
+    # commits routes to GENERATE, and the donor search blowing up must degrade to
+    # "no donor" rather than propagate (the pre-Phase-6 lazy cascade never touched
+    # the donor search on this path at all).
+    from types import SimpleNamespace
+
+    from semipy.history.version_control import Slot
+    from semipy.routing import RoutingPolicy
+
+    class _RaisingPortal:
+        @property
+        def slots(self):
+            raise RuntimeError("portal read blew up")
+
+    slot = Slot(slot_id="s0", call_site_info={}, function_name_base="f")  # no commits, not locked
+    slot_spec = SimpleNamespace(slot_id="s0", spec_hash="h", spec_equivalence_key="k")
+
+    result = RoutingPolicy(_RaisingPortal()).decide(slot_spec, slot)
+    assert result.decision == Decision.GENERATE

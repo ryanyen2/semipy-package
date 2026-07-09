@@ -184,6 +184,8 @@ export interface FreezeCertificateJson {
   mdl_gain: number;
   licensed: boolean;
   refusal_reasons: string[];
+  /** Whether the §3.1 counterexample search actually ran (false when the committee collapsed to one candidate). Absent on portals predating the flag. */
+  counterexample_evaluated?: boolean;
 }
 
 /** kernel.operators.FreezeEvent: one freeze attempt, licensed or refused. */

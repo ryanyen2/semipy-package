@@ -51,6 +51,11 @@ def _is_allowed_value(node: ast.expr) -> bool:
     if isinstance(node, ast.Name):
         return True
     if isinstance(node, ast.Attribute):
+        # Reject dunder attributes: `x.__class__.__mro__`, `x.__globals__` etc.
+        # are the standard route from a bare value to object internals, which the
+        # grammar's "no attribute side effects, no internals" promise forbids.
+        if node.attr.startswith("__"):
+            return False
         return _is_allowed_value(node.value)
     if isinstance(node, ast.Subscript):
         return _is_allowed_value(node.value) and isinstance(node.slice, ast.Constant)
