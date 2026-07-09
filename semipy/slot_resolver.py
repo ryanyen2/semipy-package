@@ -1390,10 +1390,25 @@ def _execute_interpreted_slot(
     if n >= promote_after and n >= int(adv.get("interpreted_next_attempt", promote_after)):
         adv["interpreted_attempts"] = int(adv.get("interpreted_attempts", 0)) + 1
         pairs = [(e["args"], e["output"]) for e in examples]
+        # Derive the freeze threshold ε* from the cost model (§3.1) rather than
+        # the static default, so the certificate's ε is an auditable function of
+        # three costs. A misconfigured (nonpositive) cost falls back to the
+        # static 0.05 instead of crashing slot execution.
+        from semipy.kernel.policy import freeze_break_even
+
+        try:
+            epsilon = freeze_break_even(
+                getattr(config, "freeze_cost_molten", 1.0),
+                getattr(config, "freeze_cost_error", 20.0),
+                getattr(config, "freeze_gamma_e", 1.0),
+            )
+        except ValueError:
+            epsilon = 0.05
         src, freeze_event = freeze(
             instruction=slot_spec.spec_text, free_variables=slot_spec.free_variables,
             examples=pairs, expected_type=slot_spec.expected_type,
             output_names=output_names, labels=labels,
+            epsilon=epsilon,
             timeout=getattr(config, "gist_timeout", 30),
             e2b_api_key=getattr(config, "e2b_api_key", None),
             node_id=slot_spec.slot_id,

@@ -115,6 +115,16 @@ class SemiConfig:
     #: giving up on it. Off by default: unlike melt, this changes what happens to a
     #: case that would otherwise be quarantined, not just how the candidate is produced.
     branch_on_quarantine: bool = False
+    #: Freeze cost model (frontier-kernel §3.1): the freeze threshold ε* is derived
+    #: from these three auditable costs as ε* = c_m / (γ_e · c_e), not tuned directly.
+    #: c_m = per-call cost of staying molten/interpreted; c_e = one-time cost of a
+    #: wrong commitment surfacing later; γ_e = fraction of disagreement inputs that
+    #: surface as failures. The defaults give ε* = 1/(1·20) = 0.05, matching the
+    #: previous hardcoded threshold; a wrong cost input shifts *when* a slot freezes,
+    #: never *whether* monotone safety holds (§7).
+    freeze_cost_molten: float = 1.0
+    freeze_cost_error: float = 20.0
+    freeze_gamma_e: float = 1.0
 
     # --- Effects subsystem (reified real-world effects: DB/file/data/API) ---
     #: Master switch. When on, effectful slots (whose generated function declares an
