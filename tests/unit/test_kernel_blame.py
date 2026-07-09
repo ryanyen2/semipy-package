@@ -102,6 +102,28 @@ def test_blame_falls_back_when_no_guard_matches():
     assert "no guard matched" in result.reason
 
 
+def test_blame_never_executes_arbitrary_code_from_a_branch_guard():
+    # A Guard.predicate_source is captured verbatim from generated code (ast.unparse
+    # of an `if` test) -- LLM-proposed, the same trust tier as guard.py's DSL. Blame
+    # runs in the host process (not the sandbox generated code executes in), so it
+    # must route guards through the closed DSL, never a raw eval with builtins.
+    import os
+
+    os.environ.pop("SEMIPY_BLAME_PWNED", None)
+    leaf = Node(node_id="s.arm", kind=NodeKind.OPAQUE, hardness=Hardness.PLASTIC, artifact="def f(x):\n    return x\n")
+    malicious = "__import__('os').environ.setdefault('SEMIPY_BLAME_PWNED', '1') or True"
+    node = Node(
+        node_id="s", kind=NodeKind.BRANCH, hardness=Hardness.PLASTIC,
+        guards=[Guard(predicate_source=malicious)], children=[leaf],
+    )
+    result = blame(node, free_variables={"x": 1}, expected_output=1)
+    # The guard is not in the closed grammar -> it never matches -> the side
+    # effect never runs, and blame safely falls back rather than dispatching.
+    assert os.environ.get("SEMIPY_BLAME_PWNED") is None
+    assert result.node_id == "s"
+    assert "no guard matched" in result.reason
+
+
 def test_locality_metric_is_small_for_a_deep_blame_and_one_for_the_root():
     src = (
         "def f(x):\n"

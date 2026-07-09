@@ -91,14 +91,20 @@ def _resolve_iterable(node: Node, free_variables: dict[str, Any]) -> tuple[bool,
 
 
 def _matched_arm(node: Node, free_variables: dict[str, Any]) -> Optional[Node]:
+    # A guard's predicate_source is captured verbatim from generated code
+    # (ast.unparse of an `if` test) -- LLM-proposed, and blame runs in the host
+    # process, not the sandbox generated code executes in. Route it through the
+    # closed guard DSL (kernel.guard) rather than a raw eval: a predicate outside
+    # the grammar does not compile and simply does not match this arm, so blame
+    # descends only through guards it can safely evaluate.
+    from semipy.kernel.guard import compile_guard
+
     for guard, child in zip(node.guards, node.children):
         if guard.is_fallback:
             return child
-        try:
-            if eval(compile(guard.predicate_source, "<guard>", "eval"), {}, dict(free_variables)):  # noqa: S307
-                return child
-        except Exception:
-            continue
+        compiled = compile_guard(guard.predicate_source)
+        if compiled is not None and compiled.evaluate(free_variables):
+            return child
     return None
 
 

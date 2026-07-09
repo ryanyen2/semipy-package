@@ -80,3 +80,14 @@ def test_dispatch_returns_none_when_no_guard_matches():
     guards = [compile_guard("x < 0"), compile_guard("x == 0")]
     assert dispatch(guards, {"x": 5}) is None
     assert dispatch([], {"x": 5}) is None
+
+
+def test_rejects_dunder_attribute_access_that_reaches_object_internals():
+    # A guard's source is LLM-proposed; the module promises "no attribute side
+    # effects, no internals". Dunder attribute chains are the standard escape to
+    # __class__/__globals__/__subclasses__, so they must be rejected outright.
+    assert compile_guard("x.__class__") is None
+    assert compile_guard("x.__class__.__mro__[0]") is None
+    assert compile_guard("x.__dict__") is None
+    # ...while ordinary record-field access still compiles.
+    assert compile_guard("msg.kind == 'error'") is not None
