@@ -1,0 +1,184 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1520 480" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="7" markerHeight="7" refX="5.5" refY="3.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3.5 L0,7 Z" fill="#64748b"/>
+    </marker>
+    <marker id="arrowok" markerWidth="7" markerHeight="7" refX="5.5" refY="3.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3.5 L0,7 Z" fill="#15803d"/>
+    </marker>
+    <marker id="arrowbad" markerWidth="7" markerHeight="7" refX="5.5" refY="3.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3.5 L0,7 Z" fill="#b91c1c"/>
+    </marker>
+    <marker id="arrowf" markerWidth="7" markerHeight="7" refX="5.5" refY="3.5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3.5 L0,7 Z" fill="#cbd5e1"/>
+    </marker>
+    <style>
+      .code { font-family: 'Menlo','Consolas','DejaVu Sans Mono',monospace; font-size: 12px; fill: #1f2430; }
+      .kw { fill: #1d4ed8; }
+      .spec { fill: #0f766e; }
+      .file { font-size: 10.5px; fill: #94a3b8; }
+      .note { font-size: 12px; fill: #64748b; }
+      .lbl { font-size: 13px; fill: #334155; }
+      .lblb { font-size: 13.5px; fill: #334155; font-weight: 600; }
+      .ok { fill: #15803d; }
+      .bad { fill: #b91c1c; }
+      .warn { fill: #b45309; }
+      .ttl { font-size: 15.5px; fill: #0f172a; font-weight: 700; }
+      .stage { font-size: 12.5px; fill: #ffffff; font-weight: 700; }
+      .arr { stroke: #94a3b8; stroke-width: 1.4; fill: none; marker-end: url(#arrow); }
+      .arrok { stroke: #15803d; stroke-width: 1.5; fill: none; marker-end: url(#arrowok); }
+      .arrbad { stroke: #b91c1c; stroke-width: 1.5; fill: none; marker-end: url(#arrowbad); }
+      .flow { stroke: #cbd5e1; stroke-width: 1.4; fill: none; marker-end: url(#arrowf); }
+      .rule { stroke: #e2e8f0; stroke-width: 1; }
+      .node { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 1.2; }
+    </style>
+  </defs>
+
+  <rect width="1520" height="480" fill="#ffffff"/>
+
+  <!-- ===== structural guides: turn four panels into one field ===== -->
+  <!-- vertical separator: main lineage/regime column (left)  |  step-4 column (right) -->
+  <line class="rule" x1="1012" y1="46" x2="1012" y2="462"/>
+  <!-- horizontal divider in the main column: lineage (top) | commit regimes (bottom) -->
+  <line class="rule" x1="24" y1="266" x2="1000" y2="266"/>
+
+  <!-- ===== stage anchors (numbered) ===== -->
+  <!-- 1 -->
+  <circle cx="40" cy="40" r="11" fill="#334155"/>
+  <text class="stage" x="40" y="44.5" text-anchor="middle">1</text>
+  <text class="ttl" x="58" y="45">Match by meaning</text>
+  <!-- 2 -->
+  <circle cx="372" cy="40" r="11" fill="#334155"/>
+  <text class="stage" x="372" y="44.5" text-anchor="middle">2</text>
+  <text class="ttl" x="390" y="45">Verify before reuse</text>
+  <!-- 3 -->
+  <circle cx="40" cy="300" r="11" fill="#334155"/>
+  <text class="stage" x="40" y="304.5" text-anchor="middle">3</text>
+  <text class="ttl" x="58" y="305">Two ways to commit</text>
+  <!-- 4 -->
+  <circle cx="1034" cy="40" r="11" fill="#334155"/>
+  <text class="stage" x="1034" y="44.5" text-anchor="middle">4</text>
+  <text class="ttl" x="1052" y="45">Explain and contain effects</text>
+
+  <!-- ============ STAGE 1: two call sites -> one commit, matched by meaning ============ -->
+  <!-- ingest call site -->
+  <text class="file" x="24" y="84">ingest.py</text>
+  <text class="code" x="24" y="101"><tspan class="kw">def</tspan> ingest():</text>
+  <text class="code spec" x="24" y="118">#&gt; map each channel to a role</text>
+  <!-- reprocess call site (same wording, different site) -->
+  <text class="file" x="24" y="170">reprocess.py</text>
+  <text class="code" x="24" y="187"><tspan class="kw">def</tspan> reprocess():</text>
+  <text class="code spec" x="24" y="204">#&gt; map each channel to a role</text>
+
+  <!-- converge by meaning into the first commit on the spine -->
+  <path class="arr" d="M256,111 C 296,120 300,140 312,148"/>
+  <path class="arr" d="M256,197 C 296,188 300,160 312,152"/>
+
+  <!-- first commit node v1 (indigo = active version) -->
+  <circle cx="322" cy="150" r="7" fill="#3730a3"/>
+  <text class="lblb" x="322" y="132" text-anchor="middle" fill="#3730a3">v1 &#183; Sea-Bird</text>
+  <text class="note" x="322" y="171" text-anchor="middle">one cached function</text>
+
+  <text class="note" x="24" y="246">matched by wording, args, and type &#8212; not by file or line</text>
+
+  <!-- ============ STAGE 2: verify each real call; branch on failure, keep the old version ============ -->
+  <!-- the spine: v1's lineage runs forward in time, left to right -->
+  <path class="arr" d="M330,150 L968,150"/>
+
+  <!-- second Sea-Bird cast: reused function verifies against real samples -->
+  <g fill="#334155">
+    <circle cx="420" cy="94" r="2.4"/><circle cx="432" cy="94" r="2.4"/>
+    <circle cx="454" cy="94" r="2.4"/><circle cx="466" cy="94" r="2.4"/>
+    <circle cx="488" cy="94" r="2.4"/><circle cx="500" cy="94" r="2.4"/>
+  </g>
+  <text class="lblb" x="460" y="118" text-anchor="middle">Sea-Bird cast #2</text>
+  <circle cx="460" cy="150" r="9" fill="#15803d"/>
+  <text x="460" y="154.5" text-anchor="middle" font-size="12" fill="#ffffff" font-weight="700">&#10003;</text>
+  <text x="460" y="182" text-anchor="middle" font-size="12" fill="#15803d">verify holds &#183; reuse v1</text>
+
+  <!-- shallow Castaway cast: reused v1 fails its runtime check -->
+  <g fill="#334155">
+    <circle cx="590" cy="94" r="2.4"/><circle cx="606" cy="94" r="2.4"/><circle cx="622" cy="94" r="2.4"/>
+    <circle cx="638" cy="94" r="2.4"/><circle cx="654" cy="94" r="2.4"/><circle cx="670" cy="94" r="2.4"/>
+  </g>
+  <text class="lblb" x="630" y="118" text-anchor="middle">Castaway cast</text>
+  <circle cx="630" cy="150" r="9" fill="#b91c1c"/>
+  <text x="630" y="154.5" text-anchor="middle" font-size="12" fill="#ffffff" font-weight="700">&#10007;</text>
+
+  <!-- failure opens a new version, adapted from v1 -->
+  <path class="arr" d="M632,160 C 656,186 686,202 704,207"/>
+  <text class="note" x="648" y="188">adapt</text>
+  <circle cx="716" cy="212" r="7" fill="#3730a3"/>
+  <text class="lblb" x="716" y="232" text-anchor="middle" fill="#3730a3">v2 &#183; Castaway</text>
+  <text class="note" x="716" y="250" text-anchor="middle">built from v1</text>
+
+  <!-- v1 is never deleted: it stays a live head on its own branch -->
+  <circle cx="880" cy="150" r="6" fill="#ffffff" stroke="#3730a3" stroke-width="2"/>
+  <text class="lblb" x="880" y="136" text-anchor="middle" fill="#3730a3">v1 kept</text>
+  <text class="note" x="880" y="172" text-anchor="middle">still runs for Sea-Bird casts</text>
+
+  <!-- ============ STAGE 3: over its life, a request settles into one of two regimes ============ -->
+  <!-- interpreted regime: a model answers every call, forever -->
+  <rect x="56" y="340" width="140" height="26" rx="6" class="node"/>
+  <text class="lbl" x="126" y="357" text-anchor="middle">QC note</text>
+  <path d="M204,353 L286,353" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="5,3" fill="none" marker-end="url(#arrow)"/>
+  <rect x="290" y="340" width="62" height="26" rx="6" fill="#fffbeb" stroke="#f59e0b" stroke-width="1.2"/>
+  <text x="321" y="357" text-anchor="middle" font-size="12" fill="#b45309">model</text>
+  <path d="M348,341 C 366,324 300,320 302,336" stroke="#94a3b8" stroke-width="1.2" fill="none" marker-end="url(#arrow)"/>
+  <text class="note" x="321" y="330" text-anchor="middle" font-size="10.5">every call</text>
+  <text x="372" y="349" font-size="13" font-weight="600" fill="#b45309">interpreted</text>
+  <text class="note" x="372" y="365">no held-out check ever passes</text>
+
+  <!-- compiled regime: a held-out check passes, then it is ordinary code -->
+  <rect x="56" y="404" width="140" height="26" rx="6" class="node"/>
+  <text class="lbl" x="126" y="421" text-anchor="middle">spike test</text>
+  <g>
+    <circle cx="216" cy="417" r="4" fill="#334155"/><circle cx="234" cy="417" r="4" fill="#334155"/>
+    <circle cx="252" cy="417" r="4" fill="#334155"/><circle cx="270" cy="417" r="4" fill="#ffffff" stroke="#334155"/>
+    <circle cx="288" cy="417" r="4" fill="#ffffff" stroke="#334155"/>
+  </g>
+  <text class="note" x="252" y="440" text-anchor="middle" font-size="10.5">fit / held out</text>
+  <circle cx="322" cy="417" r="9" fill="#15803d"/>
+  <text x="322" y="421.5" text-anchor="middle" font-size="12" fill="#ffffff" font-weight="700">&#10003;</text>
+  <path d="M336,417 L426,417" stroke="#15803d" stroke-width="1.5" fill="none" marker-end="url(#arrowok)"/>
+  <rect x="430" y="404" width="78" height="26" rx="6" fill="#ecfdf5" stroke="#15803d" stroke-width="1.2"/>
+  <text x="469" y="421" text-anchor="middle" font-size="12.5" font-weight="600" fill="#15803d">compiled</text>
+  <text class="note" x="524" y="413" fill="#15803d">held-out examples reproduce</text>
+  <text class="note" x="524" y="429">no model call once it compiles</text>
+
+  <text class="note" x="58" y="458">the same held-out check decides which regime a request is in</text>
+
+  <!-- ============ STAGE 4a: an editable note steers the next version ============ -->
+  <!-- mirror the main column's divider so the right column reads as one field too -->
+  <line class="rule" x1="1024" y1="266" x2="1490" y2="266"/>
+
+  <text class="lblb" x="1034" y="88">reasoning note, kept next to the request</text>
+  <rect x="1034" y="98" width="444" height="62" rx="7" class="node"/>
+  <text class="code" x="1048" y="122" fill="#94a3b8" text-decoration="line-through">#&lt; spike vs a fixed neighbour cutoff</text>
+  <text class="code ok" x="1048" y="144">#&lt; depth-dependent QARTOD thresholds</text>
+  <text x="1456" y="120" font-size="17" fill="#b45309">&#9998;</text>
+  <text class="note" x="1034" y="182">Nadia corrects the note; the next version must follow it</text>
+
+  <!-- the correction feeds back into the version semipy writes next (v2) -->
+  <path class="flow" d="M1030,150 C 950,205 800,210 728,214"/>
+  <text class="note" x="884" y="197" text-anchor="middle">steers the next version</text>
+
+  <!-- ============ STAGE 4b: an outside effect is described, then checked before it runs ============ -->
+  <text class="lblb" x="1034" y="308">an outside effect is described, not run &#8212; its reach is checked first</text>
+
+  <!-- refused: a whole table is too broad -->
+  <text class="code" x="1034" y="352">flag_all(station=18)</text>
+  <path class="arrbad" d="M1170,348 L1224,348"/>
+  <circle cx="1238" cy="348" r="9" fill="#b91c1c"/>
+  <text x="1238" y="352.5" text-anchor="middle" font-size="12" fill="#ffffff" font-weight="700">&#10007;</text>
+  <text class="bad" x="1262" y="344" font-size="12.5">matches every cast at the station</text>
+  <text class="bad" x="1262" y="360" font-size="12.5" font-weight="600">refused before the DB sees it</text>
+
+  <!-- allowed: one row is reversible and bounded -->
+  <text class="code" x="1034" y="410">flag(profile_id=..)</text>
+  <path class="arrok" d="M1170,406 L1224,406"/>
+  <circle cx="1238" cy="406" r="9" fill="#15803d"/>
+  <text x="1238" y="410.5" text-anchor="middle" font-size="12" fill="#ffffff" font-weight="700">&#10003;</text>
+  <text class="ok" x="1262" y="402" font-size="12.5">matches one row &#183; reach &#8804; 1</text>
+  <text class="ok" x="1262" y="418" font-size="12.5" font-weight="600">allowed, and reversible after</text>
+</svg>
