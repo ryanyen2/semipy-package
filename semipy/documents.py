@@ -7,12 +7,40 @@ liteparse and/or LlamaCloud; plain text paths are read as UTF-8.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import os
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
 Backend = Literal["auto", "liteparse", "llama_cloud"]
 LlamaTier = Literal["fast", "cost_effective", "agentic", "agentic_plus"]
+
+
+@dataclass
+class ExternalProvenance:
+    """Locator + snapshot fingerprint + profile for an external input (R6):
+    file, URL, API payload, or DB schema. A ``ContractCase`` built from such an
+    input attaches these onto its ``source_locator`` / ``snapshot_fingerprint`` /
+    ``source_profile`` fields, so staleness is later decidable (D3)."""
+
+    locator: str
+    snapshot_fingerprint: str
+    profile: dict[str, Any] = field(default_factory=dict)
+
+
+def _snapshot_fingerprint(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()[:16]
+
+
+def capture_external_provenance(path: str | Path, text: str) -> ExternalProvenance:
+    """Provenance triple for a file already loaded to *text* (R6)."""
+    p = Path(path).expanduser().resolve()
+    return ExternalProvenance(
+        locator=str(p),
+        snapshot_fingerprint=_snapshot_fingerprint(text),
+        profile={"kind": "file", "suffix": p.suffix.casefold(), "size_chars": len(text)},
+    )
 
 
 def _pdf_via_liteparse(path: Path) -> str:
@@ -137,6 +165,29 @@ def load_document_text(
     if lite_failed is not None:
         raise lite_failed
     return local
+
+
+def load_document_text_with_provenance(
+    path: str | Path,
+    *,
+    backend: Backend = "auto",
+    layout_heavy: bool = False,
+    llama_tier: LlamaTier | None = None,
+    min_chars_before_cloud_fallback: int = 80,
+    llama_timeout: float = 600.0,
+) -> tuple[str, ExternalProvenance]:
+    """Like ``load_document_text``, but also returns the (locator, snapshot
+    fingerprint, profile) triple (R6) a ``ContractCase`` built from this input
+    should carry."""
+    text = load_document_text(
+        path,
+        backend=backend,
+        layout_heavy=layout_heavy,
+        llama_tier=llama_tier,
+        min_chars_before_cloud_fallback=min_chars_before_cloud_fallback,
+        llama_timeout=llama_timeout,
+    )
+    return text, capture_external_provenance(path, text)
 
 
 def _normalize_document_backend(name: str) -> Backend:

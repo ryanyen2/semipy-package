@@ -39,6 +39,7 @@ from semipy.contract.models import (
     assign_holdout_split,
     compute_case_id,
 )
+from semipy.contract.redaction import apply_capture_time_policy
 from semipy.contract.relations import relation_names
 from semipy.contract.runner import _build_contract_gist, _row_for_input, run_contract
 from semipy.store import load_portal, save_portal
@@ -403,6 +404,22 @@ def _apply_supersedes(update: ContractUpdate, contract: SlotContract) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _apply_capture_time_redaction(contract: SlotContract, new_case_ids: set[str]) -> int:
+    """Redact newly-persisted cases and default their ship flag from provenance
+    (R14 / KTD-4) -- run once, at creation, on cases new to *this* call so an
+    already-persisted case's ship flag is never silently re-decided later.
+    Returns how many were auto-quarantined (redaction removed their asserted
+    value)."""
+    quarantined = 0
+    for cid in new_case_ids:
+        case = contract.cases.get(cid)
+        if case is None:
+            continue
+        if apply_capture_time_policy(case, contract).target_lost:
+            quarantined += 1
+    return quarantined
+
+
 def _enforce_cap(contract: SlotContract, cap: int) -> None:
     """Keep the active set bounded: quarantine the oldest active cases beyond ``cap``."""
     active = contract.active()
@@ -437,6 +454,7 @@ def maintain_contract(
         if slot is None:
             return
         contract = get_contract(slot)
+        existing_case_ids = set(contract.cases.keys())
 
         rows = _candidate_rows(slot, slot_spec, runtime_values)
         recs = _capture(new_source, slot_spec, rows)
@@ -478,11 +496,14 @@ def maintain_contract(
             except Exception:
                 pass
 
+        new_case_ids = set(contract.cases.keys()) - existing_case_ids
+        n_quarantined = _apply_capture_time_redaction(contract, new_case_ids)
+
         _enforce_cap(contract, int(getattr(cfg, "contract_max_cases", 25)))
         save_contract(slot, contract)
         save_portal(cache_dir, portal)
 
-        if cfg.verbose and (n_added or n_superseded):
+        if cfg.verbose and (n_added or n_superseded or n_quarantined):
             from semipy.agents.console_io import print_pipeline_log
             from semipy.types import SemiCallSite
 
@@ -499,6 +520,12 @@ def maintain_contract(
                 print_pipeline_log(
                     site, "contract",
                     f"Superseded {n_superseded} prior example(s) (deliberate change).",
+                )
+            if n_quarantined:
+                print_pipeline_log(
+                    site, "contract",
+                    f"Auto-quarantined {n_quarantined} case(s): capture-time redaction "
+                    "removed the asserted value.",
                 )
     except Exception as ex:
         if get_config().verbose:

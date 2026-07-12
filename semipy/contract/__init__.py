@@ -39,6 +39,14 @@ from semipy.contract.maintainer import (
     SupersedeProposal,
     maintain_contract,
 )
+from semipy.contract.redaction import (
+    EXTERNAL_PROVENANCE,
+    RedactionResult,
+    apply_capture_time_policy,
+    default_ship_flag,
+    redact_case,
+    redact_value,
+)
 
 __all__ = [
     "INVARIANT_NAMES",
@@ -68,4 +76,10 @@ __all__ = [
     "ProposedCase",
     "SupersedeProposal",
     "maintain_contract",
+    "EXTERNAL_PROVENANCE",
+    "RedactionResult",
+    "apply_capture_time_policy",
+    "default_ship_flag",
+    "redact_case",
+    "redact_value",
 ]
