@@ -731,6 +731,41 @@ def cmd_diagnostics(cache_dir: Path) -> None:
     sys.stdout.write("\n")
 
 
+def cmd_ingest(portal_path: Path, bundle_path: Path, as_json: bool) -> None:
+    """``semipy ingest``: file a consumer repro bundle as a quarantined
+    candidate case (R18). Never activates the case; adjudicate it with the
+    existing ``dispute``/``assert-decision``/``pick-decision`` commands."""
+    from semipy.distribution.repro import (
+        IngestError,
+        ReproBundleSchemaError,
+        ingest_bundle,
+        read_bundle,
+    )
+
+    portal, cache_dir = _load_portal_explicit(portal_path)
+    try:
+        bundle = read_bundle(bundle_path)
+    except (ReproBundleSchemaError, OSError, ValueError) as exc:
+        raise SystemExit(f"semipy ingest: {exc}")
+    try:
+        result = ingest_bundle(portal, bundle)
+    except IngestError as exc:
+        raise SystemExit(f"semipy ingest: {exc}")
+    save_portal(cache_dir, portal)
+    if as_json:
+        json.dump(
+            {"case_id": result.case_id, "slot_id": result.slot_id, "created": result.created},
+            sys.stdout,
+            indent=2,
+        )
+        sys.stdout.write("\n")
+        return
+    sys.stdout.write(
+        f"semipy ingest: filed quarantined case {result.case_id} on slot "
+        f"{result.slot_id[:8]} (consumer-report; awaiting adjudication).\n"
+    )
+
+
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="semipy")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -848,6 +883,14 @@ def main(argv: list[str] | None = None) -> None:
     pw.add_argument("--input", dest="input_json", default=None, help="JSON object of runtime values to test scope membership / find the nearest case")
     pw.add_argument("--json", action="store_true")
 
+    pig = sub.add_parser(
+        "ingest",
+        help="File a consumer repro bundle (ScopeViolation/deopt/dispute) as a quarantined candidate case",
+    )
+    pig.add_argument("--portal", type=Path, required=True)
+    pig.add_argument("--bundle", type=Path, required=True, dest="bundle_path")
+    pig.add_argument("--json", action="store_true")
+
     args = p.parse_args(argv)
 
     if args.cmd == "regenerate":
@@ -894,6 +937,8 @@ def main(argv: list[str] | None = None) -> None:
             Path(args.portal), Path(args.output),
             Path(args.previous) if args.previous else None, args.release_type,
         )
+    elif args.cmd == "ingest":
+        cmd_ingest(Path(args.portal), Path(args.bundle_path), args.json)
     else:
         raise SystemExit(2)
 
