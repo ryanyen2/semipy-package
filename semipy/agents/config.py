@@ -132,6 +132,12 @@ class SemiConfig:
     freeze_cost_error: float = 20.0
     freeze_gamma_e: float = 1.0
 
+    # --- Floor gate (U9, R16): shipped-floor replay before a consumer-site commit ---
+    #: Max regeneration retries to satisfy a violated shipped floor case before the
+    #: gate raises. Unlike contract_gate/effect_gate, there is no on/off switch here:
+    #: the floor gate always runs when a baseline is installed for the call site.
+    floor_gate_max_retries: int = 1
+
     # --- Effects subsystem (reified real-world effects: DB/file/data/API) ---
     #: Master switch. When on, effectful slots (whose generated function declares an
     #: ``fx`` parameter) emit a reified EffectScript via ``fx`` and the generation

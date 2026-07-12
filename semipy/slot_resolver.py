@@ -15,6 +15,7 @@ from semipy.agents.config import get_config
 from semipy.agents.console_io import print_pipeline_log
 from semipy.agents.compiler import _compile_source
 from semipy.agents.validator import verify_runtime_execution
+from semipy.distribution.floor_gate import adapt_from_shipped_floor, installed_floor_for
 from semipy.distribution.runtime import FALL_THROUGH, try_resolve as _try_package_data_resolve
 from semipy.history.version_control import (
     Slot,
@@ -1351,6 +1352,89 @@ def _run_generate_effect_gate(
     return entry
 
 
+def _run_floor_gate(
+    slot: Any,
+    slot_spec: SlotSpec,
+    entry: Any,
+    generation_spec: Any,
+    resolution: Any,
+    runtime_values: dict[str, Any],
+    config: Any,
+    call_site: Any,
+) -> Any:
+    """U9/R16: no consumer-site candidate commits without replay-passing the
+    shipped floor. A no-op when no baseline is installed for this slot's call
+    site (an ordinary developer slot). Otherwise every shipped ``ship=True``
+    case is replayed against the candidate; on violation, append the reason to
+    the failure context and regenerate up to ``floor_gate_max_retries`` -- the
+    same control flow as the contract/effect gates. Unlike those two, this gate
+    is not behind a feature flag (KTD-1: load-bearing safety infrastructure,
+    not optional) and never quarantines: on budget exhaustion it raises
+    ``FloorViolation`` naming the offending case, because the shipped floor is
+    immutable at the consumer site (pitfall-preservation). Floors compose with
+    (never replace) the local contract gate -- both run independently on the
+    same candidate.
+    """
+    try:
+        from semipy.distribution.floor_gate import FloorViolation, run_floor_contract
+    except Exception:
+        return entry
+
+    floor = installed_floor_for(slot)
+    if floor is None or not floor.cases:
+        return entry
+
+    max_retries = int(getattr(config, "floor_gate_max_retries", 1))
+    scaffold = slot_spec.enclosing_function_source
+
+    def _assess(src: str) -> Any:
+        return run_floor_contract(
+            implementation_source=src,
+            slot_spec=slot_spec,
+            floor_cases=floor.cases,
+            scaffold_source=scaffold,
+        )
+
+    cr = _assess(entry.generated_source)
+    attempt = 0
+    n_replays = 1
+    while attempt < max_retries and not cr.passed:
+        attempt += 1
+        extra = cr.first_failure_message()
+        if not extra:
+            break
+        base = generation_spec.verify_failure_context or ""
+        generation_spec.verify_failure_context = f"{base}\n{extra}".strip()
+        if config.verbose:
+            print_pipeline_log(
+                call_site,
+                "floor_gate",
+                f"Candidate regressed a shipped floor case; regenerating ({attempt}/{max_retries}). {extra[:120]}",
+            )
+        try:
+            entry = SemiAgent().generate(generation_spec)
+        except Exception:
+            break
+        cr = _assess(entry.generated_source)
+        n_replays += 1
+
+    if config.verbose:
+        print_pipeline_log(
+            call_site,
+            "floor_gate",
+            f"Replayed {len(floor.cases)} shipped floor case(s) x {n_replays} attempt(s).",
+        )
+
+    if not cr.passed:
+        failure = cr.failures[0]
+        raise FloorViolation(
+            slot_id=slot_spec.slot_id,
+            case_id=failure.case_id,
+            message=failure.message,
+        )
+    return entry
+
+
 def _run_reuse_effect_gate(
     slot: Any,
     slot_spec: SlotSpec,
@@ -2383,6 +2467,11 @@ def _execute_slot_locked(
                 semantic_result=_post_reuse_semantic,
             )
 
+    # U9/R16: adapt from the shipped floor instead of generating from scratch
+    # while a baseline exists for this call site (never touches a slot that
+    # already has a local parent -- the local overlay wins, per U8).
+    _floor_baseline_version = adapt_from_shipped_floor(slot, resolution)
+
     # ADAPT / GENERATE
     generation_spec = build_generation_spec(
         slot_spec=slot_spec,
@@ -2422,6 +2511,15 @@ def _execute_slot_locked(
         config, _call_site_from_slot(slot_spec),
     )
 
+    # Floor gate: replay the shipped floor (when a baseline is installed for
+    # this call site) against the candidate before it can commit. Composes
+    # with the contract gate above rather than replacing it; raises (never
+    # quarantines) on budget exhaustion.
+    entry = _run_floor_gate(
+        slot, slot_spec, entry, generation_spec, resolution, runtime_values,
+        config, _call_site_from_slot(slot_spec),
+    )
+
     # History identity fields: the new model keys by spec_hash, but existing Commit schema still
     # requires these fields. Keep them stable per spec.
     template_fingerprint = slot_spec.spec_hash
@@ -2448,6 +2546,16 @@ def _execute_slot_locked(
     # profiles, so the reuse fast path checks membership rather than fingerprint
     # equality on the next call.
     _mint_and_store_scope(slot, commit.commit_id)
+
+    # U8/U9: stamp which installed baseline this commit was adapted against,
+    # so a later package upgrade can demote it to needs-revalidation
+    # (distribution.baseline.is_stale_overlay_commit) without deleting it.
+    if _floor_baseline_version is not None:
+        cr_existing = commit.commitment_record or {}
+        cr_new = dict(cr_existing)
+        cr_new["baseline_version"] = _floor_baseline_version
+        slot.commits[commit.commit_id] = replace(commit, commitment_record=cr_new)
+        commit = slot.commits[commit.commit_id]
 
     # Surface the silent fork (F0): persist the DecisionSet on the slot so the #?
     # surface + steering can render it. Empty/agreeing draws attach nothing.
