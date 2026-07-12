@@ -102,6 +102,9 @@ class SemiConfig:
     contract_block_regressions: bool = True
     #: Cap on active cases executed per gate (latency / portal size).
     contract_max_cases: int = 25
+    #: How long a case may sit "stale" (its external snapshot no longer matches)
+    #: before revalidation retires it (U12; D3). Default 30 days.
+    contract_stale_case_retire_age_s: float = 2_592_000.0
     #: Selectivity cap: max new golden-master example cases the maintainer pins per commit.
     contract_max_new_examples: int = 3
     #: Run the LLM maintainer pass (proposes examples/metamorphic relations, supersedes

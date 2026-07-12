@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from semipy.contract.access import save_contract
 from semipy.contract.models import ContractCase, SlotContract
-from semipy.distribution.build import build_package_data
+from semipy.distribution.build import SemverViolation, build_package_data
 from semipy.history.version_control import Commit, Portal, Slot
 from semipy.kernel.guard import ScopeConjunct, ScopePredicate
 
@@ -208,13 +210,12 @@ def test_superseded_case_vs_previous_baseline_classifies_major_and_warns_on_patc
         "c2": ContractCase(case_id="c2", kind="invariant", invariant="non_empty", status="active", ship=True),
     })
     new_dir = tmp_path / "new"
-    result = build_package_data(
-        _portal(slot), new_dir, previous_package_dir=old_dir, release_type="patch",
-    )
-
-    entry = result.manifest.entries["eq-key-1"]
-    assert entry.classification == "major"
-    assert any("major" in w.message and "patch" in w.message for w in result.warnings)
+    # U12 (KTD-8): a patch/major release-type mismatch is a hard build failure,
+    # not just a warning -- see tests/unit/test_case_rot.py for the full scenario.
+    with pytest.raises(SemverViolation, match="major"):
+        build_package_data(
+            _portal(slot), new_dir, previous_package_dir=old_dir, release_type="patch",
+        )
 
 
 def test_no_previous_baseline_leaves_classification_none(tmp_path):

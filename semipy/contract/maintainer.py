@@ -23,6 +23,9 @@ the audit trail ("never forget").
 from __future__ import annotations
 
 import sys
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel
@@ -42,6 +45,8 @@ from semipy.contract.models import (
 from semipy.contract.redaction import apply_capture_time_policy
 from semipy.contract.relations import relation_names
 from semipy.contract.runner import _build_contract_gist, _row_for_input, run_contract
+from semipy.documents import capture_external_provenance
+from semipy.kernel.operators import FreezeCertificate, FreezeEvent, append_freeze_event, get_freeze_events
 from semipy.store import load_portal, save_portal
 
 # Builtin types whose name survives the subprocess gist and is safe to pin.
@@ -530,3 +535,84 @@ def maintain_contract(
     except Exception as ex:
         if get_config().verbose:
             print(f"[semipy] Contract maintenance failed: {ex}", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
+# Case lifecycle: rot revalidation (U12; KTD-8, D3)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class RevalidationResult:
+    """Outcome of one ``revalidate_slot`` sweep."""
+
+    marked_stale: list[str] = field(default_factory=list)
+    retired: list[str] = field(default_factory=list)
+    certificate_reflagged: bool = False
+
+
+def _current_snapshot_fingerprint(locator: str) -> Optional[str]:
+    """Re-derive an external-source case's snapshot fingerprint from its file
+    on disk today, via the same recipe (``capture_external_provenance``) used
+    at capture time. Returns ``None`` -- not treated as a mismatch -- when the
+    file is unreadable (moved/deleted/permission error), so a transient I/O
+    problem never gets mistaken for a real content change."""
+    try:
+        text = Path(locator).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    return capture_external_provenance(locator, text).snapshot_fingerprint
+
+
+def revalidate_slot(slot: Any, *, max_stale_age_s: float) -> RevalidationResult:
+    """Case lifecycle sweep for one slot (U12; D3): mark active, external-
+    source-derived cases whose snapshot fingerprint has drifted as stale, then
+    retire (quarantine) stale cases that have sat past ``max_stale_age_s``. A
+    case just marked stale by this same sweep is eligible for retirement in
+    the same call once it is old enough.
+
+    If retiring a case demotes the slot's most recent freeze certificate (it
+    was licensed), an unlicensed ``FreezeEvent`` is appended so the
+    certificate is flagged for re-licensing rather than silently trusted.
+
+    Only persists the contract (``save_contract``); the caller saves the
+    portal.
+    """
+    contract = get_contract(slot)
+    result = RevalidationResult()
+
+    for case in contract.active():
+        if not case.source_locator or not case.snapshot_fingerprint:
+            continue  # not an external-source-derived case; nothing to revalidate
+        current_fp = _current_snapshot_fingerprint(case.source_locator)
+        if current_fp is None or current_fp == case.snapshot_fingerprint:
+            continue  # unreadable, or snapshot still matches
+        contract.mark_stale(case.case_id, f"source snapshot changed: {case.source_locator}")
+        result.marked_stale.append(case.case_id)
+
+    now = time.time()
+    for case in contract.stale():
+        if now - case.updated_ts >= max_stale_age_s:
+            contract.quarantine(case.case_id, "retired: stale past max_stale_age_s")
+            result.retired.append(case.case_id)
+
+    if result.retired:
+        events = get_freeze_events(slot)
+        if events and events[-1].certificate.licensed:
+            prior = events[-1].certificate
+            demoted = FreezeCertificate(
+                epsilon=prior.epsilon,
+                delta=prior.delta,
+                gamma=prior.gamma,
+                budget_total=prior.budget_total,
+                budget_spent=prior.budget_spent,
+                held_out_pass_fraction=prior.held_out_pass_fraction,
+                mdl_gain=prior.mdl_gain,
+                licensed=False,
+                refusal_reasons=["case rot: retired case(s) invalidate the prior freeze"],
+            )
+            append_freeze_event(slot, FreezeEvent(certificate=demoted, timestamp=now))
+            result.certificate_reflagged = True
+
+    save_contract(slot, contract)
+    return result

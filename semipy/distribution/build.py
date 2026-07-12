@@ -79,6 +79,11 @@ class BuildResult:
     warnings: list[BuildWarning] = field(default_factory=list)
 
 
+class SemverViolation(Exception):
+    """Raised when a declared ``release_type`` under-states a slot's actual
+    KTD-8 classification (U12: hard-fails what U6 only warned about)."""
+
+
 def _floor_filtered_surface(slot: Slot) -> ContractSurface:
     """R14: only ``ship=True`` active cases (and the relations they imply)
     survive into the shipped contract. Regimes/certificate ship as-is -- they
@@ -140,7 +145,10 @@ def build_package_data(
     classification stays ``"none"`` -- U6 does not invent a value beyond what
     ``diff`` already classifies. With ``release_type`` declared, a classified
     ``major``/``minor`` delta under a ``patch`` (or ``major`` under `minor``)
-    release is recorded as a build warning; U12 owns enforcing it as a gate.
+    release is recorded as a build warning and, per KTD-8, raises
+    ``SemverViolation`` once every slot has been distilled (the manifest is
+    still written first, so ``output_dir`` is always left in a consistent
+    state even when the build is rejected).
     """
     artifacts_dir = output_dir / ARTIFACTS_DIR
     contracts_dir = output_dir / CONTRACTS_DIR
@@ -156,6 +164,7 @@ def build_package_data(
     entries: dict[str, ManifestEntry] = {}
     content_hashes: dict[str, str] = {}
     warnings: list[BuildWarning] = []
+    violations: list[str] = []
 
     for slot in portal.slots.values():
         active = _get_active_commit(slot)
@@ -206,17 +215,19 @@ def build_package_data(
             reasons.append(f"distribution mode changed ({prev_entry.mode} -> {mode})")
 
         if release_type == "patch" and classification in ("major", "minor"):
-            warnings.append(BuildWarning(
-                slot.slot_id,
+            message = (
                 f"declared release type 'patch' but slot {key} classifies as "
-                f"{classification} ({'; '.join(reasons) or 'behavior changed'})",
-            ))
+                f"{classification} ({'; '.join(reasons) or 'behavior changed'})"
+            )
+            warnings.append(BuildWarning(slot.slot_id, message))
+            violations.append(message)
         elif release_type == "minor" and classification == "major":
-            warnings.append(BuildWarning(
-                slot.slot_id,
+            message = (
                 f"declared release type 'minor' but slot {key} classifies as major "
-                f"({'; '.join(reasons) or 'behavior changed'})",
-            ))
+                f"({'; '.join(reasons) or 'behavior changed'})"
+            )
+            warnings.append(BuildWarning(slot.slot_id, message))
+            violations.append(message)
 
         entries[key] = ManifestEntry(
             spec_equivalence_key=key,
@@ -230,4 +241,6 @@ def build_package_data(
 
     manifest = Manifest(baseline_hash=compute_baseline_hash(content_hashes), entries=entries)
     (output_dir / MANIFEST_FILENAME).write_text(manifest_to_json(manifest), encoding="utf-8")
+    if violations:
+        raise SemverViolation("; ".join(violations))
     return BuildResult(manifest=manifest, warnings=warnings)

@@ -468,6 +468,40 @@ def cmd_contract_show(portal_path: Path, slot_id: str, as_json: bool) -> None:
     _render_surface(surface)
 
 
+def cmd_contract_revalidate(portal_path: Path, slot_id: str, as_json: bool) -> None:
+    """``semipy contract revalidate``: run the case-rot sweep (U12) for one
+    slot -- mark drifted external-source cases stale, retire stale cases past
+    the configured age, and persist."""
+    from semipy.agents.config import get_config
+    from semipy.contract.maintainer import revalidate_slot
+
+    portal, cache_dir = _load_portal_explicit(portal_path)
+    slot = portal.slots.get(slot_id)
+    if slot is None:
+        raise SystemExit(f"unknown slot_id {slot_id!r}")
+    cfg = get_config()
+    result = revalidate_slot(slot, max_stale_age_s=cfg.contract_stale_case_retire_age_s)
+    save_portal(cache_dir, portal)
+    if as_json:
+        json.dump(
+            {
+                "marked_stale": result.marked_stale,
+                "retired": result.retired,
+                "certificate_reflagged": result.certificate_reflagged,
+            },
+            sys.stdout,
+            indent=2,
+        )
+        sys.stdout.write("\n")
+        return
+    sys.stdout.write(
+        f"semipy contract revalidate: {len(result.marked_stale)} marked stale, "
+        f"{len(result.retired)} retired"
+        + (", certificate reflagged for re-licensing" if result.certificate_reflagged else "")
+        + f" on slot {slot_id[:8]}.\n"
+    )
+
+
 def cmd_contract_diff(old_path: Path, new_path: Path, as_json: bool) -> None:
     from semipy.contract.surface import ContractSchemaError, diff, surface_from_json
 
@@ -665,12 +699,15 @@ def cmd_build(
     release_type: str | None,
 ) -> None:
     """``semipy build``: distill a portal into consumer package data (U6)."""
-    from semipy.distribution.build import build_package_data
+    from semipy.distribution.build import SemverViolation, build_package_data
 
     portal, _ = _load_portal_explicit(portal_path)
-    result = build_package_data(
-        portal, output_dir, previous_package_dir=previous_dir, release_type=release_type,
-    )
+    try:
+        result = build_package_data(
+            portal, output_dir, previous_package_dir=previous_dir, release_type=release_type,
+        )
+    except SemverViolation as exc:
+        raise SystemExit(f"semipy build: {exc}")
     for w in result.warnings:
         sys.stderr.write(f"warning: slot {w.slot_id}: {w.message}\n")
     sys.stdout.write(
@@ -856,6 +893,13 @@ def main(argv: list[str] | None = None) -> None:
     pcd.add_argument("--old", type=Path, required=True, help="path to the baseline surface JSON")
     pcd.add_argument("--new", type=Path, required=True, help="path to the new surface JSON")
     pcd.add_argument("--json", action="store_true", help="emit JSON")
+    pcr = csub.add_parser(
+        "revalidate",
+        help="Case-rot sweep (U12): mark drifted external-source cases stale, retire stale cases past the age threshold",
+    )
+    pcr.add_argument("--portal", type=Path, required=True)
+    pcr.add_argument("--slot-id", required=True)
+    pcr.add_argument("--json", action="store_true", help="emit JSON")
 
     pbu = sub.add_parser(
         "build",
@@ -928,6 +972,8 @@ def main(argv: list[str] | None = None) -> None:
             cmd_contract_show(Path(args.portal), args.slot_id, args.json)
         elif args.contract_cmd == "diff":
             cmd_contract_diff(Path(args.old), Path(args.new), args.json)
+        elif args.contract_cmd == "revalidate":
+            cmd_contract_revalidate(Path(args.portal), args.slot_id, args.json)
         else:
             raise SystemExit(2)
     elif args.cmd == "why":

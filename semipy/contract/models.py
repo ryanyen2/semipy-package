@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 CaseKind = Literal["example", "invariant", "metamorphic"]
-CaseStatus = Literal["active", "superseded", "quarantined"]
+CaseStatus = Literal["active", "superseded", "quarantined", "stale"]
 
 # Fixed, data-agnostic invariant vocabulary. Mirrors the validator's guard kinds
 # (empty_output / identity_return / type_mismatch) plus two structural extras.
@@ -188,6 +188,9 @@ class SlotContract:
     def quarantined(self) -> list[ContractCase]:
         return [c for c in self.cases.values() if c.status == "quarantined"]
 
+    def stale(self) -> list[ContractCase]:
+        return [c for c in self.cases.values() if c.status == "stale"]
+
     def add(self, case: ContractCase) -> ContractCase:
         """Add or refresh a case by content-addressed id. Returns the stored case."""
         existing = self.cases.get(case.case_id)
@@ -216,6 +219,15 @@ class SlotContract:
         c = self.cases.get(case_id)
         if c is not None:
             c.status = "quarantined"
+            c.supersede_reason = why
+            c.updated_ts = time.time()
+            self.version += 1
+
+    def mark_stale(self, case_id: str, why: str) -> None:
+        """Mark a case stale (its external snapshot no longer matches) with a reason."""
+        c = self.cases.get(case_id)
+        if c is not None:
+            c.status = "stale"
             c.supersede_reason = why
             c.updated_ts = time.time()
             self.version += 1
