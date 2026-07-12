@@ -130,6 +130,19 @@ class ContractCase:
     superseded_by: str = ""            # case_id that replaced this one
     supersede_reason: str = ""         # deliberate behavior-change rationale
 
+    # Distribution provenance (R6 / R14). A case is eligible for the shipped
+    # contract floor only when ``ship`` is True. ``provenance`` is the category
+    # that decides the default ship flag (external-source-derived cases default
+    # to ship=False; synthetic/relation/user cases to True) -- U3 computes both
+    # at ledger-persistence time. The three source_* fields identify an external
+    # input (file/URL/API payload/DB schema) so its staleness is decidable; they
+    # stay empty for synthetic / in-memory cases.
+    ship: bool = False
+    provenance: str = ""               # "" | synthetic | external | user | relation | consumer-report
+    source_locator: str = ""           # external input locator (path / URL / endpoint / schema id)
+    snapshot_fingerprint: str = ""     # fingerprint of the external snapshot at capture time
+    source_profile: dict[str, Any] = field(default_factory=dict)  # profile of the external input
+
     # Evidence-ledger fields (frontier-kernel Phase 0):
     # Which tree node this case pins. "" = whole-slot (today's only granularity);
     # populated with a real per-node id once trace replay materializes node-local

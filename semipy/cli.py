@@ -345,6 +345,95 @@ def cmd_assert_decision(
     )
 
 
+def _render_surface(surface) -> None:
+    from semipy.contract.surface import SCHEMA_VERSION
+
+    out = sys.stdout
+    active = surface.active_cases()
+    n_super = sum(1 for c in surface.cases.values() if c.get("status") == "superseded")
+    n_quar = sum(1 for c in surface.cases.values() if c.get("status") == "quarantined")
+    out.write(f"contract surface  slot {surface.slot_id[:12]}  (schema v{SCHEMA_VERSION})\n")
+    if surface.spec_text:
+        out.write(f"  spec: {surface.spec_text}\n")
+    if surface.expected_type:
+        out.write(f"  type: {surface.expected_type}\n")
+    out.write(f"  scope: {surface.scope_predicate_ref or '(none minted yet)'}\n")
+    if surface.certified and surface.certificate:
+        cert = surface.certificate
+        out.write(
+            f"  CERTIFIED: freeze licensed (epsilon={cert.get('epsilon')}, "
+            f"delta={cert.get('delta')}, held-out={cert.get('held_out_pass_fraction')})\n"
+        )
+    else:
+        out.write(
+            "  UNCERTIFIED: no licensed freeze -- partial contract "
+            "(active cases/relations are checkable; whole-slot output not frozen)\n"
+        )
+        for r in (surface.certificate or {}).get("refusal_reasons", []):
+            out.write(f"    refusal: {r}\n")
+    if surface.regimes:
+        out.write(f"  regimes ({len(surface.regimes)}):\n")
+        for g in surface.regimes:
+            fb = " [fallback]" if g.get("is_fallback") else ""
+            out.write(f"    - {g.get('predicate_source', '')}{fb}\n")
+    if surface.relations:
+        out.write(f"  relations: {', '.join(surface.relations)}\n")
+    out.write(f"  cases: {len(active)} active, {n_super} superseded, {n_quar} quarantined\n")
+    for c in active:
+        label = c.get("invariant") or c.get("relation") or c.get("kind") or "case"
+        ship = "ship" if c.get("ship") else "no-ship"
+        reason = (c.get("reason") or "").replace("\n", " ")
+        if len(reason) > 70:
+            reason = reason[:67] + "..."
+        out.write(f"    - [{label}] {c.get('case_id', '')[:12]} ({ship}) {reason}\n")
+
+
+def cmd_contract_show(portal_path: Path, slot_id: str, as_json: bool) -> None:
+    from semipy.contract.surface import ContractSurface, surface_to_json
+
+    portal, _ = _load_portal_explicit(portal_path)
+    slot = portal.slots.get(slot_id)
+    if slot is None:
+        raise SystemExit(f"unknown slot_id {slot_id!r}")
+    surface = ContractSurface.from_slot(slot)
+    if as_json:
+        sys.stdout.write(surface_to_json(surface))
+        return
+    _render_surface(surface)
+
+
+def cmd_contract_diff(old_path: Path, new_path: Path, as_json: bool) -> None:
+    from semipy.contract.surface import ContractSchemaError, diff, surface_from_json
+
+    try:
+        old = surface_from_json(old_path.read_text(encoding="utf-8"))
+        new = surface_from_json(new_path.read_text(encoding="utf-8"))
+    except ContractSchemaError as exc:
+        raise SystemExit(f"semipy contract diff: {exc}")
+    result = diff(old, new)
+    if as_json:
+        json.dump(
+            {
+                "classification": result.classification,
+                "added_cases": result.added_cases,
+                "superseded_cases": result.superseded_cases,
+                "added_regimes": result.added_regimes,
+                "scope_changed": result.scope_changed,
+                "certificate_invalidated": result.certificate_invalidated,
+                "reasons": result.reasons,
+            },
+            sys.stdout,
+            indent=2,
+        )
+        sys.stdout.write("\n")
+        return
+    sys.stdout.write(f"contract diff: {result.classification}\n")
+    for r in result.reasons:
+        sys.stdout.write(f"  {r}\n")
+    if result.classification == "none":
+        sys.stdout.write("  (no behavioral change)\n")
+
+
 def cmd_diagnostics(cache_dir: Path) -> None:
     path = _diagnostics_path(cache_dir)
     entries = _read_entries(path)
@@ -423,6 +512,17 @@ def main(argv: list[str] | None = None) -> None:
     pad.add_argument("--property", required=True, dest="property_text", help="natural-language property the result must satisfy")
     pad.add_argument("--json", action="store_true", help="emit JSON")
 
+    pcon = sub.add_parser("contract", help="Inspect and diff slot contract surfaces")
+    csub = pcon.add_subparsers(dest="contract_cmd", required=True)
+    pcs = csub.add_parser("show", help="Render a slot's contract surface (certified/uncertified boundary, cases, scope)")
+    pcs.add_argument("--portal", type=Path, required=True)
+    pcs.add_argument("--slot-id", required=True)
+    pcs.add_argument("--json", action="store_true", help="emit the serialized surface JSON")
+    pcd = csub.add_parser("diff", help="Classify the behavioral-semver delta between two surface JSON files")
+    pcd.add_argument("--old", type=Path, required=True, help="path to the baseline surface JSON")
+    pcd.add_argument("--new", type=Path, required=True, help="path to the new surface JSON")
+    pcd.add_argument("--json", action="store_true", help="emit JSON")
+
     args = p.parse_args(argv)
 
     if args.cmd == "regenerate":
@@ -453,6 +553,13 @@ def main(argv: list[str] | None = None) -> None:
         cmd_assert_decision(
             Path(args.portal), args.slot_id, args.decision_id, args.property_text, args.json
         )
+    elif args.cmd == "contract":
+        if args.contract_cmd == "show":
+            cmd_contract_show(Path(args.portal), args.slot_id, args.json)
+        elif args.contract_cmd == "diff":
+            cmd_contract_diff(Path(args.old), Path(args.new), args.json)
+        else:
+            raise SystemExit(2)
     else:
         raise SystemExit(2)
 
