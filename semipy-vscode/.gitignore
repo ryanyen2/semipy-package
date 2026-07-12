@@ -2,4 +2,5 @@ node_modules/
 .test-emit/
 .test-emit-decisions/
 .test-emit-slot-insight/
+.test-emit-contract-card/
 *.vsix

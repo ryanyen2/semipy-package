@@ -173,6 +173,29 @@ export interface BranchJson {
   head: string;
 }
 
+// --- Hardness tree (kernel.tree.Node) -------------------------------------
+// Regime guards (BRANCH nodes) and the slot's current hardness (molten /
+// plastic / frozen). Absent on legacy/unmigrated slots -- treat as a single
+// degenerate node with hardness "plastic" (kernel.tree.degenerate_tree).
+
+export interface KernelGuardJson {
+  predicate_source: string;
+  is_fallback?: boolean;
+  description?: string;
+}
+
+export interface KernelNodeJson {
+  node_id: string;
+  kind: string;
+  hardness: string;
+  input_type?: string;
+  output_type?: string;
+  artifact?: string | null;
+  children?: KernelNodeJson[];
+  guards?: KernelGuardJson[];
+  meta?: Record<string, unknown>;
+}
+
 /** kernel.operators.FreezeCertificate: the recorded license (or refusal) for one freeze attempt. */
 export interface FreezeCertificateJson {
   epsilon: number;
@@ -230,6 +253,8 @@ export interface SlotJson {
   input_observation_samples?: Record<string, string[]>;
   /** Every freeze attempt (licensed or refused); [] on portals predating certified freezing. */
   freeze_events?: FreezeEventJson[];
+  /** The slot's hardness tree (regime guards, per-node hardness); absent on legacy/unmigrated slots. */
+  kernel_tree?: KernelNodeJson;
 }
 
 export interface PortalJson {

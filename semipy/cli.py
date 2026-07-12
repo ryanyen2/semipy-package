@@ -345,6 +345,72 @@ def cmd_assert_decision(
     )
 
 
+def _dispute_decision_set(slot):
+    """Return the slot's decision set and an open decision to assert against,
+    synthesizing a placeholder single-branch decision when the slot has no
+    surfaced fork yet.
+
+    ``dispute`` (U5) has to land through the same ``assert_property`` plumbing
+    ``assert-decision`` uses, but that plumbing hard-requires a pre-existing
+    open ``Decision`` in the slot's decision set. Most disputed slots never
+    surfaced a fork (there's nothing ambiguous about them -- the reporter just
+    thinks the output is wrong), so a real fork rarely exists to assert
+    against. Rather than changing ``assert_property``'s contract, mint a
+    single-branch placeholder decision here when needed; ``assert_property``
+    then records the disputed property as a contract case exactly as it does
+    for a real fork.
+    """
+    from semipy.decisions.model import Branch, Decision, DecisionSet
+    from semipy.decisions.persistence import attach_decision_set, decision_set_for
+
+    dset = decision_set_for(slot) or DecisionSet(slot_id=getattr(slot, "slot_id", "") or "")
+    decision = next((d for d in dset.decisions if d.is_open), None)
+    if decision is None:
+        decision = Decision(
+            germ="dispute", axis_label="disputed behavior", branches=[Branch(fate_label="disputed")]
+        )
+        dset.decisions.append(decision)
+        attach_decision_set(slot, dset)
+    return dset, decision
+
+
+def cmd_dispute(portal_path: Path, slot_id: str, property_text: str, as_json: bool) -> None:
+    from semipy.decisions.resolve import assert_property
+
+    portal, cache_dir = _load_portal_explicit(portal_path)
+    slot = portal.slots.get(slot_id)
+    if slot is None:
+        raise SystemExit(f"unknown slot_id {slot_id!r}")
+    dset, decision = _dispute_decision_set(slot)
+    # No stored candidate can satisfy a fresh dispute (the placeholder decision
+    # has none, and a real fork's alternates were already considered); it
+    # always signals a targeted regeneration, same as an unresolved assert.
+    res = assert_property(
+        slot,
+        dset,
+        decision_id=decision.decision_id,
+        property_text=property_text,
+        satisfies=lambda _cid: False,
+        usage_id=slot_id,
+    )
+    save_portal(cache_dir, portal)
+    if res.commit_id:
+        write_dispatch_module(cache_dir, portal, sketch_library=load_sketch_library(cache_dir))
+    if as_json:
+        json.dump(
+            {"contract_case_id": res.contract_case_id, "regen_needed": res.regen_needed,
+             "commit_id": res.commit_id, "decision_id": decision.decision_id},
+            sys.stdout,
+            indent=2,
+        )
+        sys.stdout.write("\n")
+        return
+    sys.stdout.write(
+        f"semipy dispute: recorded property as case {res.contract_case_id}; "
+        "regenerates against it on next call.\n"
+    )
+
+
 def _render_surface(surface) -> None:
     from semipy.contract.surface import SCHEMA_VERSION
 
@@ -696,6 +762,15 @@ def main(argv: list[str] | None = None) -> None:
     pad.add_argument("--property", required=True, dest="property_text", help="natural-language property the result must satisfy")
     pad.add_argument("--json", action="store_true", help="emit JSON")
 
+    pdi = sub.add_parser(
+        "dispute",
+        help="Record a disputed property as a contract case (assert-decision, without requiring a surfaced fork)",
+    )
+    pdi.add_argument("--portal", type=Path, required=True)
+    pdi.add_argument("--slot-id", required=True)
+    pdi.add_argument("--property", required=True, dest="property_text", help="natural-language property the result must satisfy")
+    pdi.add_argument("--json", action="store_true", help="emit JSON")
+
     pcon = sub.add_parser("contract", help="Inspect and diff slot contract surfaces")
     csub = pcon.add_subparsers(dest="contract_cmd", required=True)
     pcs = csub.add_parser("show", help="Render a slot's contract surface (certified/uncertified boundary, cases, scope)")
@@ -748,6 +823,8 @@ def main(argv: list[str] | None = None) -> None:
         cmd_assert_decision(
             Path(args.portal), args.slot_id, args.decision_id, args.property_text, args.json
         )
+    elif args.cmd == "dispute":
+        cmd_dispute(Path(args.portal), args.slot_id, args.property_text, args.json)
     elif args.cmd == "contract":
         if args.contract_cmd == "show":
             cmd_contract_show(Path(args.portal), args.slot_id, args.json)

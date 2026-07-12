@@ -62,6 +62,8 @@ import {
 } from "./features/slotAnnotations/slotEditorAnnotations";
 import { SemipyDecisionCodeLensProvider } from "./features/decisions/decisionCodeLens";
 import { createDecisionHoverProvider } from "./features/decisions/decisionHover";
+import { SemipyContractCodeLensProvider } from "./features/contractCard/contractCodeLens";
+import { createContractHoverProvider } from "./features/contractCard/contractHover";
 import { getSemipyOutputChannel } from "./logging/semipyOutputChannel";
 import {
   createSpecCommentSyntaxTypes,
@@ -201,6 +203,10 @@ export function activate(context: ExtensionContext): void {
     () => portalState.portal,
     () => cfg().get<boolean>("enableDecisionSurface") ?? true,
   );
+  const contractLensProvider = new SemipyContractCodeLensProvider(
+    () => portalState.portal,
+    () => cfg().get<boolean>("enableContractCard") ?? true,
+  );
 
   const linked = new LinkedHighlightCoordinator(
     () => cfg().get<number>("linkedHighlightFadeMs") ?? 1500,
@@ -289,6 +295,7 @@ export function activate(context: ExtensionContext): void {
     codeLensProvider.refresh();
     inlayProvider.refresh();
     decisionLensProvider.refresh();
+    contractLensProvider.refresh();
     linked.onSelectionOrPortal(editor, portalState.portal, cacheDir);
     if (cfg().get<boolean>("notifyOnResolution") ?? true) {
       regressionDiag.refresh(editor, portalState.portal);
@@ -396,11 +403,20 @@ export function activate(context: ExtensionContext): void {
         () => cfg().get<boolean>("enableDecisionSurface") ?? true,
       ),
     ),
+    languages.registerCodeLensProvider({ language: "python", scheme: "file" }, contractLensProvider),
+    languages.registerHoverProvider(
+      { language: "python", scheme: "file" },
+      createContractHoverProvider(
+        () => portalState.portal,
+        () => cfg().get<boolean>("enableContractCard") ?? true,
+      ),
+    ),
     workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("semipy")) {
         codeLensProvider.refresh();
         inlayProvider.refresh();
         decisionLensProvider.refresh();
+        contractLensProvider.refresh();
         refreshAllDecorations(window.activeTextEditor);
       }
     }),
@@ -506,6 +522,38 @@ export function activate(context: ExtensionContext): void {
         refreshAllDecorations(window.activeTextEditor);
       },
     ),
+    commands.registerCommand("semipy.disputeContract", async (slotId: string) => {
+      const ed = window.activeTextEditor;
+      if (ed) {
+        refreshPortalForUri(ed.document.uri.fsPath, portalState);
+      }
+      const root = portalState.workspaceRoot;
+      const portalPath = portalState.portalPath;
+      if (!root || !portalPath || !slotId) {
+        void window.showErrorMessage("Semipy: no portal / slot for dispute.");
+        return;
+      }
+      const property = await window.showInputBox({
+        prompt: "What should this output have done instead?",
+        placeHolder: "e.g. a site with all-null readings is omitted",
+      });
+      if (!property || !property.trim()) {
+        return;
+      }
+      const rel = path.relative(root, portalPath);
+      const r = await runSemipyCli(
+        ["dispute", "--portal", rel, "--slot-id", slotId, "--property", property.trim()],
+        root,
+      );
+      if (r.code !== 0 && r.code !== null) {
+        void window.showErrorMessage(`Semipy: ${semipyCliFailureMessage(r.stderr, r.stdout, "dispute failed")}`);
+        return;
+      }
+      void window.showInformationMessage(
+        (r.stdout || r.stderr || "Dispute recorded; regenerates against it on next run.").trim().slice(0, 300),
+      );
+      refreshAllDecorations(window.activeTextEditor);
+    }),
     commands.registerCommand(
       "semipy.relaxGuarantee",
       async (item: { slot?: SlotJson; guarantee?: { label?: string; caseIds?: string[] } }) => {
