@@ -574,12 +574,26 @@ def _slot_spec_snapshot(slot_spec: SlotSpec) -> dict[str, Any]:
         "enclosing_function_qualname": slot_spec.enclosing_function_qualname,
         "enclosing_function_span": list(slot_spec.enclosing_function_span),
         "interpreted": getattr(slot_spec, "interpreted", False),
+        "mode": getattr(slot_spec, "mode", "adaptive"),
     }
+
+
+def _sync_slot_mode(slot: Slot, slot_spec: SlotSpec) -> None:
+    """U7 (R12/R13): keep a pre-existing slot's persisted ``mode``/
+    ``interpreted`` in sync with the decorator's current authoring, without
+    touching anything else in ``slot.slot_spec`` -- mode is metadata, not spec
+    identity (it is deliberately excluded from ``spec_equivalence_key``), so a
+    mode-only change must not trigger regeneration."""
+    if not isinstance(slot.slot_spec, dict):
+        return
+    slot.slot_spec["mode"] = getattr(slot_spec, "mode", "adaptive")
+    slot.slot_spec["interpreted"] = getattr(slot_spec, "interpreted", False)
 
 
 def _ensure_slot(portal: Any, slot_spec: SlotSpec) -> Slot:
     slot = portal.slots.get(slot_spec.slot_id)
     if slot is not None:
+        _sync_slot_mode(slot, slot_spec)
         return slot
 
     slot = Slot(

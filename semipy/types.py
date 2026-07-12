@@ -148,6 +148,12 @@ def equivalence_key_from_stored_snapshot(snapshot: dict[str, Any] | None) -> Opt
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
+# Valid values for SlotSpec.mode (U7, R12/R13): shared by the decorator (which
+# validates authored kwargs) and the distribution build/runtime (which read
+# and act on the persisted value).
+SLOT_MODES = ("frozen", "adaptive", "interpreted")
+
+
 @dataclass(frozen=True)
 class SlotSpec:
     """Durable specification for one open region (one LLM generation unit)."""
@@ -171,6 +177,13 @@ class SlotSpec:
     # called per call (memoized), and the slot promotes itself to a normal cached
     # code commit once a synthesized residual reproduces held-out examples.
     interpreted: bool = False
+    # Distribution mode (U7, R12/R13): how a consumer-site deopt is handled once
+    # this slot ships via ``semipy build``. "adaptive" (default) permits
+    # floor-gated consumer-site regeneration when a key is present; "frozen"
+    # forbids it (deopt raises with a repro bundle, key or not); "interpreted"
+    # reuses ``interpreted`` above -- the slot never freezes and always requires
+    # a key at the consumer site. See ``semipy/distribution/runtime.py``.
+    mode: str = "adaptive"
 
 
 @dataclass

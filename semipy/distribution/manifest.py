@@ -32,15 +32,22 @@ class ManifestEntry:
     """One shipped slot: where its artifact/contract live, and its
     distribution mode.
 
-    ``mode`` is a placeholder for U7 (slot distribution modes as a first-class
-    authored concept), which has not landed yet -- ``build.py`` always emits
-    ``"adaptive"`` today. A ``"frozen"`` entry skips the key-check branch
+    ``mode`` (U7, R12/R13) is the slot's authored distribution mode --
+    "frozen", "adaptive" (default), or "interpreted" -- read from the slot's
+    persisted spec by ``build.py`` (``dataclasses.replace``/decorator kwarg
+    upstream sets it; an authored ``interpreted`` flag always wins and forces
+    ``"interpreted"``). A ``"frozen"`` entry skips the key-check branch
     entirely at resolution time (KTD-7): no key ever authorizes an adaptation
-    attempt for a frozen slot, only the verify gate.
+    attempt for a frozen slot, only the verify gate. An ``"interpreted"``
+    entry skips the scope check entirely at resolution time: always molten,
+    key required.
 
     ``classification`` records the behavioral-semver delta (KTD-8) versus the
     previous baseline's entry for this slot, via ``contract.surface.diff`` --
     U6 only records it; U12 owns enforcing it against a declared release type.
+    A mode change alone (with no surface change) is also recorded here as at
+    least ``"minor"`` (U7): consumers gate on ``mode``, so changing it is a
+    behavioral change even when ``ContractSurface`` is untouched.
     """
 
     spec_equivalence_key: str
@@ -48,7 +55,7 @@ class ManifestEntry:
     artifact_module: str            # filename under _semiformal/artifacts/
     artifact_function: str          # function name inside that module
     contract_path: str              # filename under _semiformal/contracts/
-    mode: str = "adaptive"          # "adaptive" | "frozen" (U7 placeholder)
+    mode: str = "adaptive"          # "adaptive" | "frozen" | "interpreted" (U7)
     classification: str = "none"    # major | minor | patch | none (KTD-8, record-only)
 
 

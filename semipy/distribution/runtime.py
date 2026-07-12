@@ -7,7 +7,11 @@ that matches a shipped slot (by ``spec_equivalence_key`` -- portable across
 install locations, unlike ``slot_id``; see ``manifest.py``) resolves without
 constructing any LLM machinery.
 
-Resolution flow (KTD-7):
+Resolution flow (KTD-7, U7):
+  - interpreted mode (R13): skips the scope check entirely -- always molten.
+    Requires a key; a missing key is a configuration error raised here at
+    call time (not deferred to whatever generation path would eventually
+    fail), since there is nothing frozen to fall back on.
   - in scope: run the shipped artifact directly.
   - out of scope, adaptive mode, key present: fall through (``FALL_THROUGH``)
     to the normal pipeline -- U9's floor-gated adapt is not implemented yet,
@@ -180,6 +184,20 @@ def try_resolve(
     if entry is None:
         return FALL_THROUGH
 
+    has_key = bool(getattr(config, "openai_api_key", None))
+
+    if entry.mode == "interpreted":
+        # R13 / HTD: interpreted slots skip the scope check entirely -- always
+        # molten, key required. A missing key is a configuration error, not a
+        # scope violation: raise it here (call time) rather than deferring to
+        # whatever generation path would eventually fail.
+        if not has_key:
+            raise RuntimeError(
+                f"slot {entry.slot_id!r} is distributed as interpreted (never freezes) "
+                "and requires an API key at the consumer site; set OPENAI_API_KEY."
+            )
+        return FALL_THROUGH
+
     fn = _load_artifact(package_root, entry)
     scope = _load_scope_predicate(package_root, entry)
     profiles = compute_input_profile(runtime_values)
@@ -188,7 +206,6 @@ def try_resolve(
     if check.in_scope:
         return invoke_slot(fn, slot_spec.free_variables, _ordered_args(slot_spec, runtime_values))
 
-    has_key = bool(getattr(config, "openai_api_key", None))
     if entry.mode != "frozen" and has_key:
         # Adaptive slot, key present: U9's floor-gated adapt owns this path;
         # fall through to the existing (keyed) pipeline.

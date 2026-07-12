@@ -38,11 +38,33 @@ from semipy.distribution.manifest import (
 )
 from semipy.history.version_control import Portal, Slot
 from semipy.store import _dispatch_source_only, _get_active_commit, _source_with_function_name
+from semipy.types import SLOT_MODES
 
 ARTIFACT_FUNCTION_NAME = "run"
 ARTIFACTS_DIR = "artifacts"
 CONTRACTS_DIR = "contracts"
 MANIFEST_FILENAME = "manifest.json"
+
+# Classification severity order (KTD-8), used to bump a build's classification
+# up to at least "minor" when the slot's distribution mode changed even if its
+# ContractSurface did not (U7: consumers gate on mode, so changing it is a
+# behavioral change).
+_SEVERITY = {"none": 0, "patch": 1, "minor": 2, "major": 3}
+
+
+def _at_least_minor(classification: str) -> str:
+    return classification if _SEVERITY.get(classification, 0) >= _SEVERITY["minor"] else "minor"
+
+
+def _resolved_mode(slot_spec: dict[str, Any]) -> str:
+    """The slot's authored distribution mode (U7, R12/R13). The interpreted-tier
+    flag always wins: an interpreted slot can never ship as anything else,
+    regardless of what ``mode`` says. Falls back to "adaptive" for a missing or
+    invalid value (e.g. a legacy slot_spec predating this field)."""
+    if slot_spec.get("interpreted"):
+        return "interpreted"
+    mode = slot_spec.get("mode") or "adaptive"
+    return mode if mode in SLOT_MODES else "adaptive"
 
 
 @dataclass
@@ -163,28 +185,38 @@ def build_package_data(
             (artifact_source + "\0" + contract_text).encode("utf-8")
         ).hexdigest()[:16]
 
+        mode = _resolved_mode(slot_spec)
+
         classification = "none"
-        if previous_manifest is not None:
-            prev_entry = previous_manifest.entries.get(key)
-            if prev_entry is not None and previous_package_dir is not None:
-                prev_contract_path = previous_package_dir / prev_entry.contract_path
-                if prev_contract_path.exists():
-                    prev_dict = json.loads(prev_contract_path.read_text(encoding="utf-8"))
-                    prev_surface = surface_from_dict(prev_dict.get("surface") or {})
-                    result = diff(prev_surface, surface)
-                    classification = result.classification
-                    if release_type == "patch" and classification in ("major", "minor"):
-                        warnings.append(BuildWarning(
-                            slot.slot_id,
-                            f"declared release type 'patch' but slot {key} classifies as "
-                            f"{classification} ({'; '.join(result.reasons) or 'behavior changed'})",
-                        ))
-                    elif release_type == "minor" and classification == "major":
-                        warnings.append(BuildWarning(
-                            slot.slot_id,
-                            f"declared release type 'minor' but slot {key} classifies as major "
-                            f"({'; '.join(result.reasons) or 'behavior changed'})",
-                        ))
+        reasons: list[str] = []
+        prev_entry = previous_manifest.entries.get(key) if previous_manifest is not None else None
+        if prev_entry is not None and previous_package_dir is not None:
+            prev_contract_path = previous_package_dir / prev_entry.contract_path
+            if prev_contract_path.exists():
+                prev_dict = json.loads(prev_contract_path.read_text(encoding="utf-8"))
+                prev_surface = surface_from_dict(prev_dict.get("surface") or {})
+                result = diff(prev_surface, surface)
+                classification = result.classification
+                reasons = list(result.reasons)
+        if prev_entry is not None and prev_entry.mode != mode:
+            # U7: a mode change alone is a behavioral change for consumers
+            # (it changes how a deopt is handled), even when the surface is
+            # untouched -- bump to at least "minor".
+            classification = _at_least_minor(classification)
+            reasons.append(f"distribution mode changed ({prev_entry.mode} -> {mode})")
+
+        if release_type == "patch" and classification in ("major", "minor"):
+            warnings.append(BuildWarning(
+                slot.slot_id,
+                f"declared release type 'patch' but slot {key} classifies as "
+                f"{classification} ({'; '.join(reasons) or 'behavior changed'})",
+            ))
+        elif release_type == "minor" and classification == "major":
+            warnings.append(BuildWarning(
+                slot.slot_id,
+                f"declared release type 'minor' but slot {key} classifies as major "
+                f"({'; '.join(reasons) or 'behavior changed'})",
+            ))
 
         entries[key] = ManifestEntry(
             spec_equivalence_key=key,
@@ -192,7 +224,7 @@ def build_package_data(
             artifact_module=f"{ARTIFACTS_DIR}/{artifact_filename}",
             artifact_function=ARTIFACT_FUNCTION_NAME,
             contract_path=f"{CONTRACTS_DIR}/{contract_filename}",
-            mode="adaptive",
+            mode=mode,
             classification=classification,
         )
 

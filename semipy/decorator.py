@@ -3,6 +3,7 @@
 """
 from __future__ import annotations
 
+import dataclasses
 import functools
 import inspect
 from contextvars import ContextVar
@@ -11,7 +12,7 @@ from typing import Any, Callable, Optional, Union, get_type_hints
 
 from semipy.lowering import _make_slot_id, lower_to_scaffold, scan_informal_specs, strip_skeleton_lines
 from semipy.slot_resolver import _make_slot_proxy
-from semipy.types import SemiformalContext, SlotCategory, SlotSpec, compute_spec_equivalence_key
+from semipy.types import SemiformalContext, SlotCategory, SlotSpec, SLOT_MODES, compute_spec_equivalence_key
 from semipy.agents.config import get_config
 
 
@@ -91,7 +92,45 @@ def _decorated_fn_source(
     return source, filename, first_lineno, func_qualname, type_hints
 
 
-def _wrap_function(fn: Callable[..., Any], description: Optional[str] = None, filename: Optional[str] = None, interpreted: bool = False) -> Callable[..., Any]:
+def _resolve_slot_modes(
+    slot_specs: list[SlotSpec],
+    *,
+    interpreted: bool,
+    mode: Optional[Union[str, dict[int, str]]],
+) -> list[SlotSpec]:
+    """U7 (R12/R13): resolve each slot's authored distribution mode.
+
+    ``interpreted=True`` (the existing interpret-until-shape-stable flag) wins
+    outright: every slot's mode becomes ``"interpreted"``, since that is the
+    tier ``mode="interpreted"`` reuses. Otherwise ``mode`` is either one string
+    applied to every slot, or a ``{slot_index: mode}`` override map keyed by
+    order of appearance -- the per-slot override for multi-slot functions.
+    Slots absent from the map default to ``"adaptive"``. Authoring
+    ``mode="interpreted"`` for a slot also sets its ``interpreted`` flag, so
+    the developer-site runtime actually runs it interpreted, not just the
+    shipped label.
+    """
+    if interpreted:
+        return [dataclasses.replace(s, interpreted=True, mode="interpreted") for s in slot_specs]
+    if mode is None:
+        return slot_specs
+
+    resolved: list[SlotSpec] = []
+    for i, s in enumerate(slot_specs):
+        m = mode.get(i, "adaptive") if isinstance(mode, dict) else mode
+        if m not in SLOT_MODES:
+            raise ValueError(f"invalid slot mode {m!r}; expected one of {SLOT_MODES}")
+        resolved.append(dataclasses.replace(s, mode=m, interpreted=(m == "interpreted")))
+    return resolved
+
+
+def _wrap_function(
+    fn: Callable[..., Any],
+    description: Optional[str] = None,
+    filename: Optional[str] = None,
+    interpreted: bool = False,
+    mode: Optional[Union[str, dict[int, str]]] = None,
+) -> Callable[..., Any]:
     source, resolved_filename, first_lineno, func_qualname, type_hints = _decorated_fn_source(fn)
     resolved_filename = filename or resolved_filename
     resolved_for_slots = _type_hints_for_lowering(fn)
@@ -109,9 +148,7 @@ def _wrap_function(fn: Callable[..., Any], description: Optional[str] = None, fi
         type_hints=resolved_for_slots or type_hints,
         globals_ns=getattr(fn, "__globals__", None) or {},
     )
-    if interpreted:
-        import dataclasses
-        slot_specs = [dataclasses.replace(s, interpreted=True) for s in slot_specs]
+    slot_specs = _resolve_slot_modes(slot_specs, interpreted=interpreted, mode=mode)
     scaffold_src = lower_to_scaffold(
         source, slot_specs, slot_index_offset=0, dedent_anchor_abs=first_lineno
     )
@@ -169,6 +206,7 @@ def _wrap_function(fn: Callable[..., Any], description: Optional[str] = None, fi
             enclosing_function_span=(resolved_filename, first_lineno, _end_line),
             interpreted=interpreted,
         )
+        whole_slot = _resolve_slot_modes([whole_slot], interpreted=interpreted, mode=mode)[0]
 
         proxy_fn = _make_slot_proxy(whole_slot, resolved_filename, cache_dir)
 
@@ -232,6 +270,7 @@ def semiformal(
     *,
     description: Optional[str] = None,
     interpreted: bool = False,
+    mode: Optional[Union[str, dict[int, str]]] = None,
 ) -> Any:
     """
     Decorate a function or class as semiformal.
@@ -242,23 +281,35 @@ def semiformal(
       def g(): ...
       @semiformal(interpreted=True)        # interpret-until-shape-stable slots
       def h(): ...
+      @semiformal(mode="frozen")           # every slot ships frozen (no consumer-site regen)
+      def i(): ...
+      @semiformal(mode={0: "frozen", 1: "interpreted"})  # per-slot override, by order of appearance
+      def j(): ...
       @semiformal
       class C: ...
 
     ``interpreted=True`` makes every slot in the function run in
     interpret-until-shape-stable mode (per-call LLM, then self-promotion to
     cached code once it generalizes; see semipy/interpreted.py).
+
+    ``mode`` (U7, R12/R13) authors each slot's distribution mode: "frozen",
+    "adaptive" (default), or "interpreted" -- how a consumer-site deopt is
+    handled once the slot ships via ``semipy build`` (see
+    semipy/distribution/runtime.py). Pass one string to apply it to every
+    slot, or a ``{slot_index: mode}`` map to override individual slots in a
+    multi-slot function. ``interpreted=True`` implies ``mode="interpreted"``
+    for every slot and takes precedence over ``mode``.
     """
     if fn_or_desc is None and description is None:
         def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
-            return _wrap_function(f, filename=None, interpreted=interpreted)
+            return _wrap_function(f, filename=None, interpreted=interpreted, mode=mode)
 
         return decorator
 
     if isinstance(fn_or_desc, str):
         desc = fn_or_desc
         def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
-            return _wrap_function(f, description=desc, filename=None, interpreted=interpreted)
+            return _wrap_function(f, description=desc, filename=None, interpreted=interpreted, mode=mode)
 
         return decorator
 
@@ -268,12 +319,12 @@ def semiformal(
             for name in _methods_with_open_regions(class_):
                 if name in class_.__dict__ and callable(class_.__dict__[name]):
                     orig = class_.__dict__[name]
-                    setattr(class_, name, _wrap_function(orig, filename=None, interpreted=interpreted))
+                    setattr(class_, name, _wrap_function(orig, filename=None, interpreted=interpreted, mode=mode))
             return class_
-        return _wrap_function(fn_or_desc, description=description, filename=None, interpreted=interpreted)
+        return _wrap_function(fn_or_desc, description=description, filename=None, interpreted=interpreted, mode=mode)
 
     def decorator(f: Callable[..., Any]) -> Callable[..., Any]:
-        return _wrap_function(f, description=description, filename=None, interpreted=interpreted)
+        return _wrap_function(f, description=description, filename=None, interpreted=interpreted, mode=mode)
 
     return decorator
 
