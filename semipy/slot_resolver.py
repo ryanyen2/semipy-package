@@ -15,6 +15,7 @@ from semipy.agents.config import get_config
 from semipy.agents.console_io import print_pipeline_log
 from semipy.agents.compiler import _compile_source
 from semipy.agents.validator import verify_runtime_execution
+from semipy.distribution.runtime import FALL_THROUGH, try_resolve as _try_package_data_resolve
 from semipy.history.version_control import (
     Slot,
     add_commit_to_slot,
@@ -1640,6 +1641,14 @@ def execute_slot(
     """
     config = get_config()
     runtime_values = materialize_runtime_document_inputs(dict(runtime_values))
+
+    # U6/KTD-7: an installed library may ship package data (``semipy build``)
+    # next to its modules -- try resolving against that before ever touching a
+    # cache dir or portal, so an in-scope consumer call needs no cache dir and
+    # no key. Falls through to the pipeline below when no package data applies.
+    package_result = _try_package_data_resolve(slot_spec, runtime_values, source_file, config)
+    if package_result is not FALL_THROUGH:
+        return package_result
 
     cache_dir, project_root = resolve_project(source_file, cache_dir)
     session_id = session_id_for_project(project_root)

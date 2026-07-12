@@ -639,6 +639,27 @@ def _render_why(answer: dict) -> None:
             out.write(f"    - {g.get('predicate_source', '')}\n")
 
 
+def cmd_build(
+    portal_path: Path,
+    output_dir: Path,
+    previous_dir: Path | None,
+    release_type: str | None,
+) -> None:
+    """``semipy build``: distill a portal into consumer package data (U6)."""
+    from semipy.distribution.build import build_package_data
+
+    portal, _ = _load_portal_explicit(portal_path)
+    result = build_package_data(
+        portal, output_dir, previous_package_dir=previous_dir, release_type=release_type,
+    )
+    for w in result.warnings:
+        sys.stderr.write(f"warning: slot {w.slot_id}: {w.message}\n")
+    sys.stdout.write(
+        f"built {len(result.manifest.entries)} slot(s) -> {output_dir} "
+        f"(baseline_hash={result.manifest.baseline_hash})\n"
+    )
+
+
 def cmd_why(
     portal_path: Path,
     slot_id: str | None,
@@ -782,6 +803,21 @@ def main(argv: list[str] | None = None) -> None:
     pcd.add_argument("--new", type=Path, required=True, help="path to the new surface JSON")
     pcd.add_argument("--json", action="store_true", help="emit JSON")
 
+    pbu = sub.add_parser(
+        "build",
+        help="Distill a portal into consumer-facing package data (_semiformal/: manifest, artifacts, floor-filtered contracts)",
+    )
+    pbu.add_argument("--portal", type=Path, required=True)
+    pbu.add_argument("--output", type=Path, required=True, help="output _semiformal/ directory")
+    pbu.add_argument(
+        "--previous", type=Path, default=None,
+        help="a prior build's _semiformal/ directory, for behavioral-semver classification (KTD-8)",
+    )
+    pbu.add_argument(
+        "--release-type", choices=["major", "minor", "patch"], default=None,
+        help="declared release type; warns on a KTD-8 classification mismatch (U12 owns enforcement)",
+    )
+
     pw = sub.add_parser(
         "why",
         help="Explain a slot: spec, active decision, certificate + scope verdict, nearest case",
@@ -834,6 +870,11 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit(2)
     elif args.cmd == "why":
         cmd_why(Path(args.portal), args.slot_id, args.file_line, args.input_json, args.json)
+    elif args.cmd == "build":
+        cmd_build(
+            Path(args.portal), Path(args.output),
+            Path(args.previous) if args.previous else None, args.release_type,
+        )
     else:
         raise SystemExit(2)
 
