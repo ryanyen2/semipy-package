@@ -692,3 +692,105 @@ def license_sketch(
         reason="pattern recurred, generalized to a new occurrence, and compresses",
         recurrence=recurrence, mdl_gain=mdl_gain,
     )
+
+
+# ---------------------------------------------------------------------------
+# Scope (U2, R3-R4): mint a scope predicate at commit/freeze from the evidence
+# ledger's input profiles, and record every out-of-scope deopt as a ledger event
+# with a running frequency statistic (for a later relaxation pass -- this unit
+# ships the statistic, not the relaxation).
+# ---------------------------------------------------------------------------
+
+
+def mint_scope(profiles: Sequence[dict]) -> Any:
+    """Mint the scope predicate for a slot's accumulated input profiles.
+
+    Thin commit/freeze-time entry point over ``kernel.guard.synthesize_scope``;
+    the returned ``ScopePredicate`` is serializable and carries a stable
+    ``predicate_id`` for other modules to reference."""
+    from semipy.kernel.guard import synthesize_scope
+
+    return synthesize_scope(list(profiles))
+
+
+@dataclass
+class ScopeDeoptEvent:
+    """One out-of-scope reuse (R4): a scope predicate rejected an input, so it was
+    routed to verify/adapt instead of running the artifact silently."""
+
+    slot_id: str = ""
+    commit_id: str = ""
+    predicate_id: str = ""
+    violated_conjunct: str = ""
+    observed_profile: dict = field(default_factory=dict)
+    timestamp: float = 0.0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "slot_id": self.slot_id,
+            "commit_id": self.commit_id,
+            "predicate_id": self.predicate_id,
+            "violated_conjunct": self.violated_conjunct,
+            "observed_profile": dict(self.observed_profile),
+            "timestamp": self.timestamp,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "ScopeDeoptEvent":
+        return cls(
+            slot_id=d.get("slot_id", ""),
+            commit_id=d.get("commit_id", ""),
+            predicate_id=d.get("predicate_id", ""),
+            violated_conjunct=d.get("violated_conjunct", ""),
+            observed_profile=dict(d.get("observed_profile") or {}),
+            timestamp=d.get("timestamp", 0.0),
+        )
+
+
+_SCOPE_DEOPT_KEY = "scope_deopts"
+_SCOPE_STATS_KEY = "scope_stats"
+
+
+def _scope_advisor_state(slot: Any) -> dict:
+    adv = getattr(slot, "advisor_state", None)
+    if not isinstance(adv, dict):
+        adv = {}
+        slot.advisor_state = adv
+    return adv
+
+
+def record_scope_check(slot: Any, in_scope: bool) -> None:
+    """Count one scope-membership check (in or out of scope). The running
+    ``deopts / checks`` ratio is the over-tight-scope statistic a later relaxation
+    pass consumes."""
+    stats = _scope_advisor_state(slot).setdefault(_SCOPE_STATS_KEY, {"checks": 0, "deopts": 0})
+    stats["checks"] = int(stats.get("checks", 0)) + 1
+
+
+def append_deopt_event(slot: Any, event: ScopeDeoptEvent) -> None:
+    """Append one out-of-scope deopt to the slot's ledger (caller saves the portal)."""
+    adv = _scope_advisor_state(slot)
+    adv.setdefault(_SCOPE_DEOPT_KEY, []).append(event.to_dict())
+    stats = adv.setdefault(_SCOPE_STATS_KEY, {"checks": 0, "deopts": 0})
+    stats["deopts"] = int(stats.get("deopts", 0)) + 1
+
+
+def get_deopt_events(slot: Any) -> list[ScopeDeoptEvent]:
+    """Return the slot's persisted out-of-scope deopt history (oldest first)."""
+    adv = getattr(slot, "advisor_state", None)
+    if not isinstance(adv, dict):
+        return []
+    return [ScopeDeoptEvent.from_dict(d) for d in adv.get(_SCOPE_DEOPT_KEY, [])]
+
+
+def deopt_frequency(slot: Any) -> float:
+    """Out-of-scope deopts as a fraction of scope checks -- the over-tight-scope
+    signal. 0.0 when no scope check has run."""
+    adv = getattr(slot, "advisor_state", None)
+    if not isinstance(adv, dict):
+        return 0.0
+    stats = adv.get(_SCOPE_STATS_KEY) or {}
+    checks = int(stats.get("checks", 0))
+    if checks <= 0:
+        return 0.0
+    return int(stats.get("deopts", 0)) / checks

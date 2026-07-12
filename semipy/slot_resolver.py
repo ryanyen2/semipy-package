@@ -182,6 +182,184 @@ def _capture_slot_source_snapshot(slot_spec: SlotSpec) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Scope predicates for the reuse fast path (U2, R3-R4). Input profiles accumulate
+# per slot; a scope predicate is minted at commit time and stored keyed by commit
+# id; the reuse gate checks scope *membership* rather than fingerprint equality,
+# records an out-of-scope deopt as a ledger event, and hands large inputs to
+# sampled verify. Scope state lives in ``slot.advisor_state`` (persisted) so no
+# history-layer schema change is needed.
+# ---------------------------------------------------------------------------
+
+_SCOPE_PROFILE_MAX = 50
+
+
+def _record_input_profile(slot: Any, runtime_values: dict[str, Any]) -> None:
+    """Accumulate a bounded, structurally-deduplicated ledger of input profiles on
+    the slot -- the evidence a scope predicate is minted from (R3)."""
+    try:
+        from semipy.runtime_fingerprint import compute_input_profile
+
+        profile = compute_input_profile(runtime_values)
+    except Exception:
+        return
+    if not profile:
+        return
+    adv = getattr(slot, "advisor_state", None)
+    if not isinstance(adv, dict):
+        adv = {}
+        slot.advisor_state = adv
+    ledger = adv.setdefault("scope_profiles", [])
+    keys = adv.setdefault("scope_profile_keys", [])
+    import json as _json
+
+    key = _json.dumps(profile, sort_keys=True, default=str)
+    if key in keys:
+        return
+    ledger.append(profile)
+    keys.append(key)
+    while len(ledger) > _SCOPE_PROFILE_MAX:
+        ledger.pop(0)
+        keys.pop(0)
+
+
+def _mint_and_store_scope(slot: Any, commit_id: str) -> None:
+    """Mint the scope predicate at commit time (R3) from the slot's accumulated
+    input profiles and store it keyed by commit id, referenceable by predicate id."""
+    try:
+        from semipy.kernel.operators import mint_scope
+
+        adv = getattr(slot, "advisor_state", None)
+        profiles = adv.get("scope_profiles", []) if isinstance(adv, dict) else []
+        predicate = mint_scope(profiles)
+        if not isinstance(adv, dict):
+            adv = {}
+            slot.advisor_state = adv
+        adv.setdefault("scope_predicates", {})[commit_id] = predicate.to_dict()
+    except Exception:
+        pass
+
+
+def _stored_scope_for_commit(slot: Any, commit_id: str) -> dict | None:
+    adv = getattr(slot, "advisor_state", None)
+    if not isinstance(adv, dict):
+        return None
+    return (adv.get("scope_predicates") or {}).get(commit_id)
+
+
+def _reuse_input_is_large(runtime_values: dict[str, Any], config: Any) -> bool:
+    from semipy.agents.validator import sampleable_length
+
+    threshold = int(getattr(config, "sampled_verify_row_threshold", 10000) or 10000)
+    for v in runtime_values.values():
+        n = sampleable_length(v)
+        if n is not None and n > threshold:
+            return True
+    return False
+
+
+def _reuse_scope_decision(
+    slot: Any,
+    commit: Any,
+    slot_spec: SlotSpec,
+    runtime_values: dict[str, Any],
+    *,
+    current_fp: str,
+    stored_fp: str,
+    portal: Any,
+    cache_dir: Path,
+    config: Any,
+    call_site: Any,
+) -> tuple[bool, bool]:
+    """R3/R4 reuse gate. Returns ``(skip_verify, input_is_large)``.
+
+    Equal fingerprint is a fast pre-check (equal => in scope => skip verify). An
+    unequal fingerprint falls through to the commit's minted scope predicate: an
+    out-of-scope input records a deopt ledger event (never runs silently) and
+    routes to verify/adapt; an in-scope input skips verify only below the sampled-
+    verify size threshold (a large in-scope input still gets a cheap sampled verify
+    rather than a blind skip -- the D5 tail-blindness fix). With no minted scope
+    (legacy/first commit) or a scalar-only slot (empty predicate), behavior is
+    exactly today's fingerprint gate (verify on mismatch)."""
+    from semipy.kernel.guard import ScopePredicate
+    from semipy.kernel.operators import (
+        ScopeDeoptEvent,
+        append_deopt_event,
+        record_scope_check,
+    )
+    from semipy.runtime_fingerprint import compute_input_profile
+
+    is_large = _reuse_input_is_large(runtime_values, config)
+    if bool(stored_fp) and stored_fp == current_fp:
+        return True, is_large
+
+    scope_dict = _stored_scope_for_commit(slot, commit.commit_id)
+    if not scope_dict:
+        return False, is_large
+    predicate = ScopePredicate.from_dict(scope_dict)
+    if predicate.is_empty():
+        return False, is_large
+
+    profile = compute_input_profile(runtime_values)
+    check = predicate.check(profile)
+    record_scope_check(slot, check.in_scope)
+    if not check.in_scope:
+        import time as _time
+
+        append_deopt_event(slot, ScopeDeoptEvent(
+            slot_id=slot_spec.slot_id,
+            commit_id=commit.commit_id,
+            predicate_id=predicate.predicate_id,
+            violated_conjunct=check.violated or "",
+            observed_profile=profile.get(check.violated_var or "", {}),
+            timestamp=_time.time(),
+        ))
+        save_portal(cache_dir, portal)
+        if getattr(config, "verbose", False):
+            print_pipeline_log(
+                call_site, "scope_deopt",
+                f"Input out of scope; deopt (violated: {check.violated}). Routing to verify/adapt.",
+            )
+        return False, is_large
+
+    # In scope: skip verify only when small. A large in-scope input still verifies,
+    # but on a row sample (with recorded power), not the whole input.
+    return (not is_large), is_large
+
+
+def _sampled_reuse_verify(
+    fn: Any, slot: Any, slot_spec: SlotSpec, runtime_values: dict[str, Any], config: Any
+) -> Any:
+    """Run sampled verify for a large reuse input (R4) and fold its aggregate
+    output-sanity check into the returned ValidationResult."""
+    from semipy.agents.validator import sampled_verify_runtime_execution
+
+    result = sampled_verify_runtime_execution(
+        fn=fn, slot_spec=slot_spec, runtime_values=runtime_values,
+        epsilon=float(getattr(config, "sampled_verify_epsilon", 0.05)),
+        delta=float(getattr(config, "sampled_verify_delta", 0.1)),
+        gamma=float(getattr(config, "sampled_verify_gamma", 1.0)),
+        size_threshold=int(getattr(config, "sampled_verify_row_threshold", 10000) or 10000),
+    )
+    try:
+        adv = getattr(slot, "advisor_state", None)
+        if isinstance(adv, dict):
+            adv["last_sampled_verify"] = {
+                "sampled": result.sampled, "sample_size": result.sample_size,
+                "population_size": result.population_size, "power": result.power,
+                "aggregate_ok": result.aggregate_ok,
+            }
+    except Exception:
+        pass
+    if result.validation.passed and not result.aggregate_ok:
+        return ValidationResult(
+            passed=False, ast_valid=True, type_correct=True, execution_ok=True,
+            error_message=f"Sampled aggregate sanity: {result.aggregate_detail}",
+            failure_kind="aggregate_sanity",
+        )
+    return result.validation
+
+
 _semantic_reuse_counters: dict[str, int] = {}
 _semantic_last_fingerprints: dict[str, str] = {}
 
@@ -1613,6 +1791,7 @@ def _execute_slot_locked(
         pass
     slot = _ensure_slot(portal, slot_spec)
     _record_slot_input_observations(slot, runtime_values)
+    _record_input_profile(slot, runtime_values)
     if _runtime_profile_is_scalar_only(runtime_values):
         _harvest_caller_series_samples(runtime_values, slot)
     save_portal(cache_dir, portal)
@@ -1876,25 +2055,38 @@ def _execute_slot_locked(
                 call_site = _call_site_from_slot(slot_spec)
                 current_fp = compute_runtime_input_fingerprint(runtime_values)
                 stored_fp = getattr(commit, "runtime_input_fingerprint", "") or ""
-                skip_verify = bool(stored_fp) and stored_fp == current_fp
+                # R3/R4: scope membership replaces fingerprint equality. Equal
+                # fingerprint stays a fast pre-check (equal => in scope); an unequal
+                # fingerprint falls through to the compiled scope predicate instead
+                # of forcing verify, and an out-of-scope input deopts (ledgered).
+                skip_verify, _scope_large = _reuse_scope_decision(
+                    slot, commit, slot_spec, runtime_values,
+                    current_fp=current_fp, stored_fp=stored_fp,
+                    portal=portal, cache_dir=cache_dir, config=config, call_site=call_site,
+                )
 
                 if not skip_verify:
-                    vr_last = None
-                    for sample_in in _reuse_verify_sample_inputs(
-                        slot_spec, slot, runtime_values
-                    ):
-                        vr_last = verify_runtime_execution(
-                            fn=fn,
-                            expected_type=slot_spec.expected_type,
-                            sample_input=sample_in,
-                            slot_category=slot_spec.expected_category,
-                            output_names=list(slot_spec.output_names or []),
-                            enable_execution=True,
-                            free_variables=list(slot_spec.free_variables),
-                            usage_hints=list(slot_spec.usage_hints or []),
-                        )
-                        if not vr_last.passed:
-                            break
+                    if _scope_large:
+                        # Above the size threshold: sampled verify (recorded power)
+                        # replaces whole-input verify (R4, D5).
+                        vr_last = _sampled_reuse_verify(fn, slot, slot_spec, runtime_values, config)
+                    else:
+                        vr_last = None
+                        for sample_in in _reuse_verify_sample_inputs(
+                            slot_spec, slot, runtime_values
+                        ):
+                            vr_last = verify_runtime_execution(
+                                fn=fn,
+                                expected_type=slot_spec.expected_type,
+                                sample_input=sample_in,
+                                slot_category=slot_spec.expected_category,
+                                output_names=list(slot_spec.output_names or []),
+                                enable_execution=True,
+                                free_variables=list(slot_spec.free_variables),
+                                usage_hints=list(slot_spec.usage_hints or []),
+                            )
+                            if not vr_last.passed:
+                                break
                     if vr_last is None or not vr_last.passed:
                         _verify_failure_msg = (
                             (vr_last.error_message or "").strip() if vr_last else ""
@@ -2229,6 +2421,10 @@ def _execute_slot_locked(
         change_record=_change_record,
     )
     add_commit_to_slot(slot, commit, branch_name, usage_id=slot_spec.slot_id)
+    # Mint the scope predicate for this commit (R3) from the accumulated input
+    # profiles, so the reuse fast path checks membership rather than fingerprint
+    # equality on the next call.
+    _mint_and_store_scope(slot, commit.commit_id)
 
     # Surface the silent fork (F0): persist the DecisionSet on the slot so the #?
     # surface + steering can render it. Empty/agreeing draws attach nothing.
