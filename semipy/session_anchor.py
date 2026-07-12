@@ -44,10 +44,28 @@ def resolve_portal_anchor(actual_filename: str) -> str:
         except Exception:
             return actual_filename
 
+    if _is_installed_package_source(actual_filename):
+        # U8 (R15): actual_filename lives inside an installed package's own
+        # shipped `_semiformal/` scope -- this call site belongs to a
+        # library, not to the developer's own project. Anchor to the
+        # consuming project (cwd) instead of walking up from the library's
+        # install location, so the overlay this call may create lives in the
+        # consumer's own project tree, not inside site-packages.
+        try:
+            return str(Path.cwd().resolve())
+        except Exception:
+            return actual_filename
+
     try:
         return str(Path(actual_filename).resolve())
     except Exception:
         return actual_filename
+
+
+def _is_installed_package_source(actual_filename: str) -> bool:
+    from semipy.distribution.runtime import find_package_root
+
+    return find_package_root(actual_filename) is not None
 
 
 def _nearest_semiformal_dir(start: Path) -> Optional[Path]:

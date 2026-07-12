@@ -552,14 +552,29 @@ def _why_answer(slot, *, input_values: dict | None) -> dict:
     regimes, and the certified/uncertified boundary. Reads only what is already
     stored on the slot -- no generated source, no model call."""
     from semipy.contract.surface import ContractSurface
+    from semipy.distribution.baseline import installed_baseline_version
     from semipy.kernel.guard import ScopePredicate
     from semipy.runtime_fingerprint import compute_input_profile
     from semipy.store import _get_active_commit
 
     surface = ContractSurface.from_slot(slot)
-    active = _get_active_commit(slot)
+    baseline_version = installed_baseline_version(slot)
+    active = _get_active_commit(slot, installed_baseline_version=baseline_version)
     commit_id = getattr(active, "commit_id", "") or ""
     decision = getattr(active, "decision", "") or ""
+
+    # U8 (R17): distinguish a resolution served by the shipped baseline
+    # ("baseline-certified") from one served by a live local overlay commit
+    # ("locally-annealed"), naming the baseline it extends. ``None`` when no
+    # package data is installed for this slot's call site at all (an
+    # ordinary developer slot), preserving prior behavior for that case.
+    provenance = None
+    if baseline_version is not None:
+        provenance = (
+            {"status": "locally-annealed", "baseline_version": baseline_version}
+            if active is not None
+            else {"status": "baseline-certified", "baseline_version": baseline_version}
+        )
 
     adv = getattr(slot, "advisor_state", None) or {}
     scope_dict = (adv.get("scope_predicates") or {}).get(commit_id)
@@ -598,6 +613,7 @@ def _why_answer(slot, *, input_values: dict | None) -> dict:
         "scope_verdict": scope_verdict,
         "nearest_case": nearest_case,
         "regimes": surface.regimes,
+        "provenance": provenance,
     }
 
 
@@ -610,6 +626,9 @@ def _render_why(answer: dict) -> None:
         f"  active commit: {(answer['active_commit'] or '(none)')[:8]}  "
         f"decision: {answer['decision'] or '(none)'}\n"
     )
+    if answer.get("provenance"):
+        prov = answer["provenance"]
+        out.write(f"  provenance: {prov['status']} (baseline {prov['baseline_version'][:16]})\n")
     if answer["certified"] and answer["certificate"]:
         cert = answer["certificate"]
         out.write(

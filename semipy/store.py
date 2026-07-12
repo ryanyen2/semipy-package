@@ -327,22 +327,35 @@ def function_name_for_commit(slot: Slot, commit: Commit) -> str:
     return f"{base}_{short}"
 
 
-def _get_active_commit(slot: Slot) -> Optional[Commit]:
-    """Return the active commit for the slot: locked ref wins, else branch head, else refs."""
+def _get_active_commit(slot: Slot, installed_baseline_version: Optional[str] = None) -> Optional[Commit]:
+    """Return the active commit for the slot: locked ref wins, else branch head, else refs.
+
+    U8 (R15): when *installed_baseline_version* is given, a candidate built
+    against a different baseline (the installed package was upgraded since)
+    is demoted to "needs-revalidation" by returning ``None`` here, as if
+    there were no active commit at all -- ``write_dispatch_module`` then
+    skips it, so the slot falls back to the shipped baseline and re-enters
+    ordinary generate/adapt on next call. The stale commit itself is left in
+    ``slot.commits``, never deleted. This is a functional check, not a
+    persisted mutation; U9's floor-gated adapt owns re-running it through a
+    real floor gate rather than plain regeneration.
+    """
+    from semipy.distribution.baseline import is_stale_overlay_commit
     from semipy.history.version_lock import LOCK_REF_KEY, locked_commit_id
 
     lc = locked_commit_id(slot)
     if lc is not None:
-        return slot.commits.get(lc)
-    c = most_recent_branch_head(slot)
-    if c is not None:
-        return c
-    if slot.refs:
-        commit_ids = {cid for k, cid in slot.refs.items() if k != LOCK_REF_KEY}
-        candidates = [slot.commits[cid] for cid in commit_ids if slot.commits.get(cid)]
-        if candidates:
-            return max(candidates, key=lambda c: c.timestamp)
-    return None
+        candidate = slot.commits.get(lc)
+    else:
+        candidate = most_recent_branch_head(slot)
+        if candidate is None and slot.refs:
+            commit_ids = {cid for k, cid in slot.refs.items() if k != LOCK_REF_KEY}
+            candidates = [slot.commits[cid] for cid in commit_ids if slot.commits.get(cid)]
+            if candidates:
+                candidate = max(candidates, key=lambda c: c.timestamp)
+    if candidate is not None and is_stale_overlay_commit(candidate, installed_baseline_version):
+        return None
+    return candidate
 
 
 def write_dispatch_module(
@@ -367,6 +380,8 @@ def write_dispatch_module(
         except Exception:
             sketch_library = None
 
+    from semipy.distribution.baseline import installed_baseline_version
+
     path = _dispatch_module_path(cache_dir, portal.module_name)
     _dispatch_dir(cache_dir).mkdir(parents=True, exist_ok=True)
 
@@ -381,7 +396,7 @@ def write_dispatch_module(
     fn_line_map: dict[str, tuple[int, int]] = {}
 
     for slot in portal.slots.values():
-        active = _get_active_commit(slot)
+        active = _get_active_commit(slot, installed_baseline_version=installed_baseline_version(slot))
         if active is None:
             continue
         fn_name = function_name_for_commit(slot, active)
