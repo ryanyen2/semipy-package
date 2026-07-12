@@ -7,12 +7,20 @@ without a ``default=`` encoder, so every value persisted here must be JSON-safe;
 """
 from __future__ import annotations
 
+import json
 from dataclasses import fields
 from typing import Any
 
 from semipy.contract.models import ContractCase, SlotContract
 
 _JSON_SCALARS = (str, int, float, bool, type(None))
+
+
+def dumps_pretty(data: dict[str, Any]) -> str:
+    """Pretty-print a JSON-safe dict per KTD-6: two-space indent and sorted keys
+    so serialized contract/surface files are human-readable and diff cleanly
+    (one entry per line). ``data`` must already be JSON-safe (see ``to_json_safe``)."""
+    return json.dumps(data, indent=2, sort_keys=True) + "\n"
 
 
 def to_json_safe(value: Any) -> Any:
