@@ -36,3 +36,23 @@ def format_tool_result_line(tool_name: str, content: Any, *, debug: bool = False
     if len(raw) > 100:
         raw = raw[:97] + "…"
     return (raw or "(empty)", True)
+
+
+# ---------------------------------------------------------------------------
+# End-of-run annealing report (R7): one compact line per slot with ledger
+# activity since the run started. Pure formatting; console_core.py aggregates
+# the rows and decides whether/where to print them.
+# ---------------------------------------------------------------------------
+
+
+def format_annealing_header() -> str:
+    return f"{'slot':<14}{'decision':<10}{'+cases':>7}{'deopts':>7}{'disputes':>9}{'quarantines':>12}"
+
+
+def format_annealing_row(row: dict[str, Any]) -> str:
+    """One line of the annealing report: slot, decision, cases added, deopts,
+    disputes, quarantines -- the per-slot ledger delta since the run started."""
+    return (
+        f"{row['slot_id'][:12]:<14}{row['decision']:<10}{row['cases_added']:>7}"
+        f"{row['deopts']:>7}{row['disputes']:>9}{row['quarantines']:>12}"
+    )

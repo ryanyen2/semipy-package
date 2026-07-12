@@ -217,4 +217,5 @@ class SlotContract:
         if c is not None:
             c.status = "quarantined"
             c.supersede_reason = why
+            c.updated_ts = time.time()
             self.version += 1

@@ -434,6 +434,190 @@ def cmd_contract_diff(old_path: Path, new_path: Path, as_json: bool) -> None:
         sys.stdout.write("  (no behavioral change)\n")
 
 
+def _resolve_slot_id_for_why(portal, *, slot_id: str | None, file_line: str | None) -> str:
+    """Resolve either an explicit slot_id or a ``path:line`` reference (R8) to a
+    slot_id, reusing ``_slot_rows``'s file/line resolution. When no slot sits
+    exactly on ``line``, the nearest slot in that file is used (an editor click
+    lands inside a slot's region, not necessarily on its first line)."""
+    if slot_id:
+        return slot_id
+    if not file_line:
+        raise SystemExit("semipy why: pass --slot-id or --file-line")
+    file_part, _, line_part = file_line.rpartition(":")
+    if not file_part or not line_part.isdigit():
+        raise SystemExit(f"semipy why: --file-line must be path:line, got {file_line!r}")
+    target_line = int(line_part)
+    rows = _slot_rows(portal, file_part)
+    if not rows:
+        raise SystemExit(f"semipy why: no slot found in file {file_part!r}")
+    best = min(rows, key=lambda r: abs((r["line"] or 0) - target_line))
+    return best["slot_id"]
+
+
+def _profile_distance(a: dict, b: dict) -> int:
+    """Number of free variables whose structural profile differs between two
+    profile dicts -- the nearest-case distance (R7): 0 for an identical profile,
+    rising with each variable whose shape/kind diverges."""
+    keys = set(a) | set(b)
+    return sum(
+        1 for k in keys
+        if json.dumps(a.get(k), sort_keys=True, default=str) != json.dumps(b.get(k), sort_keys=True, default=str)
+    )
+
+
+def _nearest_case(cases: list[dict], target_profile: dict) -> tuple[dict | None, int | None]:
+    from semipy.runtime_fingerprint import compute_input_profile
+
+    best_case, best_dist = None, None
+    for c in cases:
+        try:
+            profile = compute_input_profile(c.get("input_sample") or {})
+        except Exception:
+            continue
+        dist = _profile_distance(target_profile, profile)
+        if best_dist is None or dist < best_dist:
+            best_case, best_dist = c, dist
+    return best_case, best_dist
+
+
+def _why_answer(slot, *, input_values: dict | None) -> dict:
+    """Assemble the extensional explanation for a slot (R7): spec, active commit
+    + decision, certificate + scope verdict for ``input_values``, nearest case,
+    regimes, and the certified/uncertified boundary. Reads only what is already
+    stored on the slot -- no generated source, no model call."""
+    from semipy.contract.surface import ContractSurface
+    from semipy.kernel.guard import ScopePredicate
+    from semipy.runtime_fingerprint import compute_input_profile
+    from semipy.store import _get_active_commit
+
+    surface = ContractSurface.from_slot(slot)
+    active = _get_active_commit(slot)
+    commit_id = getattr(active, "commit_id", "") or ""
+    decision = getattr(active, "decision", "") or ""
+
+    adv = getattr(slot, "advisor_state", None) or {}
+    scope_dict = (adv.get("scope_predicates") or {}).get(commit_id)
+    scope_source = None
+    scope_verdict = None
+    if scope_dict:
+        predicate = ScopePredicate.from_dict(scope_dict)
+        scope_source = predicate.source
+        if input_values is not None:
+            check = predicate.check(compute_input_profile(input_values))
+            scope_verdict = {
+                "in_scope": check.in_scope,
+                "violated": check.violated,
+                "violated_var": check.violated_var,
+            }
+
+    nearest_case = None
+    if input_values is not None:
+        case, dist = _nearest_case(list(surface.cases.values()), compute_input_profile(input_values))
+        if case is not None:
+            nearest_case = {
+                "case_id": case.get("case_id", ""),
+                "kind": case.get("kind", ""),
+                "status": case.get("status", ""),
+                "distance": dist,
+            }
+
+    return {
+        "slot_id": surface.slot_id,
+        "spec_text": surface.spec_text,
+        "active_commit": commit_id,
+        "decision": decision,
+        "certified": surface.certified,
+        "certificate": surface.certificate,
+        "scope_source": scope_source,
+        "scope_verdict": scope_verdict,
+        "nearest_case": nearest_case,
+        "regimes": surface.regimes,
+    }
+
+
+def _render_why(answer: dict) -> None:
+    out = sys.stdout
+    out.write(f"why: slot {answer['slot_id'][:12]}\n")
+    if answer["spec_text"]:
+        out.write(f"  spec: {answer['spec_text']}\n")
+    out.write(
+        f"  active commit: {(answer['active_commit'] or '(none)')[:8]}  "
+        f"decision: {answer['decision'] or '(none)'}\n"
+    )
+    if answer["certified"] and answer["certificate"]:
+        cert = answer["certificate"]
+        out.write(
+            f"  CERTIFIED: freeze licensed (epsilon={cert.get('epsilon')}, delta={cert.get('delta')})\n"
+        )
+    else:
+        out.write(
+            "  UNCERTIFIED: no licensed freeze -- partial contract "
+            "(active cases/relations are checkable; whole-slot output not frozen)\n"
+        )
+    out.write(f"  scope: {answer['scope_source'] or '(none minted yet)'}\n")
+    verdict = answer["scope_verdict"]
+    if verdict is not None:
+        if verdict["in_scope"]:
+            out.write("  input: IN SCOPE\n")
+        else:
+            out.write(f"  input: OUT OF SCOPE (violated: {verdict['violated']})\n")
+    nearest = answer["nearest_case"]
+    if nearest is not None:
+        out.write(
+            f"  nearest case: {nearest['case_id'][:12]} "
+            f"({nearest['kind']}, {nearest['status']}, distance={nearest['distance']})\n"
+        )
+    if answer["regimes"]:
+        out.write(f"  regimes ({len(answer['regimes'])}):\n")
+        for g in answer["regimes"]:
+            out.write(f"    - {g.get('predicate_source', '')}\n")
+
+
+def cmd_why(
+    portal_path: Path,
+    slot_id: str | None,
+    file_line: str | None,
+    input_json: str | None,
+    as_json: bool,
+) -> None:
+    from semipy.diagnostics_export import export_scope_deopt
+
+    portal, cache_dir = _load_portal_explicit(portal_path)
+    resolved_id = _resolve_slot_id_for_why(portal, slot_id=slot_id, file_line=file_line)
+    slot = portal.slots.get(resolved_id)
+    if slot is None:
+        raise SystemExit(f"unknown slot_id {resolved_id!r}")
+
+    input_values = None
+    if input_json:
+        try:
+            input_values = json.loads(input_json)
+        except Exception as exc:
+            raise SystemExit(f"semipy why: --input must be a JSON object: {exc}")
+        if not isinstance(input_values, dict):
+            raise SystemExit("semipy why: --input must be a JSON object")
+
+    answer = _why_answer(slot, input_values=input_values)
+
+    verdict = answer["scope_verdict"]
+    if verdict is not None and not verdict["in_scope"]:
+        ci = slot.call_site_info or {}
+        spec = slot.slot_spec or {}
+        span = spec.get("source_span") if isinstance(spec, dict) else None
+        source_file = ci.get("filename") or (span[0] if isinstance(span, (list, tuple)) and span else "")
+        lineno = ci.get("lineno") or (span[1] if isinstance(span, (list, tuple)) and len(span) >= 2 else 0)
+        export_scope_deopt(
+            cache_dir, resolved_id, verdict["violated"] or "",
+            source_file=str(source_file), source_line_start=int(lineno or 0), source_line_end=int(lineno or 0),
+        )
+
+    if as_json:
+        json.dump(answer, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return
+    _render_why(answer)
+
+
 def cmd_diagnostics(cache_dir: Path) -> None:
     path = _diagnostics_path(cache_dir)
     entries = _read_entries(path)
@@ -523,6 +707,17 @@ def main(argv: list[str] | None = None) -> None:
     pcd.add_argument("--new", type=Path, required=True, help="path to the new surface JSON")
     pcd.add_argument("--json", action="store_true", help="emit JSON")
 
+    pw = sub.add_parser(
+        "why",
+        help="Explain a slot: spec, active decision, certificate + scope verdict, nearest case",
+    )
+    pw.add_argument("--portal", type=Path, required=True)
+    pw_target = pw.add_mutually_exclusive_group(required=True)
+    pw_target.add_argument("--slot-id")
+    pw_target.add_argument("--file-line", help="path:line to resolve to a slot")
+    pw.add_argument("--input", dest="input_json", default=None, help="JSON object of runtime values to test scope membership / find the nearest case")
+    pw.add_argument("--json", action="store_true")
+
     args = p.parse_args(argv)
 
     if args.cmd == "regenerate":
@@ -560,6 +755,8 @@ def main(argv: list[str] | None = None) -> None:
             cmd_contract_diff(Path(args.old), Path(args.new), args.json)
         else:
             raise SystemExit(2)
+    elif args.cmd == "why":
+        cmd_why(Path(args.portal), args.slot_id, args.file_line, args.input_json, args.json)
     else:
         raise SystemExit(2)
 

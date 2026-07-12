@@ -74,6 +74,33 @@ def export_diagnostic(
     _write_entries(path, entries)
 
 
+def export_scope_deopt(
+    cache_dir: Path,
+    slot_id: str,
+    violated_conjunct: str,
+    *,
+    source_file: str,
+    source_line_start: int,
+    source_line_end: int,
+) -> None:
+    """Export an out-of-scope reuse (U2 deopt, surfaced by ``semipy why``) as an
+    editor diagnostic (R7/R8) -- same JSON shape as a semi-call-error so a
+    consumer (U5) needs no special-casing to render it alongside other entries.
+    """
+    export_diagnostic(
+        cache_dir,
+        slot_id,
+        source_file=source_file,
+        source_line_start=source_line_start,
+        source_line_end=source_line_end,
+        severity="warning",
+        message=f"Input out of scope; deopt (violated: {violated_conjunct}).",
+        generated_path="",
+        generated_line_range=(0, 0),
+        code="scope-deopt",
+    )
+
+
 def export_from_semi_call_error(
     cache_dir: Path,
     slot_spec: SlotSpec,

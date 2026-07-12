@@ -47,6 +47,12 @@ class SemiConfig:
     cache_dir: Path = field(default_factory=lambda: Path(".semiformal"))
     max_retries: int = 3
     verbose: bool = True
+    #: End-of-run annealing report (R7): a compact per-slot ledger-delta summary
+    #: printed once at process exit. Independent of ``verbose`` -- unlike the
+    #: per-call streaming panel, it is the only account of a run's activity once
+    #: execution finishes -- so it stays on by default and is disabled only
+    #: through this flag.
+    annealing_report: bool = True
     cocoindex_enabled: bool = False
     cocoindex_db_url: str = ""
     session_source: Optional[str] = None
