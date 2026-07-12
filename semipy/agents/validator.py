@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import inspect
 import traceback
+from dataclasses import dataclass
 from typing import Any, Optional, get_args, get_origin
 
 from semipy.agents.slot_call import invoke_slot
@@ -620,5 +621,212 @@ def verify_runtime_execution(
         typeadapter_globals=fn_globals,
         free_variables=free_variables,
         usage_hints=usage_hints,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Sampled verify (U2, R4): above a size threshold, whole-input verify is replaced
+# by a verify over a stratified row sample sized by the (ε, δ) arithmetic that the
+# freeze counterexample license already uses (kernel-plan §3.1, reused), with the
+# sampling power recorded on the result. As an interim guard until the element
+# frontier lands kernel-side, it also checks aggregate output sanity (a null/empty
+# rate blow-up vs the input) on collection outputs (origin §9.2).
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class SampledVerifyResult:
+    validation: ValidationResult
+    sampled: bool
+    population_size: int
+    sample_size: int
+    epsilon: float
+    delta: float
+    gamma: float
+    power: float
+    aggregate_ok: bool
+    aggregate_detail: str = ""
+
+    @property
+    def passed(self) -> bool:
+        return self.validation.passed and self.aggregate_ok
+
+
+def sampleable_length(value: Any) -> Optional[int]:
+    """Row/element count of a value that can be down-sampled by row (DataFrame,
+    Series, list, tuple), or ``None`` for anything else."""
+    try:
+        import pandas as _pd
+
+        if isinstance(value, (_pd.DataFrame, _pd.Series)):
+            return int(len(value))
+    except Exception:
+        pass
+    if isinstance(value, (list, tuple)):
+        return len(value)
+    return None
+
+
+def _largest_sampleable(runtime_values: dict[str, Any]) -> tuple[Optional[str], int]:
+    best_name: Optional[str] = None
+    best_n = -1
+    for name, value in runtime_values.items():
+        if isinstance(name, str) and name.startswith("_"):
+            continue
+        n = sampleable_length(value)
+        if n is not None and n > best_n:
+            best_name, best_n = name, n
+    return best_name, best_n
+
+
+def _take_rows(obj: Any, idx: list[int]) -> Any:
+    try:
+        import pandas as _pd
+
+        if isinstance(obj, (_pd.DataFrame, _pd.Series)):
+            return obj.iloc[idx]
+    except Exception:
+        pass
+    if isinstance(obj, tuple):
+        return tuple(obj[i] for i in idx)
+    return [obj[i] for i in idx]
+
+
+def _stratified_indices(n: int, k: int) -> list[int]:
+    """Exactly ``min(k, n)`` deterministic, evenly-spaced indices spanning the
+    whole range (endpoints 0 and n-1 included, so the sample is not head-blind --
+    the same defect the fingerprint fix closes)."""
+    if k >= n:
+        return list(range(n))
+    import numpy as np
+
+    idx = sorted({int(i) for i in np.linspace(0, n - 1, num=k)})
+    if len(idx) < k:  # near-equal points can collapse; backfill to exactly k
+        present = set(idx)
+        for i in range(n):
+            if i not in present:
+                idx.append(i)
+                present.add(i)
+                if len(idx) == k:
+                    break
+        idx = sorted(idx)
+    return idx
+
+
+def _emptiness_rate(value: Any) -> Optional[float]:
+    try:
+        import pandas as _pd
+
+        if isinstance(value, (_pd.DataFrame, _pd.Series)):
+            total = int(value.size)
+            if not total:
+                return 0.0
+            return float(value.isna().to_numpy().sum()) / total
+    except Exception:
+        pass
+    if isinstance(value, (list, tuple)):
+        if not value:
+            return 0.0
+        empty = sum(
+            1 for x in value
+            if x is None or (isinstance(x, (str, list, dict, tuple, set)) and len(x) == 0)
+        )
+        return empty / len(value)
+    return None
+
+
+def _aggregate_output_sanity(input_value: Any, output_value: Any) -> tuple[bool, str]:
+    in_rate = _emptiness_rate(input_value)
+    out_rate = _emptiness_rate(output_value)
+    if in_rate is None or out_rate is None:
+        return True, ""
+    if out_rate - in_rate > 0.5:
+        return False, f"output null/empty rate {out_rate:.2f} exceeds input rate {in_rate:.2f} by >0.50"
+    return True, ""
+
+
+def _sample_input_for(slot_spec: Any, values: dict[str, Any]) -> dict[str, Any]:
+    args = [values.get(n) for n in slot_spec.free_variables]
+    return {"args": tuple(args), "kwargs": {}, "runtime_values": dict(values)}
+
+
+def sampled_verify_runtime_execution(
+    *,
+    fn: Any,
+    slot_spec: Any,
+    runtime_values: dict[str, Any],
+    epsilon: float = 0.05,
+    delta: float = 0.1,
+    gamma: float = 1.0,
+    size_threshold: int = 10000,
+) -> SampledVerifyResult:
+    """Verify a reused implementation over a row sample when its largest input
+    exceeds ``size_threshold`` (R4). The sample size is the freeze counterexample
+    budget for (ε, δ, γ) -- ``n >= log(δ)/log(1-γε)`` -- and the recorded power is
+    ``1-(1-γε)^n``: a passing sampled verify licenses "faulty-row fraction < ε" at
+    that power. Below the threshold it degrades to a full whole-input verify with
+    power 1.0."""
+    from semipy.kernel.policy import counterexample_budget
+
+    expected_type = slot_spec.expected_type
+    category = slot_spec.expected_category
+    output_names = list(slot_spec.output_names or [])
+    free_variables = list(slot_spec.free_variables)
+    usage_hints = list(getattr(slot_spec, "usage_hints", []) or [])
+
+    var, population = _largest_sampleable(runtime_values)
+
+    def _verify(values: dict[str, Any]) -> ValidationResult:
+        return verify_runtime_execution(
+            fn=fn,
+            expected_type=expected_type,
+            sample_input=_sample_input_for(slot_spec, values),
+            slot_category=category,
+            output_names=output_names,
+            enable_execution=True,
+            free_variables=free_variables,
+            usage_hints=usage_hints,
+        )
+
+    def _output_for(values: dict[str, Any]) -> Any:
+        try:
+            args = [values.get(n) for n in free_variables]
+            return invoke_slot(fn, free_variables, tuple(args))
+        except Exception:
+            return None
+
+    # Below threshold (or no sampleable input): full whole-input verify.
+    if var is None or population <= size_threshold:
+        validation = _verify(runtime_values)
+        agg_ok, agg_detail = _aggregate_output_sanity(
+            runtime_values.get(var) if var else None, _output_for(runtime_values)
+        )
+        return SampledVerifyResult(
+            validation=validation, sampled=False, population_size=max(population, 0),
+            sample_size=max(population, 0), epsilon=epsilon, delta=delta, gamma=gamma,
+            power=1.0, aggregate_ok=agg_ok, aggregate_detail=agg_detail,
+        )
+
+    try:
+        n = counterexample_budget(epsilon, delta, gamma)
+    except ValueError:
+        n = population
+    n = min(n, population)
+
+    idx = _stratified_indices(population, n)
+    sample_size = len(idx)
+    # Power is computed from the *actual* sample drawn (kernel-plan §3.1's per-epoch
+    # bound 1-(1-γε)^n), so it never overstates the sampled evidence.
+    power = 1.0 - (1.0 - gamma * epsilon) ** sample_size
+
+    sampled_values = dict(runtime_values)
+    sampled_values[var] = _take_rows(runtime_values[var], idx)
+
+    validation = _verify(sampled_values)
+    agg_ok, agg_detail = _aggregate_output_sanity(sampled_values[var], _output_for(sampled_values))
+    return SampledVerifyResult(
+        validation=validation, sampled=True, population_size=population, sample_size=sample_size,
+        epsilon=epsilon, delta=delta, gamma=gamma, power=power,
+        aggregate_ok=agg_ok, aggregate_detail=agg_detail,
     )
 
