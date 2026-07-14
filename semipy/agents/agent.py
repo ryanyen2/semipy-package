@@ -656,9 +656,30 @@ class SemiAgent:
         config = get_config()
         pipeline_trace = _pipeline_trace_enabled()
         stream_mode = effective_stream_display_mode(verbose=self.verbose)
+        kernel_required_packages = [
+            package.strip()
+            for package in config.kernel_required_packages.split(",")
+            if package.strip()
+        ]
+        kernel_extra_mounts = list(
+            dict.fromkeys(
+                path.strip()
+                for paths in (config.kernel_extra_mounts, config.kernel_allowed_folders)
+                for path in paths.split(",")
+                if path.strip()
+            )
+        )
         executor = GistExecutor(
             timeout=config.gist_timeout,
             e2b_api_key=config.e2b_api_key,
+            backend=config.execution_backend,
+            kernel_image_name=config.kernel_image_name,
+            kernel_container_name=config.kernel_container_name,
+            kernel_host=config.kernel_host,
+            kernel_port=config.kernel_port,
+            kernel_required_packages=kernel_required_packages,
+            kernel_extra_mounts=kernel_extra_mounts,
+            kernel_reuse_container=config.kernel_reuse_container,
         )
         deps = SemiAgentDeps(
             spec=spec,

@@ -33,6 +33,7 @@ semipy = "semipy.cli:main"
 
 [project.optional-dependencies]
 jupyter = ["ipywidgets>=8.1"]
+kernel = ["requests>=2.0", "websocket-client>=1.0"]
 pdf = ["liteparse>=1.0", "llama-cloud>=1.6.0"]
 e2b = ["e2b-code-interpreter>=2.4.1"]
 cocoindex = ["cocoindex>=0.3.19"]

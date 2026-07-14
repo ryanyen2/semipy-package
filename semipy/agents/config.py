@@ -10,6 +10,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def _coerce_path_list(value: object) -> str:
+    """Normalize a comma-separated path string or list of paths for config storage."""
+    if isinstance(value, (list, tuple, set)):
+        return ",".join(os.fspath(path) for path in value if os.fspath(path))
+    return os.fspath(value)
+
 # Terminal/Jupyter stream UI (fixed; not exposed on SemiConfig).
 STREAM_PEEK_LINES = 4
 STREAM_TIMELINE = True
@@ -43,7 +50,24 @@ class SemiConfig:
     #: on timeout the judge yields no verdict and the aggregator abstains (reuse/pass).
     judge_timeout: int = 60
     e2b_api_key: Optional[str] = field(default_factory=lambda: os.getenv("E2B_API_KEY"))
+    execution_backend: str = field(default_factory=lambda: os.getenv("SEMIPY_EXECUTION_BACKEND", "auto"))
     gist_timeout: int = 30
+    kernel_image_name: str = field(default_factory=lambda: os.getenv("SEMIPY_KERNEL_IMAGE", "kernel-gateway-demo"))
+    kernel_container_name: str = field(default_factory=lambda: os.getenv("SEMIPY_KERNEL_CONTAINER", "semipy-kernel-container"))
+    kernel_host: str = field(default_factory=lambda: os.getenv("SEMIPY_KERNEL_HOST", "127.0.0.1"))
+    kernel_port: int = field(default_factory=lambda: int(os.getenv("SEMIPY_KERNEL_PORT", "8888")))
+    kernel_required_packages: str = field(default_factory=lambda: os.getenv("SEMIPY_KERNEL_REQUIRED_PACKAGES", ""))
+    kernel_extra_mounts: str = field(default_factory=lambda: os.getenv("SEMIPY_KERNEL_EXTRA_MOUNTS", ""))
+    kernel_allowed_folders: str = field(
+        default_factory=lambda: os.getenv(
+            "SEMIPY_KERNEL_ALLOWED_FOLDERS",
+            os.getenv("SEMIPY_KERNEL_EXTRA_MOUNTS", ""),
+        )
+    )
+    kernel_reuse_container: bool = field(
+        default_factory=lambda: os.getenv("SEMIPY_KERNEL_REUSE_CONTAINER", "").lower()
+        in {"1", "true", "yes", "on"}
+    )
     cache_dir: Path = field(default_factory=lambda: Path(".semiformal"))
     max_retries: int = 3
     verbose: bool = True
@@ -207,5 +231,10 @@ def configure(**kwargs: object) -> None:
             continue
         if key == "cache_dir":
             setattr(cfg, key, Path(val))  # type: ignore[arg-type]
+        elif key in {"kernel_allowed_folders", "kernel_extra_mounts"}:
+            paths = _coerce_path_list(val)
+            setattr(cfg, key, paths)
+            if key == "kernel_allowed_folders":
+                setattr(cfg, "kernel_extra_mounts", paths)
         else:
             setattr(cfg, key, val)
