@@ -121,6 +121,11 @@ class DecisionSet:
     slot_id: str = ""
     decisions: list[Decision] = field(default_factory=list)
     candidates: dict[str, str] = field(default_factory=dict)
+    #: Observation-population fingerprint (``_obs_content_fingerprint``) at the last
+    #: time this set was observed. When the slot grows a genuinely new input pattern
+    #: the fingerprint changes, triggering a re-observation that can re-open a merged
+    #: branch (the ∃-sample-as-∀ caveat -- see ``decisions.reopen``).
+    obs_fingerprint: str = ""
 
     def is_empty(self) -> bool:
         return not self.decisions
@@ -136,6 +141,7 @@ class DecisionSet:
             "slot_id": self.slot_id,
             "decisions": [d.to_dict() for d in self.decisions],
             "candidates": dict(self.candidates),
+            "obs_fingerprint": self.obs_fingerprint,
         }
 
     @classmethod
@@ -144,4 +150,5 @@ class DecisionSet:
             slot_id=d.get("slot_id", ""),
             decisions=[Decision.from_dict(x) for x in d.get("decisions", [])],
             candidates=dict(d.get("candidates", {})),
+            obs_fingerprint=d.get("obs_fingerprint", ""),
         )

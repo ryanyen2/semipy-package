@@ -332,6 +332,52 @@ def _update_semantic_state(
     _semantic_last_fingerprints[counter_key] = fp
 
 
+def _maybe_reopen_decisions(
+    slot: Any,
+    slot_spec: SlotSpec,
+    runtime_values: dict[str, Any],
+    *,
+    portal: Any,
+    cache_dir: Path,
+) -> None:
+    """Re-open a committed decision when input drift splits a merged branch (Phase 5).
+
+    Only runs when a genuinely new input *pattern* has appeared since the decision
+    was committed (fingerprint changed). Re-observation re-runs the stored
+    candidate sources in memory -- no LLM, no regeneration -- and re-surfaces the
+    fork if the enlarged population resolves a previously-merged branch. A no-op
+    unless the slot carries a non-empty ``DecisionSet``.
+    """
+    try:
+        from semipy.decisions.persistence import attach_decision_set, decision_set_for
+        from semipy.decisions.reopen import reopen_on_input_drift
+
+        dset = decision_set_for(slot)
+        if dset is None or dset.is_empty() or not dset.candidates:
+            return
+        current_fp = _obs_content_fingerprint(slot)
+        if not current_fp or current_fp == dset.obs_fingerprint:
+            return
+        free_vars = [v for v in (slot_spec.free_variables or []) if v != "self"]
+        sample_rows = [
+            {v: si["runtime_values"].get(v) for v in free_vars}
+            for si in _reuse_verify_sample_inputs(slot_spec, slot, runtime_values)
+        ]
+        reopen_on_input_drift(
+            dset,
+            free_variables=free_vars,
+            sample_rows=sample_rows,
+            output_names=list(slot_spec.output_names or []) or None,
+            new_fingerprint=current_fp,
+        )
+        # Persist even when nothing re-opened: recording the evaluated fingerprint
+        # keeps the same population from being re-observed on every later call.
+        attach_decision_set(slot, dset)
+        save_portal(cache_dir, portal)
+    except Exception:
+        pass
+
+
 def _call_site_from_slot(slot_spec: SlotSpec) -> SemiCallSite:
     filename, lineno, _end = slot_spec.source_span
     return SemiCallSite(filename=filename, lineno=lineno, func_qualname=slot_spec.enclosing_function_qualname)
@@ -1721,6 +1767,14 @@ def _execute_slot_locked(
         sketch_library=sketch_library,
     )
 
+    # Re-open a committed fork if new input patterns split a previously-merged
+    # branch (Phase 5). Only on REUSE -- GENERATE/ADAPT rebuild the DecisionSet
+    # from a fresh draw anyway. Fingerprint-gated, so a no-op unless input drift.
+    if config.decisions_enabled and resolution.decision == Decision.REUSE:
+        _maybe_reopen_decisions(
+            slot, slot_spec, runtime_values, portal=portal, cache_dir=cache_dir
+        )
+
     # Compute user module globals once here for dispatch module loading and validation.
     # This ensures user-defined types referenced by generated functions are available
     # in the dispatch exec namespace on both REUSE and GENERATE paths.
@@ -2245,6 +2299,9 @@ def _execute_slot_locked(
         try:
             from semipy.decisions.persistence import attach_decision_set
 
+            # Baseline the observation population so a later input-pattern drift can
+            # re-open a merged branch (Phase 5 re-open hook).
+            _pending_decision_set.obs_fingerprint = _obs_content_fingerprint(slot)
             attach_decision_set(slot, _pending_decision_set)
         except Exception:
             pass

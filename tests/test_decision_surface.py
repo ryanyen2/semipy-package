@@ -32,6 +32,33 @@ def test_two_branch_decision_renders_one_line_with_labels_and_weights():
     assert "count as 0 (40%)" in line
 
 
+def test_decision_line_surfaces_discriminating_input_and_outputs():
+    # A fork where the observer recorded the separating input and each branch's
+    # output, and one branch still pools >1 candidate (equivalent over N inputs).
+    d = Decision(
+        germ="null",
+        axis_label="null cover",
+        branches=[
+            Branch("skip", ["a", "b"], 0.6, example_in={"rows": [{"c": None}]},
+                   example_out=None, equivalent_over_n=19),
+            Branch("count as 0", ["c"], 0.4, example_in={"rows": [{"c": None}]},
+                   example_out=0.0),
+        ],
+    )
+    line = format_decision_line(d)
+    # Existing shape preserved.
+    assert line.startswith("#? null cover:")
+    assert "skip (60%)" in line
+    assert "count as 0 (40%)" in line
+    # The separating input is surfaced once so a reviewer sees *why* they differ.
+    assert "in=" in line
+    assert "'c'" in line
+    # The pooled branch is flagged as only equivalent over the tested inputs.
+    assert "19" in line
+    # One line, no matter how much evidence.
+    assert "\n" not in line
+
+
 def test_resolved_decision_renders_nothing():
     dset = DecisionSet(slot_id="s", decisions=[_decision(status="resolved")], candidates={})
     assert render_open_decisions(dset) == []

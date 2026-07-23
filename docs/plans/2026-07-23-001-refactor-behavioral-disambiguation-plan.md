@@ -269,19 +269,39 @@ candidates not proven distinct (3 candidates, 2 classes → gap 1; all-distinct 
 gap 0); a pooled branch carries `equivalent_over_n == tested_inputs` and a
 singleton carries `None`; round-trips through `to_dict`.
 
-### Phase 5 — Surface the evidence + re-open hook
+### Phase 5 — Surface the evidence + re-open hook — DONE
 
-- `surface.py:format_decision_line` (`surface.py:21-33`) currently renders only
-  `fate_label` + `weight`. Add the discriminating input (or the "agree over N
-  tested inputs" caveat) so a reviewer can see *why* two options differ:
-  `#? <axis>: A [in="…"→out=X] (60%) | B [in="…"→out=Y] (40%)`. Keep it one line;
-  truncate examples.
-- Re-open hook: `slot_observations.py:300` already computes
-  `_obs_content_fingerprint` — a pattern-level fingerprint that changes only when
-  a genuinely new input *pattern* appears. Register a check on slot execution: if
-  the fingerprint changed since the DecisionSet was committed, re-run Phase-2
-  observation over the enlarged population; if a previously-merged branch now
-  splits, re-open the decision (mark it open again and re-render `#?`).
+- `surface.py:format_decision_line` now renders the evidence **additively** (a
+  branch with none renders exactly as before, so the existing `#?` tests are
+  unchanged): each branch's example output (`->out`), a `≈N` marker on a branch
+  that only pooled its candidates over N tested inputs (the ∃-sample caveat), and
+  the shared discriminating input once as a trailing `[in=...]`. Examples are
+  truncated (`_short`, 48 chars) and it stays one line. I dropped the plan's
+  per-branch `[in=…→out=…]` shape in favor of one shared `[in=…]` + per-branch
+  `->out` because the separating input is the same for every branch (it is the
+  row the observer clustered over), so repeating it per branch was noise.
+- Re-open hook, in three surgical pieces:
+  - `model.py` `DecisionSet` — `obs_fingerprint: str`, persisted. Baselined at
+    commit (`slot_resolver.py`, at `attach_decision_set`) to
+    `_obs_content_fingerprint(slot)`.
+  - `decisions/reopen.py` (new) `reopen_on_input_drift` — re-clusters the stored
+    candidate sources (already on the DecisionSet, so **no LLM / no regeneration**)
+    over the enlarged population via `observe_pure`; if the partition got finer
+    than the committed class count (distinct branch signatures), rebuilds the
+    decisions offline (`classify_divergence(use_llm=False)`, re-opened) and returns
+    `True`. Records the new fingerprint so the same population is not re-observed.
+  - `slot_resolver.py` `_maybe_reopen_decisions` — called on the **REUSE** path
+    only (GENERATE/ADAPT rebuild the DecisionSet from a fresh draw anyway), gated
+    by `decisions_enabled` and a fingerprint change, so it is a no-op unless a
+    genuinely new input *pattern* has appeared. It reuses the same
+    `_reuse_verify_sample_inputs` population as Phase 2.
+
+Verification (done): `tests/test_decision_surface.py`
+::`test_decision_line_surfaces_discriminating_input_and_outputs` (evidence shown,
+existing substrings preserved); `tests/test_decision_reopen.py` — a fork
+committed over one input, where a second input splits a merged branch, re-opens
+(3 candidates → 3 distinct branches, all open, fingerprint advanced); a
+non-splitting population does not re-open but still advances the fingerprint.
 
 ---
 
