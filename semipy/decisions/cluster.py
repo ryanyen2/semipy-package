@@ -89,11 +89,20 @@ class Cluster:
 
 def cluster_signatures(
     signatures: dict[str, tuple[str, ...]],
+    scores: dict[str, float] | None = None,
 ) -> list[Cluster]:
     """Group candidate ids by equal signature into weighted branches.
 
-    Ordering is deterministic: heaviest branch first, ties broken by signature,
-    so branch ids and weights are stable across runs.
+    Ordering is deterministic: heaviest branch first (by vote count), ties broken
+    by signature, so branch ids are stable across runs.
+
+    Weighting (semantic-entropy style, Kuhn/Gal/Farquhar ICLR 2023): when every
+    candidate has a non-``None`` score (a length-normalized mean log-prob), a
+    branch's weight is its share of summed sequence probability -- a softmax over
+    ``scores`` with a subtract-max for numerical stability -- rather than a raw
+    vote count. Any missing score (including "no scores at all", today's default
+    and any provider without logprobs) falls back to exactly ``len(members) /
+    total``, unchanged.
     """
     total = len(signatures)
     if total == 0:
@@ -106,16 +115,31 @@ def cluster_signatures(
         groups.items(),
         key=lambda kv: (-len(kv[1]), [str(s) for s in kv[0]]),
     )
+
+    weighted = bool(scores) and all(
+        scores.get(cid) is not None for cid in signatures  # type: ignore[union-attr]
+    )
+    exp_scores: dict[str, float] = {}
+    total_exp = 0.0
+    if weighted:
+        m = max(scores[cid] for cid in signatures)  # type: ignore[index]
+        exp_scores = {cid: math.exp(scores[cid] - m) for cid in signatures}  # type: ignore[index]
+        total_exp = sum(exp_scores.values())
+
     clusters: list[Cluster] = []
     for idx, (sig, cids) in enumerate(ordered):
         members = tuple(sorted(cids))
+        if weighted:
+            weight = sum(exp_scores[cid] for cid in members) / total_exp
+        else:
+            weight = len(members) / total
         clusters.append(
             Cluster(
                 branch_id=f"b{idx}",
                 candidate_ids=members,
                 signature=sig,
                 representative_id=members[0],
-                weight=len(members) / total,
+                weight=weight,
             )
         )
     return clusters

@@ -227,17 +227,17 @@ def read_castaway_csv(path: Path) -> CTDCast:
 # --------------------------------------------------------------------------- #
 @semiformal
 def map_channels(declared: list[str], units: list[str], instrument: str) -> dict[str, str]:
-    #< intent: Map declared channels to canonical roles
+    #< intent: canonicalize declared sensor channels
     #< given: declared channel names with corresponding units
-    #< given: instrument ignored for role selection
-    #< by: matching channel labels and unit synonyms to allowed canonical roles
+    #< given: units may be missing or scalar
+    #< by: matching known labels and unit synonyms; because units disambiguate pressure and conductivity
     #< unless: unrecognized channels are omitted
     #> map each declared channel to one canonical role chosen only from
     #> pressure_dbar, temperature_c, salinity_psu, conductivity, oxygen, fluorescence.
     #> disambiguate with the units: "db"/"Decibar" is pressure_dbar; S/m, mS/cm and
     #> uS/cm are all conductivity. leave a channel out entirely if it fits no role.
     roles = ...
-    #< yields: object containing roles mapping for recognized channels
+    #< yields: object with roles mapping channel names to canonical roles
     return roles
 
 

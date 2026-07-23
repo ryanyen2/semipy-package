@@ -94,12 +94,14 @@ def _observe(
     output_names: Optional[list[str]],
     effectful_runtime_values: Optional[dict[str, Any]],
     timeout: int,
+    candidate_scores: Optional[dict[str, float]] = None,
 ) -> DivergenceResult:
     if effectful_runtime_values is not None:
         return observe_effectful(
             candidates,
             free_variables=free_variables,
             runtime_values=effectful_runtime_values,
+            scores=candidate_scores,
         )
     return observe_pure(
         candidates,
@@ -107,6 +109,7 @@ def _observe(
         sample_rows=sample_rows or [],
         output_names=output_names,
         timeout=timeout,
+        scores=candidate_scores,
     )
 
 
@@ -150,6 +153,7 @@ def _observe_and_search(
     output_names: Optional[list[str]],
     effectful_runtime_values: Optional[dict[str, Any]],
     timeout: int,
+    candidate_scores: Optional[dict[str, float]] = None,
 ) -> _Observation:
     """Observe divergence, then (pure slots) probe for a hidden splitting input.
 
@@ -164,6 +168,7 @@ def _observe_and_search(
         output_names=output_names,
         effectful_runtime_values=effectful_runtime_values,
         timeout=timeout,
+        candidate_scores=candidate_scores,
     )
     observe_rows = sample_rows
     germ = _germ_from_sample(sample_rows, free_variables) if pure else "output"
@@ -191,6 +196,7 @@ def _observe_and_search(
                 output_names=output_names,
                 effectful_runtime_values=None,
                 timeout=timeout,
+                candidate_scores=candidate_scores,
             )
     return _Observation(divergence=divergence, observe_rows=observe_rows, germ=germ, example_in=example_in)
 
@@ -207,6 +213,7 @@ def resolve_with_decisions(
     max_candidates: int = 5,
     use_llm: bool = True,
     timeout: int = 15,
+    candidate_scores: Optional[dict[str, float]] = None,
 ) -> DecisionOutcome:
     """Draw candidates adaptively and resolve to a head plus (if forked) a DecisionSet.
 
@@ -232,6 +239,7 @@ def resolve_with_decisions(
         output_names=output_names,
         effectful_runtime_values=effectful_runtime_values,
         timeout=timeout,
+        candidate_scores=candidate_scores,
     )
 
     # Escalate the draw whether or not the initial sample diverged: on agreement
@@ -248,6 +256,7 @@ def resolve_with_decisions(
             output_names=output_names,
             effectful_runtime_values=effectful_runtime_values,
             timeout=timeout,
+            candidate_scores=candidate_scores,
         )
 
     divergence = obs.divergence

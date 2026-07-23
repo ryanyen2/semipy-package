@@ -64,6 +64,43 @@ def test_agreeing_candidates_surface_no_decision(monkeypatch):
     assert dset.is_empty()
 
 
+def test_probability_weighting_reaches_cluster_weights(monkeypatch):
+    """When decision_probability_weighting is on, _resolve_slot_with_decisions must
+    populate candidate_scores from generate_scored's live draw (not a stale
+    pre-draw snapshot -- see the bug this regression test guards against) and the
+    surfaced branch weights must reflect it, not just the raw vote count.
+    """
+    from semipy.agents.config import get_config
+    import semipy.agents.generator as generator_mod
+
+    cfg = get_config()
+    monkeypatch.setattr(cfg, "decision_probability_weighting", True)
+
+    # 3 KEEP candidates with weak scores, 2 LAST candidates with much stronger
+    # scores -- naive vote share would favor KEEP (3/5 == 0.6); the softmax over
+    # scores should favor LAST instead.
+    sources = [_KEEP, _KEEP, _KEEP, _LAST, _LAST]
+    scores = [-5.0, -5.0, -5.0, -0.1, -0.1]
+    calls = {"i": 0}
+
+    def _fake_generate_scored(_spec):
+        i = calls["i"]
+        calls["i"] += 1
+        idx = i if i < len(sources) else len(sources) - 1
+        return _FakeEntry(sources[idx]), scores[idx]
+
+    monkeypatch.setattr(generator_mod, "generate_scored", _fake_generate_scored)
+
+    head, dset = sr._resolve_slot_with_decisions(
+        _slot_spec(), None, {"name": "Maria de la Cruz"}
+    )
+    assert head is not None
+    assert not dset.is_empty()
+    branches = {tuple(sorted(b.candidate_ids)): b.weight for d in dset.decisions for b in d.branches}
+    last_branch = next(w for ids, w in branches.items() if len(ids) == 2)
+    assert last_branch > 0.6
+
+
 def test_all_candidates_fail_falls_back_to_single_generation(monkeypatch):
     class _BoomAgent:
         def generate(self, _spec):

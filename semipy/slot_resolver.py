@@ -1507,18 +1507,40 @@ def _resolve_slot_with_decisions(
 
     cfg = get_config()
     free_vars = [v for v in (slot_spec.free_variables or []) if v != "self"]
+    probability_weighting = bool(getattr(cfg, "decision_probability_weighting", False))
 
     # Memoize by draw index so a pre-draw (for effectful detection) and the
     # resolver's own draws share generations, and so the chosen head source maps
     # back to its compiled CacheEntry.
     by_index: dict[int, str | None] = {}
     entry_by_source: dict[str, Any] = {}
+    # Populated live during the draw (candidates are generated lazily inside
+    # ``resolve_with_decisions``), keyed to match ``_draw``'s "c{i}" candidate ids.
+    # Passed by reference below so ``cluster_signatures`` sees every score gathered
+    # by the time it runs, without this function needing to know the draw order.
+    candidate_scores: dict[str, float] = {}
 
     def generate_candidate(i: int) -> str | None:
         if i in by_index:
             return by_index[i]
         try:
-            entry = SemiAgent().generate(generation_spec)
+            entry = None
+            if probability_weighting:
+                from semipy.agents.generator import generate_scored
+
+                try:
+                    entry, score = generate_scored(generation_spec)
+                    if score is not None:
+                        candidate_scores[f"c{i}"] = score
+                except Exception:
+                    # Scoring generation itself failed (no key, model outage, a
+                    # provider that can't run NativeOutput). Fall back to the
+                    # normal coder so the candidate still exists -- just unscored
+                    # -- rather than losing it and, with enough losses, silently
+                    # collapsing decision-mode into "no fork ever".
+                    entry = None
+            if entry is None:
+                entry = SemiAgent().generate(generation_spec)
             src = entry.generated_source
             by_index[i] = src
             if src and src not in entry_by_source:
@@ -1563,6 +1585,7 @@ def _resolve_slot_with_decisions(
         max_candidates=getattr(cfg, "decision_max_candidates", 5),
         use_llm=True,
         timeout=getattr(cfg, "decision_cost_budget_s", 15),
+        candidate_scores=candidate_scores,
     )
 
     head_source = outcome.head_source

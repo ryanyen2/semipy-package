@@ -37,6 +37,9 @@ class CandidateRun:
     records: list[dict[str, Any]] = field(default_factory=list)
     signature: tuple[str, ...] = (UNRUNNABLE,)
     error: Optional[str] = None
+    #: Length-normalized mean log-prob from decision-mode candidate scoring, or
+    #: ``None`` when unavailable (default path, or any provider without logprobs).
+    logprob: Optional[float] = None
 
 
 @dataclass
@@ -72,12 +75,15 @@ def observe_pure(
     output_names: Optional[list[str]] = None,
     scaffold_source: Optional[str] = None,
     timeout: int = 15,
+    scores: Optional[dict[str, float]] = None,
 ) -> DivergenceResult:
     """Execute each candidate over ``sample_rows`` and cluster by return value.
 
     ``sample_rows`` is a list of dicts keyed by free-variable name (the same row
     shape the contract runner uses). A candidate whose gist cannot run is its own
-    ``UNRUNNABLE`` cluster, never silently dropped.
+    ``UNRUNNABLE`` cluster, never silently dropped. ``scores`` (candidate_id ->
+    length-normalized mean log-prob) is optional; passed through to cluster
+    weighting and stashed per-run for inspection.
     """
     runs: dict[str, CandidateRun] = {}
     for cid, source in candidates.items():
@@ -105,9 +111,10 @@ def observe_pure(
             records=records,
             signature=signature,
             error=error,
+            logprob=(scores or {}).get(cid),
         )
 
-    clusters = cluster_signatures({cid: r.signature for cid, r in runs.items()})
+    clusters = cluster_signatures({cid: r.signature for cid, r in runs.items()}, scores=scores)
     return DivergenceResult(clusters=clusters, runs=runs, mode="pure")
 
 
@@ -155,6 +162,7 @@ def observe_effectful(
     free_variables: list[str],
     runtime_values: dict[str, Any],
     seed_existing: bool = True,
+    scores: Optional[dict[str, float]] = None,
 ) -> DivergenceResult:
     """Cluster effectful candidates by their reified ``EffectScript``.
 
@@ -217,7 +225,8 @@ def observe_effectful(
             records=records,
             signature=signature,
             error=err,
+            logprob=(scores or {}).get(cid),
         )
 
-    clusters = cluster_signatures({cid: r.signature for cid, r in runs.items()})
+    clusters = cluster_signatures({cid: r.signature for cid, r in runs.items()}, scores=scores)
     return DivergenceResult(clusters=clusters, runs=runs, mode="effectful")

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -222,8 +223,10 @@ def save_portal(cache_dir: Path, portal: Portal) -> None:
     path = _portal_path(cache_dir, portal.session_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     data = _portal_to_dict(portal)
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp_path, "w") as f:
+        json.dump(data, f, indent=2, default=str)
+    os.replace(tmp_path, path)
 
 
 def _merge_slot(base: Slot, other: Slot) -> Slot:

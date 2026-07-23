@@ -72,3 +72,36 @@ def make_responses_model(
         return model, settings
     except Exception:
         return None, None
+
+
+def make_scoring_model() -> tuple[Any, Any] | tuple[None, None]:
+    """Build the OpenAI Responses model + settings for decision-mode candidate scoring.
+
+    Deliberately does NOT go through ``config.model_for_role`` -- that resolves to
+    ``openai_model`` (default ``gpt-5.5``) whenever no override is set, and pydantic_ai's
+    OpenAI profile always runs ``gpt-5.5`` in reasoning mode, which unconditionally strips
+    ``openai_logprobs``/``openai_top_logprobs`` before the request is sent. ``config.
+    decision_scoring_model`` names a model (``gpt-5.1``/``gpt-5.2``) that supports
+    ``openai_reasoning_effort="none"``, the one bucket that keeps sampling params, so
+    logprobs actually survive on the wire. Returns ``(None, None)`` on any failure
+    (missing key, import error); the caller treats that as "no score for this candidate."
+    """
+    config = get_config()
+    api_key = config.openai_api_key or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return None, None
+    try:
+        from pydantic_ai.models.openai import (
+            OpenAIResponsesModel,
+            OpenAIResponsesModelSettings,
+        )
+
+        model = OpenAIResponsesModel(config.decision_scoring_model)
+        settings = OpenAIResponsesModelSettings(
+            openai_reasoning_effort="none",
+            openai_logprobs=True,
+            openai_top_logprobs=1,
+        )
+        return model, settings
+    except Exception:
+        return None, None

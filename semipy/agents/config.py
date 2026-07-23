@@ -171,6 +171,18 @@ class SemiConfig:
     #: Wall-clock budget (seconds) for observing one slot's candidate divergence,
     #: bounding cost on expensive/nondeterministic slots (U11).
     decision_cost_budget_s: int = 20
+    #: Sub-switch: weight ``#?`` branches by summed candidate sequence probability
+    #: (semantic-entropy style) instead of raw vote count. Falls back to exactly
+    #: today's ``len(members)/total`` whenever any candidate lacks a score.
+    decision_probability_weighting: bool = True
+    #: Model id for decision-mode candidate draws only, used to extract per-token
+    #: logprobs for probability weighting. Can't reuse ``model_for_role("coder")``
+    #: (falls back to ``openai_model`` = ``gpt-5.5``, which pydantic_ai's OpenAI
+    #: profile always runs in reasoning mode, unconditionally stripping
+    #: ``openai_logprobs``/``openai_top_logprobs`` before the request is sent).
+    #: ``gpt-5.1``/``gpt-5.2`` are the only OpenAI models this pydantic_ai version
+    #: flags as supporting ``reasoning_effort="none"``, which keeps sampling params.
+    decision_scoring_model: str = "gpt-5.2"
 
     def model_for_role(self, role: Optional[str] = None) -> str:
         """Return the model id for an orchestration role, falling back to ``openai_model``.

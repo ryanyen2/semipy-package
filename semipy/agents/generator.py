@@ -12,11 +12,12 @@ import json
 import textwrap
 from typing import Any, Optional
 
-from pydantic_ai import Agent, RunContext
+from pydantic_ai import Agent, NativeOutput, RunContext
 
 from semipy.agents.config import get_config
 from semipy.agents.profiler import profile_runtime_context
 from semipy.models import CommitmentRecord, SemiAgentDeps
+from semipy.types import CacheEntry, SemiGenerationError
 
 
 def _create_openai_model(config: Any) -> Any:
@@ -281,6 +282,168 @@ def _create_agent() -> Agent[SemiAgentDeps, CommitmentRecord]:
     return agent
 
 
+def _create_scoring_agent() -> Agent[SemiAgentDeps, CommitmentRecord]:
+    """Decision-mode candidate agent: same tool + prompt as ``_create_agent``, but the
+    model/settings come from ``make_scoring_model`` (logprob-instrumented) and the
+    output type is ``NativeOutput`` so the finishing turn is a text message rather
+    than a tool call -- pydantic_ai only attaches logprobs to text output.
+    """
+    from semipy.orchestration.runtime import make_scoring_model
+
+    model, settings = make_scoring_model()
+    if model is None:
+        raise ValueError(
+            "OPENAI_API_KEY must be set (env or semi.configure(openai_api_key=...))"
+        )
+    agent = Agent[SemiAgentDeps, CommitmentRecord](
+        model,
+        model_settings=settings,
+        deps_type=SemiAgentDeps,
+        output_type=NativeOutput(CommitmentRecord),
+        system_prompt=SYSTEM_PROMPT,
+    )
+
+    @agent.tool
+    async def execute_action_program(ctx: RunContext[SemiAgentDeps], code: str) -> str:
+        """Execute a Python action program in E2B to gather evidence and test your candidate function.
+
+        The program has access to three helper functions:
+          profile_slot()                        -> str   data profile summary
+          read_upstream()                       -> list  parent implementation sources
+          build_and_run_gist(source, invoc)     -> dict  test a function (success, result, error)
+
+        The program MUST end with: print(_json.dumps(result_dict))
+        where result_dict is a JSON-serializable dict with the observation fields:
+        data_profile, upstream_summary, gist_result, action_errors.
+
+        Returns the JSON string from the program's stdout.
+        """
+        deps = ctx.deps
+        executor = getattr(deps, "executor", None)
+        if executor is None:
+            return json.dumps({"action_errors": ["No executor in deps"]})
+        spec = getattr(deps, "spec", None)
+        preamble = _build_action_preamble(spec) if spec else "import json as _json\n\n"
+        composed = preamble + "\n" + code
+        result = await executor.execute_action_program_async(composed)
+        try:
+            bundle = json.loads(result)
+            gs = bundle.get("generated_source") or bundle.get("gist_result", {}) or {}
+            if isinstance(gs, str) and gs.strip():
+                deps.generated_source = gs
+        except Exception:
+            pass
+        return result
+
+    return agent
+
+
+def _extract_mean_logprob(run_result: Any) -> Optional[float]:
+    """Length-normalized mean log-prob of the finishing text message, or ``None``.
+
+    ``NativeOutput`` mode makes the finishing turn a plain text message, which is
+    the only shape pydantic_ai attaches ``provider_details['logprobs']`` to. Missing
+    or malformed logprobs (wrong output shape, provider quirk) return ``None`` rather
+    than raising -- callers treat that exactly like "no score for this candidate."
+    """
+    try:
+        response = run_result.response
+        parts = list(getattr(response, "parts", None) or [])
+    except Exception:
+        return None
+    for part in reversed(parts):
+        if type(part).__name__ != "TextPart":
+            continue
+        details = getattr(part, "provider_details", None) or {}
+        logprobs = details.get("logprobs")
+        if not logprobs:
+            continue
+        try:
+            values = [float(lp["logprob"]) for lp in logprobs]
+        except Exception:
+            return None
+        if not values:
+            return None
+        return sum(values) / len(values)
+    return None
+
+
+def generate_scored(spec: Any) -> tuple[CacheEntry, Optional[float]]:
+    """Generate one decision-mode candidate, alongside its length-normalized mean
+    log-prob (``None`` when logprobs aren't available -- callers fall back to naive
+    vote-count weighting in that case).
+
+    Single-attempt: unlike ``SemiAgent.generate``, this does not retry on validation
+    failure. Decision-mode already draws several candidates per slot and drops any
+    that fail (see ``slot_resolver._resolve_slot_with_decisions``), so a failed draw
+    here is simply absorbed by the ensemble rather than retried in place.
+    """
+    from semipy.agents.compiler import _compile_source
+    from semipy.agents.executor import GistExecutor
+    from semipy.agents.validator import validate
+    from semipy.orchestration.runtime import embed_run
+
+    config = get_config()
+    executor = GistExecutor(timeout=config.gist_timeout, e2b_api_key=config.e2b_api_key)
+    deps = SemiAgentDeps(spec=spec, executor=executor)
+
+    # SemiAgent._build_user_prompt depends only on `spec`; a throwaway instance
+    # avoids duplicating that prompt logic here.
+    from semipy.agents.agent import SemiAgent
+
+    prompt = SemiAgent()._build_user_prompt(spec)
+    agent = get_scoring_agent()
+
+    async def _run() -> Any:
+        try:
+            return await agent.run(prompt, deps=deps)
+        finally:
+            if hasattr(executor, "close_async"):
+                await executor.close_async()
+
+    run_result = embed_run(_run())
+
+    output = run_result.output
+    if isinstance(output, CommitmentRecord):
+        commitment_record: Optional[CommitmentRecord] = output
+        source = (output.generated_source or "").strip()
+    else:
+        commitment_record = None
+        source = (getattr(deps, "generated_source", None) or "").strip()
+
+    if not source:
+        raise SemiGenerationError(
+            "Scoring agent did not produce a Python function. "
+            "Check that the action program calls build_and_run_gist and the CommitmentRecord "
+            "has generated_source set."
+        )
+
+    result = validate(
+        source,
+        expected_type=spec.expected_type,
+        sample_input=spec.sample_input,
+        enable_execution=True,
+        spec=spec,
+    )
+    if not result.passed:
+        raise SemiGenerationError(
+            result.error_message or "Validation failed.",
+            last_source=source,
+            last_result=result,
+        )
+
+    fn = _compile_source(source)
+    entry = CacheEntry(
+        generated_source=source,
+        compiled_fn=fn,
+        expected_type=spec.expected_type,
+        tool_calls_made=getattr(deps, "tool_calls_log", None),
+        commitment_record=commitment_record,
+    )
+    score = _extract_mean_logprob(run_result)
+    return entry, score
+
+
 SYSTEM_PROMPT = """You generate a Python function that implements a user's semantic specification.
 
 ## Workflow
@@ -357,6 +520,7 @@ print(_json.dumps({"gist_result": gist}))
 
 
 _semi_agent: Optional[Agent[SemiAgentDeps, CommitmentRecord]] = None
+_scoring_agent: Optional[Agent[SemiAgentDeps, CommitmentRecord]] = None
 
 
 def get_semi_agent() -> Agent[SemiAgentDeps, CommitmentRecord]:
@@ -364,3 +528,10 @@ def get_semi_agent() -> Agent[SemiAgentDeps, CommitmentRecord]:
     if _semi_agent is None:
         _semi_agent = _create_agent()
     return _semi_agent
+
+
+def get_scoring_agent() -> Agent[SemiAgentDeps, CommitmentRecord]:
+    global _scoring_agent
+    if _scoring_agent is None:
+        _scoring_agent = _create_scoring_agent()
+    return _scoring_agent
