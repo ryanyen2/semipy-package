@@ -29,14 +29,12 @@ class DiscriminationResult:
     base_clusters: int
     best_clusters: int = 0
     germ: Optional[str] = None
+    #: The free variable whose mutation exposed the split, when found.
+    variable: Optional[str] = None
     best_input: Optional[dict[str, Any]] = None
     minimized_input: Optional[dict[str, Any]] = None
     tried: int = 0
     notes: list[str] = field(default_factory=list)
-
-
-def _primary_var(free_variables: list[str]) -> Optional[str]:
-    return next((v for v in free_variables if v != "self"), None)
 
 
 def _germ_variants(value: Any) -> list[tuple[str, Any]]:
@@ -76,6 +74,17 @@ def _germ_variants(value: Any) -> list[tuple[str, Any]]:
         variants.append((germs.EMPTY, {}))
         return variants
 
+    if isinstance(value, str):
+        # A string variable's structural germs are its empty and null forms.
+        # Applied one variable at a time, these also decouple a string input from
+        # any other input it is correlated with in the observed data (e.g. a
+        # ``lower`` argument that always equals ``text.lower()``): mutating one
+        # while holding the other fixed breaks the equality and exposes a fork
+        # that trusts the derived input vs. one that recomputes it.
+        variants.append((germs.EMPTY, ""))
+        variants.append((germs.NULL, None))
+        return variants
+
     # Scalar / None seed.
     variants.append((germs.NULL, [None]))
     variants.append((germs.BOUNDARY, [0]))
@@ -108,7 +117,7 @@ def _count_clusters(
 def _minimize(
     candidates: dict[str, str],
     free_variables: list[str],
-    primary: str,
+    var: str,
     base_row: dict[str, Any],
     winning_value: Any,
     target_clusters: int,
@@ -117,7 +126,7 @@ def _minimize(
 ) -> dict[str, Any]:
     """Greedily shrink a winning list input to the smallest still-splitting case."""
     if not isinstance(winning_value, list) or len(winning_value) <= 1:
-        return _row_with(base_row, primary, winning_value)
+        return _row_with(base_row, var, winning_value)
     current = list(winning_value)
     changed = True
     while changed and len(current) > 1:
@@ -126,12 +135,12 @@ def _minimize(
             trial = current[:i] + current[i + 1:]
             if not trial:
                 continue
-            row = _row_with(base_row, primary, trial)
+            row = _row_with(base_row, var, trial)
             if _count_clusters(candidates, free_variables, row, output_names, timeout) >= target_clusters:
                 current = trial
                 changed = True
                 break
-    return _row_with(base_row, primary, current)
+    return _row_with(base_row, var, current)
 
 
 def search_discriminating_inputs(
@@ -144,8 +153,13 @@ def search_discriminating_inputs(
 ) -> DiscriminationResult:
     """Search for an input that splits ``candidates`` into more branches than the
     base sample does. Returns the best (and minimized) discriminating input.
+
+    Every free variable is mutated (one at a time, the others held at their base
+    values), not just the first: a fork can hinge on a non-primary variable, and
+    mutating a variable in isolation also decouples it from any correlation it has
+    with the others in the observed data.
     """
-    primary = _primary_var(free_variables)
+    variables = [v for v in free_variables if v != "self"]
     seed_row = base_rows[0] if base_rows else {}
     base_clusters = (
         _count_clusters(candidates, free_variables, seed_row, output_names, timeout)
@@ -153,32 +167,33 @@ def search_discriminating_inputs(
         else 1
     )
     result = DiscriminationResult(found=False, base_clusters=base_clusters)
-    if primary is None:
-        result.notes.append("no primary input variable to mutate")
+    if not variables:
+        result.notes.append("no input variable to mutate")
         return result
 
-    seed_value = seed_row.get(primary)
     best_clusters = base_clusters
     tried = 0
-    for germ_id, mutated in _germ_variants(seed_value):
-        tried += 1
-        row = _row_with(seed_row, primary, mutated)
-        n = _count_clusters(candidates, free_variables, row, output_names, timeout)
-        if n > best_clusters:
-            best_clusters = n
-            result.found = True
-            result.germ = germ_id
-            result.best_input = row
-            result.best_clusters = n
+    for var in variables:
+        for germ_id, mutated in _germ_variants(seed_row.get(var)):
+            tried += 1
+            row = _row_with(seed_row, var, mutated)
+            n = _count_clusters(candidates, free_variables, row, output_names, timeout)
+            if n > best_clusters:
+                best_clusters = n
+                result.found = True
+                result.germ = germ_id
+                result.variable = var
+                result.best_input = row
+                result.best_clusters = n
 
     result.tried = tried
-    if result.found and result.best_input is not None:
+    if result.found and result.best_input is not None and result.variable is not None:
         result.minimized_input = _minimize(
             candidates,
             free_variables,
-            primary,
+            result.variable,
             seed_row,
-            result.best_input[primary],
+            result.best_input[result.variable],
             result.best_clusters,
             output_names,
             timeout,

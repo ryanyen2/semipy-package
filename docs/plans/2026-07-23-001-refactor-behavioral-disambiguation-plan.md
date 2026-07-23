@@ -215,22 +215,38 @@ Verification (done): `tests/test_decision_observed_population.py` loads the apac
 portal and asserts the single-row path merges c2/c3 into 4 branches while the
 recorded-population path separates them into 5.
 
-### Phase 3 — Decouple correlated free variables in the splitter (D3)
+### Phase 3 — Decouple correlated free variables in the splitter (D3) — DONE
 
-`search_discriminating_inputs` (`discriminate.py:137`) mutates only
-`_primary_var` (`discriminate.py:38`, the first non-`self` variable). For a slot
-with several free variables that are correlated in observed data, that never
-tests the case where they disagree.
+`search_discriminating_inputs` mutated only the *primary* variable (first
+non-`self`), and `_germ_variants` list-wrapped any string/scalar into `[None]`/
+`[0]` — so a string variable got no meaningful germ and a fork hinging on a
+non-primary variable was unreachable.
 
-- Extend `_germ_variants`/the search to also produce rows where **one non-primary
-  free variable is perturbed away from its observed correlation** with the primary
-  (e.g. `lower` set to something other than `text.lower()`). Keep it structural and
-  domain-agnostic: the perturbations are "break the observed equality between two
-  string inputs", "uppercase", "empty one of them" — not apache-specific.
-- Keep the existing minimize step (`discriminate.py:108`).
+- `discriminate.py` — the search now iterates **every** free variable, mutating
+  one at a time with the others held at their base values, and `_germ_variants`
+  gains a `str` case (`""` empty, `None` null). Because each variable is mutated
+  in isolation, this **decouples correlated inputs for free**: mutating a `lower`
+  argument that always equals `text.lower()` in observed data, while holding
+  `text` fixed, breaks the equality and splits a candidate that trusts the derived
+  input from one that recomputes it — no correlation-detection heuristic and no
+  new germ taxonomy required. `DiscriminationResult` gains `variable` (which input
+  exposed the split), feeding Phase 4's provenance.
+- `draw.py` `_observe_and_search` — a germ-found fork is now **appended** to the
+  observed population (`sample_rows + [disc_row]`) instead of replacing it with a
+  single row. Adding a row can only refine a clustering, so the search can add
+  branches but never drop ones the population (Phase 2) already separated. This
+  closes a downgrade that Phase 2 exposed (population-diverged slot vs. a
+  single-row germ observation).
 
-This is best-effort. It closes the specific correlation-coupling gap that germ
-injection misses; it does not make the search complete.
+Still best-effort: it closes the correlation-coupling gap germ injection missed;
+it does not make the search complete. The residual gap in §4 stands.
+
+Verification (done): `tests/test_decision_discriminate.py`
+::`test_search_decouples_correlated_nonprimary_variables` — an inert primary with
+a correlated non-primary pair; the search finds the fork the primary-only search
+could not. Kernel merge/freeze separation-search callers
+(`kernel/operators.py`) get a strictly more thorough (more conservative) search;
+their tests are unchanged.
 
 ### Phase 4 — Report the completeness gap (honesty layer)
 

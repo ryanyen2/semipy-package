@@ -180,10 +180,14 @@ def _observe_and_search(
             timeout=timeout,
         )
         if disc.found and disc.germ:
-            # A hidden (or stronger) fork: cluster over the minimal splitting input.
-            observe_rows = [disc.minimized_input or disc.best_input]
+            # A hidden (or stronger) fork. Append the splitting input to the
+            # observed population rather than replacing it: adding a row can only
+            # refine the clustering, so a germ-found fork adds branches without
+            # dropping any the population already separated.
+            disc_row = disc.minimized_input or disc.best_input
+            observe_rows = (sample_rows or []) + [disc_row]
             germ = disc.germ
-            example_in = observe_rows[0]
+            example_in = disc_row
             divergence = _observe(
                 candidates,
                 free_variables=free_variables,

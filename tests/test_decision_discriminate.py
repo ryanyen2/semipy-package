@@ -55,3 +55,23 @@ def test_no_fork_when_candidates_identical():
     assert not res.found
     assert res.minimized_input is None
     assert res.tried > 0
+
+
+# Two candidates that agree while a == b (as they do in every recorded input)
+# but diverge once that correlation is broken. The primary variable (mode) is
+# inert, so a primary-only search never sees the fork; the search must probe the
+# non-primary variables and decouple them from their observed correlation.
+_USE_A = "def f(mode, a, b):\n    return a\n"
+_USE_B = "def f(mode, a, b):\n    return b\n"
+
+
+def test_search_decouples_correlated_nonprimary_variables():
+    res = search_discriminating_inputs(
+        {"A": _USE_A, "B": _USE_B},
+        free_variables=["mode", "a", "b"],
+        base_rows=[{"mode": "x", "a": "hi", "b": "hi"}],
+    )
+    assert res.base_clusters == 1  # a == b on the observed input: they agree
+    assert res.found
+    assert res.best_clusters == 2
+    assert res.variable in ("a", "b")
