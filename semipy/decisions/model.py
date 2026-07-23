@@ -30,6 +30,11 @@ class Branch:
     signature: list[str] = field(default_factory=list)
     example_in: Any = None
     example_out: Any = None
+    #: When this branch pools >1 candidate, the number of tested inputs over which
+    #: they co-clustered -- they are only *equivalent over N*, not proven identical,
+    #: so the fork re-opens if a later input splits them. ``None`` for a singleton
+    #: branch (already distinguished; ``example_in`` witnesses it).
+    equivalent_over_n: Optional[int] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -39,6 +44,7 @@ class Branch:
             "signature": list(self.signature),
             "example_in": self.example_in,
             "example_out": self.example_out,
+            "equivalent_over_n": self.equivalent_over_n,
         }
 
     @classmethod
@@ -50,6 +56,7 @@ class Branch:
             signature=list(d.get("signature", [])),
             example_in=d.get("example_in"),
             example_out=d.get("example_out"),
+            equivalent_over_n=d.get("equivalent_over_n"),
         )
 
 

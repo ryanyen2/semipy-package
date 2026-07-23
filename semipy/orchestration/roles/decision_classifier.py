@@ -92,6 +92,7 @@ def _build_branches(
 ) -> list[Branch]:
     branches: list[Branch] = []
     for c in clusters if clusters is not None else divergence.clusters:
+        pooled = len(c.candidate_ids) > 1
         branches.append(
             Branch(
                 fate_label=_deterministic_fate_label(divergence, c),
@@ -100,6 +101,7 @@ def _build_branches(
                 signature=list(c.signature),
                 example_in=example_in,
                 example_out=_representative_output(divergence, c),
+                equivalent_over_n=divergence.tested_inputs if pooled else None,
             )
         )
     return branches

@@ -46,10 +46,24 @@ class DivergenceResult:
     clusters: list[Cluster]
     runs: dict[str, CandidateRun]
     mode: str  # "pure" | "effectful"
+    #: Number of input rows the candidates were clustered over. The behavioral
+    #: partition is an ∃-sample claim over exactly these inputs, never ∀-input.
+    tested_inputs: int = 0
 
     @property
     def n_candidates(self) -> int:
         return len(self.runs)
+
+    @property
+    def residual_gap(self) -> int:
+        """Candidates not proven behaviorally distinct: ``n_candidates - n_clusters``.
+
+        A sound lower bound on undiscovered forks: every co-clustered pair is only
+        equivalent over ``tested_inputs``, so a nonzero gap marks candidates a
+        wider input set might still split. Zero means the partition is fully
+        resolved for the drawn candidates.
+        """
+        return len(self.runs) - len(self.clusters)
 
     def diverged(self) -> bool:
         """True when candidates split into more than one behavioral branch."""
@@ -108,7 +122,9 @@ def observe_pure(
         )
 
     clusters = cluster_signatures({cid: r.signature for cid, r in runs.items()})
-    return DivergenceResult(clusters=clusters, runs=runs, mode="pure")
+    return DivergenceResult(
+        clusters=clusters, runs=runs, mode="pure", tested_inputs=len(sample_rows)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -220,4 +236,6 @@ def observe_effectful(
         )
 
     clusters = cluster_signatures({cid: r.signature for cid, r in runs.items()})
-    return DivergenceResult(clusters=clusters, runs=runs, mode="effectful")
+    # Effectful slots cluster by the reified EffectScript for the one runtime
+    # scenario, so exactly one input has been exercised.
+    return DivergenceResult(clusters=clusters, runs=runs, mode="effectful", tested_inputs=1)

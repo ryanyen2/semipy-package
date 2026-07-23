@@ -248,16 +248,26 @@ could not. Kernel merge/freeze separation-search callers
 (`kernel/operators.py`) get a strictly more thorough (more conservative) search;
 their tests are unchanged.
 
-### Phase 4 — Report the completeness gap (honesty layer)
+### Phase 4 — Report the completeness gap (honesty layer) — DONE
 
-- `divergence.py` / `DivergenceResult` — add fields recording the tested-input
-  count and the residual gap: `residual_gap = #candidates − #distinct behavioral
-  classes proven` (co-clustered candidates not proven distinct within budget).
-- `model.py` `Branch` — add a provenance field: either `distinguished_by`
-  (the minimal input that separates this branch) or `equivalent_over_n`
-  (the tested-input count under which its members co-cluster, with the re-open
-  caveat). `Branch` already carries `example_in`/`example_out`/`signature`
-  (`model.py`) which surface currently discards.
+- `divergence.py` / `DivergenceResult` — `tested_inputs` field (rows clustered
+  over) and a `residual_gap` **property** = `n_candidates − n_clusters`
+  (co-clustered candidates not proven distinct). Zero means the behavioral
+  partition is fully resolved for the drawn candidates; nonzero marks candidates a
+  wider input set might still split.
+- `model.py` `Branch` — `equivalent_over_n: Optional[int]`, persisted. Set to
+  `tested_inputs` when a branch pools >1 candidate (its members are only
+  *equivalent over N tested inputs*, the ∃-sample-as-∀ caveat that licenses
+  re-open); `None` for a singleton, which is already distinguished and whose
+  `example_in` is its witness. I dropped the plan's alternative `distinguished_by`
+  field as redundant — `Branch.example_in` already carries the separating input.
+- `decision_classifier.py` `_build_branches` — the one construction site — sets
+  `equivalent_over_n` from `divergence.tested_inputs`.
+
+Verification (done): `tests/test_decision_completeness.py` — residual gap counts
+candidates not proven distinct (3 candidates, 2 classes → gap 1; all-distinct →
+gap 0); a pooled branch carries `equivalent_over_n == tested_inputs` and a
+singleton carries `None`; round-trips through `to_dict`.
 
 ### Phase 5 — Surface the evidence + re-open hook
 
